@@ -46,6 +46,8 @@ class GatewayBudgetCacheRaceTest {
     private ExecutorService executor;
 
     private final AtomicLong usageFromDb = new AtomicLong(100L);
+    private final java.util.concurrent.atomic.AtomicInteger usageLoads = new java.util.concurrent.atomic.AtomicInteger();
+    private volatile RuntimeException usageLoadFailure;
     private volatile CountDownLatch blockUsageLoad;
     private volatile CountDownLatch usageLoadStarted;
 
@@ -62,6 +64,11 @@ class GatewayBudgetCacheRaceTest {
 
         when(jdbc.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Long.class)))
             .thenAnswer(invocation -> {
+                usageLoads.incrementAndGet();
+                RuntimeException failure = usageLoadFailure;
+                if (failure != null) {
+                    throw failure;
+                }
                 CountDownLatch started = usageLoadStarted;
                 if (started != null) {
                     started.countDown();
@@ -171,6 +178,64 @@ class GatewayBudgetCacheRaceTest {
         budget.enforceCloudBudget(key);
 
         assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
+    }
+
+    @Test
+    void expiredSnapshot_answersAtOnceWhileOneRefreshRunsInTheBackground() throws Exception {
+        GatewayBudgetService stale = new GatewayBudgetService(jdbc, TTL_SECONDS, 60, clock, executor);
+        GatewayKey key = applicationKey(KEY_ID);
+        String usageKey = usageCacheKey(KEY_ID);
+        stale.enforceCloudBudget(key);
+        assertThat(stale.cacheView().get(usageKey).value()).isEqualTo(100L);
+
+        clock.advanceMillis(TTL_SECONDS * 1000L + 1);
+        blockUsageLoad = new CountDownLatch(1);
+        usageLoadStarted = new CountDownLatch(1);
+        usageFromDb.set(200L);
+        int loadsBefore = usageLoads.get();
+
+        // Neither admission waits for the blocked load, and only one starts.
+        CompletableFuture.runAsync(() -> stale.enforceCloudBudget(key)).get(2, TimeUnit.SECONDS);
+        assertThat(usageLoadStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        CompletableFuture.runAsync(() -> stale.enforceCloudBudget(key)).get(2, TimeUnit.SECONDS);
+        assertThat(usageLoads.get() - loadsBefore).isEqualTo(1);
+        assertThat(stale.cacheView().get(usageKey).value()).isEqualTo(100L);
+
+        blockUsageLoad.countDown();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!Long.valueOf(200L).equals(stale.cacheView().get(usageKey).value()) && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(stale.cacheView().get(usageKey).value()).isEqualTo(200L);
+    }
+
+    @Test
+    void snapshotPastTheStaleLimit_loadsInLine() {
+        // An executor that never runs anything: only an inline load can refresh.
+        GatewayBudgetService stale = new GatewayBudgetService(jdbc, TTL_SECONDS, 60, clock, task -> { });
+        GatewayKey key = applicationKey(KEY_ID);
+        String usageKey = usageCacheKey(KEY_ID);
+        stale.enforceCloudBudget(key);
+
+        clock.advanceMillis(61_000L);
+        usageFromDb.set(300L);
+        stale.enforceCloudBudget(key);
+
+        assertThat(stale.cacheView().get(usageKey).value()).isEqualTo(300L);
+    }
+
+    @Test
+    void failedBackgroundRefresh_keepsTheExpiredSnapshotAnswering() {
+        GatewayBudgetService stale = new GatewayBudgetService(jdbc, TTL_SECONDS, 60, clock, Runnable::run);
+        GatewayKey key = applicationKey(KEY_ID);
+        String usageKey = usageCacheKey(KEY_ID);
+        stale.enforceCloudBudget(key);
+
+        clock.advanceMillis(TTL_SECONDS * 1000L + 1);
+        usageLoadFailure = new IllegalStateException("database unavailable");
+        stale.enforceCloudBudget(key);
+
+        assertThat(stale.cacheView().get(usageKey).value()).isEqualTo(100L);
     }
 
     private static String usageCacheKey(int apiKeyId) {

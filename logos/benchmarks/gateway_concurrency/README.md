@@ -140,7 +140,8 @@ The leg (`budget_admission.py`) then:
 3. runs `LOGOS_BENCH_GW_BUDGET_CONCURRENCY` (16) workers that send
    non-streaming requests back to back for `LOGOS_BENCH_GW_BUDGET_DURATION_S`
    (default: 2 × `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` + 10 s), so the load
-   crosses at least one cache expiry;
+   crosses at least one cache expiry (the gateway reloads an expired
+   snapshot in the background, so no request should wait for the refresh);
 4. times the refresh query again. The gateway finalizes unpriced history in
    the background, so the second figure shows how far that got.
 

@@ -390,7 +390,12 @@ Optional `.env` options:
   still accepts the public paths. It proxies every request to the orchestrator
   after the API-key authentication.
 - `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — the approximate
-  limit of the budget overshoot (see `GatewayBudgetService`).
+  limit of the budget overshoot (see `GatewayBudgetService`). When a budget
+  snapshot is older than this, the gateway reloads it in the background. Until
+  the reload completes, requests use the old snapshot and do not wait.
+- `LOGOS_GATEWAY_BUDGET_CACHE_MAX_STALE_SECONDS` (default `60`) — the maximum
+  age of a budget snapshot. If a snapshot is older (for example, because
+  background reloads fail), the request waits for a reload.
 - `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — the flat
   cost that the gateway reserves in `log_entry` before each direct-cloud
   forward. Concurrent admissions then see the spend. When the stream completes,
