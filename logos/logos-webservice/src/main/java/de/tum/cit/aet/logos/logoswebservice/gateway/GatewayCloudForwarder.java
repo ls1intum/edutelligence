@@ -33,6 +33,14 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @Service
 public class GatewayCloudForwarder {
 
+    /**
+     * How long the upstream reader waits for the relay to start taking chunks
+     * once its buffer is full. A relay that was rejected or cancelled before it
+     * ran never starts; the reader then closes the upstream. Matches the
+     * default async request timeout, after which the relay is gone anyway.
+     */
+    static final Duration RELAY_ATTACH_TIMEOUT = Duration.ofMinutes(30);
+
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
@@ -154,14 +162,14 @@ public class GatewayCloudForwarder {
             responseHeaders.put(name, values);
         });
 
-        InputStream upstreamBody = upstream.body();
+        // A separate reader stamps each chunk as it arrives from the upstream,
+        // so neither a client that is slow to take the bytes nor the wait for
+        // an executor thread to run the relay shifts the provider's timestamps.
+        // It starts here, not in the relay, for the second reason.
+        UpstreamPump pump = UpstreamPump.start(upstream.body(), headersAt, RELAY_ATTACH_TIMEOUT);
         String upstreamContentType = upstream.headers().firstValue("content-type").orElse(null);
         StreamingResponseBody stream = outputStream -> {
             IOException streamError = null;
-            // A separate reader stamps each chunk as it arrives from the
-            // upstream, so a client that is slow to take the bytes never
-            // shifts the provider's timestamps.
-            UpstreamPump pump = UpstreamPump.start(upstreamBody, headersAt);
             // The capture sits between the upstream and the client so the
             // reported token counts can be billed; it never delays or alters
             // the bytes the client receives.
@@ -220,19 +228,27 @@ public class GatewayCloudForwarder {
         private final java.util.concurrent.BlockingQueue<Chunk> chunks =
             new java.util.concurrent.ArrayBlockingQueue<>(MAX_CHUNKS);
         private final Thread reader;
+        private final Duration attachTimeout;
         private volatile Instant endedAt;
         private volatile boolean closed;
+        private volatile boolean attached;
         private Instant currentChunkAt;
 
-        private UpstreamPump(InputStream in, Instant headersAt) {
+        private UpstreamPump(InputStream in, Instant headersAt, Duration attachTimeout) {
             this.in = in;
+            this.attachTimeout = attachTimeout;
             this.currentChunkAt = headersAt;
             this.endedAt = headersAt;
             this.reader = Thread.ofVirtual().name("gateway-upstream-reader").unstarted(this::pump);
         }
 
-        static UpstreamPump start(InputStream in, Instant headersAt) {
-            UpstreamPump pump = new UpstreamPump(in, headersAt);
+        /**
+         * Starts reading {@code in} at once. If no relay starts taking chunks
+         * within {@code attachTimeout} of the buffer filling up, the reader
+         * closes the upstream and a late relay fails.
+         */
+        static UpstreamPump start(InputStream in, Instant headersAt, Duration attachTimeout) {
+            UpstreamPump pump = new UpstreamPump(in, headersAt, attachTimeout);
             pump.reader.start();
             return pump;
         }
@@ -264,13 +280,45 @@ public class GatewayCloudForwarder {
         }
 
         private void put(Chunk chunk) throws InterruptedException {
-            if (!closed) {
+            if (closed) {
+                return;
+            }
+            if (attached) {
                 chunks.put(chunk);
+                return;
+            }
+            long deadline = System.nanoTime() + attachTimeout.toNanos();
+            while (!chunks.offer(chunk, 1, java.util.concurrent.TimeUnit.SECONDS)) {
+                if (closed) {
+                    return;
+                }
+                if (attached) {
+                    chunks.put(chunk);
+                    return;
+                }
+                if (System.nanoTime() - deadline > 0) {
+                    abandon();
+                    throw new InterruptedException("No relay took the upstream body");
+                }
+            }
+        }
+
+        private void abandon() {
+            closed = true;
+            chunks.clear();
+            try {
+                in.close();
+            } catch (IOException ignored) {
+                // Closing only releases the connection; nothing waits on it.
             }
         }
 
         /** Relays every chunk to {@code out}, in order, until the upstream ends. */
         void transferTo(OutputStream out) throws IOException {
+            attached = true;
+            if (closed) {
+                throw new IOException("The upstream body was abandoned before the relay started");
+            }
             while (true) {
                 Chunk chunk;
                 try {
