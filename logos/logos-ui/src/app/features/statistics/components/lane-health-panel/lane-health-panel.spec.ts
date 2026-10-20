@@ -1072,4 +1072,19 @@ describe('LaneHealthPanel lane locks', () => {
     expect(panel.isLocked('planner-embed')).toBe(true);
     expect(panel.lockingLaneId()).toBeNull();
   });
+
+  it('ignores a lock read that finishes after a newer one', async () => {
+    // The first read is still in flight when a toggle re-reads; its older
+    // answer must not flip the button back.
+    let releaseStale!: (value: unknown) => void;
+    getLaneLocks.mockImplementationOnce(() => new Promise((resolve) => (releaseStale = resolve)));
+    const stale = panel.refreshLocks();
+
+    await panel.handleToggleLock(row());
+    expect(panel.isLocked('planner-embed')).toBe(true);
+
+    releaseStale([]);
+    await stale;
+    expect(panel.isLocked('planner-embed')).toBe(true);
+  });
 });

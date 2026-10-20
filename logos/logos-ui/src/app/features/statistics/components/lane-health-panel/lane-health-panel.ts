@@ -701,12 +701,23 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     return pid != null && this.lockedLanes().has(laneLockKey(pid, laneId));
   }
 
-  /** Re-reads the locks of every provider; a failed read keeps the last known set. */
+  /** Bumped by every lock read; only the newest read may set the locks. */
+  private lockReadSeq = 0;
+
+  /**
+   * Re-reads the locks of every provider; a failed read keeps the last known
+   * set. A read that finishes after a newer one started is dropped: the first
+   * read of the panel can still be in flight when a toggle re-reads, and its
+   * older answer would otherwise flip the button back.
+   */
   async refreshLocks(): Promise<void> {
+    const seq = ++this.lockReadSeq;
     try {
       const locks = await this.statisticsService.getLaneLocks();
+      if (seq !== this.lockReadSeq) return;
       this.lockedLanes.set(new Set((locks ?? []).map((l) => laneLockKey(l.provider_id, l.lane_id))));
     } catch (err: unknown) {
+      if (seq !== this.lockReadSeq) return;
       this.lockError.set(`Could not read lane locks: ${this.failureDetail(err)}`);
     }
   }
