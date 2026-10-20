@@ -29,7 +29,8 @@ concurrency:
 permissions:
   contents: read
 
-# The self-hosted runners carry a newer system Python, which uv would pick over
+# The self-hosted runners (pull requests from this repository and pushes) carry
+# a newer system Python, which uv would pick over
 # the setup-python interpreter; the orchestrator must stay on 3.13 (tiktoken
 # has no wheels for newer versions and would need a Rust toolchain to build).
 env:
@@ -41,7 +42,9 @@ jobs:
   # regressions land.
   gpu-sim:
     name: GPU simulation
-    runs-on: [self-hosted, aet-large-ubuntu]
+    # Pull requests from forks run on GitHub-hosted runners: their code must
+    # not execute on the shared self-hosted machines.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted", "aet-large-ubuntu"]') }}
     timeout-minutes: 15
     steps:
       - name: Checkout repo
@@ -82,7 +85,9 @@ jobs:
   # worker nodes on simulated hardware.
   stack:
     name: Stack (inter-node + client)
-    runs-on: [self-hosted, aet-large-ubuntu]
+    # Pull requests from forks run on GitHub-hosted runners: their code must
+    # not execute on the shared self-hosted machines.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted", "aet-large-ubuntu"]') }}
     timeout-minutes: 30
     steps:
       - name: Checkout repo
@@ -151,7 +156,9 @@ jobs:
   # startup cost, for assertions the SDK tier cannot make.
   browser:
     name: Browser (Playwright)
-    runs-on: [self-hosted, aet-large-ubuntu]
+    # Pull requests from forks run on GitHub-hosted runners: their code must
+    # not execute on the shared self-hosted machines.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted", "aet-large-ubuntu"]') }}
     timeout-minutes: 40
     steps:
       - name: Checkout repo
@@ -188,9 +195,10 @@ jobs:
         working-directory: logos/logos-ui
 
       - name: Install Playwright browser
-        # Browser only: the self-hosted runners have no passwordless sudo for
-        # --with-deps, and carry the system libraries Chromium needs.
-        run: npx playwright install chromium
+        # The self-hosted runners have no passwordless sudo for --with-deps
+        # and carry the system libraries Chromium needs; GitHub-hosted runners
+        # (fork pull requests) install them.
+        run: npx playwright install ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }} chromium
         working-directory: logos/logos-ui
 
       - name: Start the stack with the UI profile

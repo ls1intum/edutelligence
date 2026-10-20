@@ -29,7 +29,8 @@ permissions:
   issues: write
   pull-requests: write
 
-# The self-hosted runners carry a newer system Python, which uv would pick over
+# The self-hosted runners (pull requests from this repository and pushes) carry
+# a newer system Python, which uv would pick over
 # the setup-python interpreter; the orchestrator must stay on 3.13 (tiktoken
 # has no wheels for newer versions and would need a Rust toolchain to build).
 env:
@@ -38,7 +39,9 @@ env:
 jobs:
   benchmark:
     name: Benchmark
-    runs-on: [self-hosted, aet-large-ubuntu]
+    # Pull requests from forks run on GitHub-hosted runners: their code must
+    # not execute on the shared self-hosted machines.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || fromJSON('["self-hosted", "aet-large-ubuntu"]') }}
     timeout-minutes: 45
     services:
       postgres:
