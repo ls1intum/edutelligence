@@ -42,6 +42,12 @@ jobs:
     env:
       LOGOS_BENCH_GW_URL: http://localhost:18081
       LOGOS_BENCH_GW_OUTPUT: ${{ github.workspace }}/logos/benchmarks/gateway_concurrency/reports/ci
+      # Budget-admission flag: the fake upstream alone takes ~1.2 s and a
+      # healthy run's load p99 stays near 2 s, while the unfinalized-cost
+      # stall this leg exists for pushed it to ~12 s. 5 s leaves room for
+      # noisy shared runners and still catches that stall. Flag only: the
+      # workflow stays informational.
+      LOGOS_BENCH_GW_BUDGET_P99_MAX_MS: "5000"
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
