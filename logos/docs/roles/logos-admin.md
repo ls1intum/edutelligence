@@ -89,6 +89,9 @@ each as the median (p50) and as the 95th percentile (p95):
 - **Provider**: the time from the call to the provider until the end of the
   response.
 - **TTFT**: the time from the arrival of the request until the first token.
+  **TTFT N** shows how many requests these values come from: only requests
+  that sent a first token count. If this number is less than **Requests**,
+  the cell also shows the number of requests (for example, "5 of 60").
 
 The **Effort** column shows the reasoning effort that Logos sent to the
 provider. Some local models accept only some effort levels. For these models,

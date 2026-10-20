@@ -1,7 +1,10 @@
 import { ChangeDetectionStrategy, Component, effect, inject, input, signal } from '@angular/core';
 import { DataTableComponent } from '../../../shared/components/data-table/data-table';
 import { StatisticsService } from '../../statistics/services/statistics.service';
-import { RequestLatencyRow, RequestLatencyScope } from '../../statistics/services/request-latency.models';
+import {
+  RequestLatencyRow,
+  RequestLatencyScope,
+} from '../../statistics/services/request-latency.models';
 
 /**
  * Format a delay in milliseconds for a table cell: below a second in whole
@@ -68,8 +71,11 @@ export class RequestLatencyPanel {
     'PROVIDER P95',
     'TTFT P50',
     'TTFT P95',
+    // The TTFT percentiles cover only the requests that reported a first
+    // token; this column says how many that were.
+    'TTFT N',
   ];
-  readonly gridCols = '260fr 90fr 110fr 105fr 105fr 105fr 105fr 95fr 95fr';
+  readonly gridCols = '240fr 85fr 110fr 100fr 100fr 100fr 100fr 90fr 90fr 90fr';
   readonly formatDelay = formatDelayMs;
 
   // Every load bumps this; a response for an older range or scope must not

@@ -130,6 +130,25 @@ describe('RequestLatencyPanel', () => {
     expect(kind(rows[2])).toBe('Cloud');
   });
 
+  it('shows how many requests the TTFT figures rest on', async () => {
+    const fixture = create();
+    respond({
+      range: { start: '', end: '' },
+      rows: [
+        row({ requestCount: 60, ttftSamples: 5 }),
+        row({ providerName: 'openai', requestCount: 10, ttftSamples: 10 }),
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const rows = fixture.nativeElement.querySelectorAll('.table-row');
+    const samples = (r: Element) =>
+      r.querySelector('[data-label="TTFT samples"]')?.textContent?.replace(/\s+/g, ' ').trim();
+    expect(samples(rows[0])).toBe('5 of 60');
+    expect(samples(rows[1])).toBe('10');
+  });
+
   it('reloads when the scope changes', async () => {
     const fixture = create();
     respond({ range: { start: '', end: '' }, rows: [] });

@@ -42,6 +42,12 @@
       <div role="cell" data-label="TTFT p95" class="cell-strong">
         {{ formatDelay(row.ttftP95Ms) }}
       </div>
+      <div role="cell" data-label="TTFT samples">
+        {{ row.ttftSamples }}
+        @if (row.ttftSamples < row.requestCount) {
+          <span class="cell-muted">of {{ row.requestCount }}</span>
+        }
+      </div>
     </div>
   }
 </app-data-table>
