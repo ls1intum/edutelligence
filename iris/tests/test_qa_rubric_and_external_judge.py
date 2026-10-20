@@ -9,13 +9,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 import yaml
+from openai import BadRequestError
 from pydantic import ValidationError
 
 # Establish the production package import order before importing DTOs.
 importlib.import_module("iris.pipeline.pipeline")
 
+from iris.llm import CompletionArguments  # noqa: E402
+from iris.llm.request_handler.llm_request_handler import (  # noqa: E402
+    LlmRequestHandler,
+)
 from iris.pipeline.chat import chat_pipeline  # noqa: E402
 from iris.qa.bootstrap import (  # noqa: E402
     apply_local_llm_config,
@@ -48,6 +54,7 @@ from iris.qa.worker import (  # noqa: E402
     _ITERATION_LIMIT_MARKERS,
     JUDGE_SYSTEM_PROMPT,
     _extract_callback,
+    _ScenarioRequestBudget,
     _timing,
     build_judge_request,
 )
@@ -732,3 +739,93 @@ def test_production_roles_are_refused_without_a_logos_only_configuration(monkeyp
 
     with pytest.raises(ValueError, match="Production roles need a Logos-only"):
         create_worker_configuration(_rate_card(), "gpt-6-luna-medium", skip_judge=True)
+
+
+def test_a_collected_trial_without_any_model_call_is_not_an_error(
+    tmp_path, monkeypatch
+):
+    scenario = _real_chat(1)[0]
+    ledger = SpendLedger(tmp_path / "spend.jsonl")
+
+    def worker(args, **_kwargs):
+        Path(args[args.index("--output") + 1]).write_text(
+            json.dumps(
+                {
+                    "scenarioId": scenario.id,
+                    "model": "gpt-6-luna-medium",
+                    "response": None,
+                    "activities": [],
+                    "usage": [],
+                    "judgePending": True,
+                    "judgeInput": {"systemPrompt": "p", "request": {}},
+                    "executionError": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(
+        "iris.qa.run.create_worker_configuration",
+        lambda *_args, **_kwargs: SimpleNamespace(environment={}, close=lambda: None),
+    )
+    monkeypatch.setattr("iris.qa.run.subprocess.run", worker)
+    monkeypatch.setattr("iris.qa.run._git_value", lambda *_args: "test")
+
+    code, root, _ = run_paid_suite(
+        qa_root=tmp_path / "qa",
+        scenarios=[scenario],
+        models=("gpt-6-luna-medium",),
+        repetitions=1,
+        rate_card=_rate_card(),
+        ledger=ledger,
+        hard_limit=Decimal("30"),
+        max_run_cost=Decimal("30"),
+        planned_cost=Decimal("1"),
+        output_root=tmp_path / "collected",
+        skip_judge=True,
+    )
+
+    trial = json.loads((root / COLLECTION_FILE).read_text(encoding="utf-8"))["trials"][
+        0
+    ]
+    assert code == 0
+    assert trial["executionError"] is None
+
+
+def test_a_content_filter_rejection_is_an_incident_not_an_ambiguous_failure(
+    monkeypatch,
+):
+
+    def refused(handler, messages, arguments, tools):
+        del handler, messages, arguments, tools
+        request = httpx.Request("POST", "https://llm.example/v1/responses")
+        raise BadRequestError(
+            "Error code: 400",
+            response=httpx.Response(400, request=request),
+            body={"code": "content_filter", "message": "The response was filtered"},
+        )
+
+    monkeypatch.setattr(LlmRequestHandler, "chat", refused)
+    budget = _ScenarioRequestBudget(_scenario().token_ceiling)
+
+    with budget:
+        with pytest.raises(BadRequestError):
+            LlmRequestHandler.chat(
+                object(), [{"text": "a slide"}], CompletionArguments(), None
+            )
+
+    budget.raise_if_failed()
+    assert budget.filtered_requests == 1
+    assert budget.reserved_input_tokens == 0
+    assert budget.reserved_output_tokens == 0
+
+
+def test_summary_counts_the_trials_with_a_content_filter_rejection():
+    clean = _evaluation(_scenario(id="rubric-clean"))
+    filtered = _evaluation(_scenario(id="rubric-filtered"))
+    filtered.incidents = {"contentFilterRejections": 2}
+
+    model = summarize([clean, filtered])["models"]["m"]
+
+    assert model["contentFilterTrials"] == 1

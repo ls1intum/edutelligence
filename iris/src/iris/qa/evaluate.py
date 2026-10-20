@@ -76,6 +76,7 @@ class ScenarioEvaluation:
     duration_seconds: float = 0.0
     execution_error: str | None = None
     timing: dict[str, float | None] | None = None
+    incidents: dict[str, int] | None = None
 
     @property
     def score(self) -> float:
@@ -246,5 +247,10 @@ def evaluation_from_worker(
         execution_error=str(execution_error) if execution_error else None,
         timing=(
             payload.get("timing") if isinstance(payload.get("timing"), dict) else None
+        ),
+        incidents=(
+            payload.get("incidents")
+            if isinstance(payload.get("incidents"), dict)
+            else None
         ),
     )

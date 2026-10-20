@@ -37,6 +37,14 @@ def _request_token_upper_bound(messages: list[Any], tools: Any) -> int:
     return len(serialized) + framing_room
 
 
+def _is_content_filter_error(error: BaseException) -> bool:
+    """Whether the provider's content filter refused a prompt or filtered an answer."""
+    return (
+        getattr(error, "code", None) == "content_filter"
+        or type(error).__name__ == "ContentFilterFinishReasonError"
+    )
+
+
 class _ScenarioRequestBudget:
     """Apply one scenario's request limits to every production model call."""
 
@@ -47,6 +55,7 @@ class _ScenarioRequestBudget:
         self.reserved_input_tokens = 0
         self.reserved_output_tokens = 0
         self.request_failure: str | None = None
+        self.filtered_requests = 0
         self.lock = threading.Lock()
         self.stack = ExitStack()
 
@@ -89,11 +98,20 @@ class _ScenarioRequestBudget:
 
             try:
                 response = original_chat(handler, messages, arguments, tools)
-            except Exception:
+            except Exception as error:
                 with self.lock:
-                    self.request_failure = (
-                        "A model request failed after dispatch; its usage is ambiguous"
-                    )
+                    if _is_content_filter_error(error):
+                        # The provider refused the prompt before generating anything, so
+                        # no usage is ambiguous. The pipeline decides what the student
+                        # sees; the rejection is reported as an incident of the trial.
+                        self.filtered_requests += 1
+                        self.reserved_input_tokens -= estimate
+                        self.reserved_output_tokens -= request_limit
+                    else:
+                        self.request_failure = (
+                            "A model request failed after dispatch; "
+                            "its usage is ambiguous"
+                        )
                 raise
             usage = response.token_usage
             input_tokens = int(usage.num_input_tokens)
@@ -398,6 +416,11 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
         "diagnostics": diagnostics,
         "usage": [_token_usage(token) for token in raw_tokens],
         "timing": timing,
+        "incidents": (
+            {"contentFilterRejections": budget.filtered_requests}
+            if budget.filtered_requests
+            else {}
+        ),
     }
 
 

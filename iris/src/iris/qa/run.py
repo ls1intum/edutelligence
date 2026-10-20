@@ -178,9 +178,13 @@ def run_paid_suite(
                         guard.reconcile_reservation(
                             reservation=reservation, usage=verified_usage
                         )
-                    elif completed.returncode == 0 and not payload.get(
-                        "executionError"
+                    elif (
+                        completed.returncode == 0
+                        and not payload.get("executionError")
+                        and not (skip_judge and not verified_usage)
                     ):
+                        # A collected trial without any model call (a search that skips
+                        # the AI) legitimately has no usage; its reservation stays.
                         payload["executionError"] = (
                             "Worker returned incomplete paid usage; "
                             "the full reservation remains accounted"
@@ -197,6 +201,7 @@ def run_paid_suite(
                                 "executionError": payload.get("executionError"),
                                 "judgePending": bool(payload.get("judgePending")),
                                 "timing": payload.get("timing"),
+                                "incidents": payload.get("incidents"),
                             }
                         )
                         collect_error = payload.get("executionError")

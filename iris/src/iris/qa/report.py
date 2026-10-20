@@ -133,6 +133,10 @@ def summarize(evaluations: list[ScenarioEvaluation]) -> dict:
             "usageWeightedScore": _usage_weighted_score(selected),
             "criterionScores": _criterion_scores(selected),
             **_latency(selected),
+            "contentFilterTrials": sum(
+                bool((item.incidents or {}).get("contentFilterRejections"))
+                for item in selected
+            ),
             "scenarios": len(scores),
             "trials": len(selected),
             "criticalErrorRate": round(
@@ -305,6 +309,17 @@ def write_markdown_report(
         [
             "",
             f"Total measured model cost: **${summary['totalCostUsd']:.4f}**.",
+            *[
+                line
+                for model, item in summary["models"].items()
+                if item["contentFilterTrials"]
+                for line in (
+                    "",
+                    "Trials with a prompt rejected by the provider's content filter "
+                    f"(the pipeline carried on): `{_cell(model)}` "
+                    f"{item['contentFilterTrials']}",
+                )
+            ],
             "",
             (
                 "The interval describes variation across this scenario set after "
