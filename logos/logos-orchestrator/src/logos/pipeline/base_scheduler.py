@@ -7,6 +7,7 @@ import asyncio
 import logging
 from typing import Dict, Optional
 
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.queue.priority_queue import Priority, PriorityQueueManager
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
@@ -283,7 +284,15 @@ class BaseScheduler(SchedulerInterface):
 
             dispatched = 0
             while dispatched < available_slots:
-                task, entry = self._queue_mgr.dequeue_with_entry(model_id, provider_id)
+                task, entry = benchmark_reservations.admit_queued(
+                    provider_id,
+                    self._logosnode.get_model_name(model_id, provider_id),
+                    lambda reserved_job: self._queue_mgr.dequeue_with_entry(
+                        model_id,
+                        provider_id,
+                        **({"required_api_key_id": -reserved_job} if reserved_job is not None else {}),
+                    ),
+                )
                 if task is None:
                     break
                 if not isinstance(task, asyncio.Future) or task.done():

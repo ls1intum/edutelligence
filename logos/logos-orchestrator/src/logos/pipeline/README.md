@@ -93,8 +93,6 @@ pipeline/
 ├── pipeline.py                 # Main RequestPipeline orchestrator
 ├── scheduler_interface.py      # Abstract scheduler interface & data models
 ├── base_scheduler.py           # Shared provider, capacity, and queue helpers
-├── fcfs_scheduler.py           # Top-classified-candidate scheduler
-├── utilization_scheduler.py    # Availability-aware scoring scheduler
 ├── correcting_scheduler.py     # Production ETTFT-correcting scheduler
 ├── ettft_estimator.py          # Provider-specific readiness and wait estimates
 ├── executor.py                # Backend execution & API calling
@@ -126,12 +124,6 @@ pipeline/
 - Provides helper methods for queue management and metrics collection
 - Uses strict HIGH → NORMAL → LOW dequeue ordering for queued requests
 - Uses the model-only `PriorityQueueManager`; its compatibility `provider_id` arguments are ignored
-
-### `fcfs_scheduler.py` - FcfScheduler
-**Top-candidate scheduler.** Tries every deployment of the highest-ranked classified model. When queueing, it uses the first matching LogosNode deployment as representative metadata and enqueues by model.
-
-### `utilization_scheduler.py` - UtilizationAwareScheduler
-**Availability-aware scheduler.** Scores deployments for immediate selection. When queueing, it chooses the highest-weight classified model with a LogosNode deployment, uses the first matching deployment as representative metadata, and enqueues by model.
 
 ### `correcting_scheduler.py` - ClassificationCorrectingScheduler
 **Production scheduler.** By default, re-ranks only the classifier's eligible candidates using expected-time-to-first-token (ETTFT) penalties. `LOGOS_SCHEDULER_ETTFT_ENABLED=false` preserves classification weights/order while retaining deployment expansion and availability checks:

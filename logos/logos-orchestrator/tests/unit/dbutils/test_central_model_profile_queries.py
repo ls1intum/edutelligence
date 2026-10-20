@@ -130,10 +130,15 @@ def test_reset_is_a_revision_bump_that_keeps_the_context_high_water_mark():
 
 def test_reported_key_hashes_are_updated_in_one_statement():
     db = _db()
-    db.update_reported_calibration_keys(7, {"a": "H1", "b": "H2"})
+    db.update_reported_calibration_keys(7, {"a": "H1", "b": "H2"}, {"a": 2})
     assert db.session.execute.call_count == 1
     _sql, params = db.session.execute.call_args.args
-    assert params == {"provider_id": 7, "model_names": ["a", "b"], "key_hashes": ["H1", "H2"]}
+    assert params == {
+        "provider_id": 7,
+        "model_names": ["a", "b"],
+        "key_hashes": ["H1", "H2"],
+        "slice_counts": [2, None],
+    }
 
 
 def test_no_reported_key_hashes_cost_no_round_trip():
@@ -145,3 +150,37 @@ def test_no_reported_key_hashes_cost_no_round_trip():
 def test_an_echo_keeps_the_stored_values_of_overridden_fields():
     assert "FROM jsonb_each(model_profiles.profile)" in _PERSIST_CENTRAL_PROFILE_SQL
     assert ":overridden_fields" in _PERSIST_CENTRAL_PROFILE_SQL
+
+
+def test_a_legacy_import_does_not_overwrite_a_reset_that_won_the_race():
+    """A reset committed after the already-central check owns the row; the
+    import write is rejected and must not re-link the old calibration."""
+    db = _db()
+    db.session.execute.side_effect = [
+        MagicMock(fetchone=MagicMock(return_value=None)),
+        SimpleNamespace(rowcount=0),
+    ]
+    legacy = {"org/m": {"base_residency_mb": 1.0, "residency_source": "calibrated", "last_measured_epoch": 1e9}}
+    assert db.import_legacy_model_profiles(7, legacy, {}) == 0
+    assert db.session.execute.call_count == 2
+    assert "model_profiles.sync_revision = 0" in inspect.getsource(DBManager.import_legacy_model_profiles)
+
+
+def test_an_implausible_gpu_count_is_dropped_instead_of_failing_the_report():
+    db = _db()
+    db.update_reported_calibration_keys(7, {"a": "H1", "b": "H2", "c": "H3"}, {"a": 10**12, "b": -1, "c": 4})
+    _sql, params = db.session.execute.call_args.args
+    assert params["slice_counts"] == [None, None, 4]
+
+
+def test_a_settled_node_costs_one_query_to_find_nothing_to_adopt():
+    db = _db()
+    db.session.execute.return_value.fetchall.return_value = []
+    assert db.adopt_shared_calibrations(7, ["a", "b"], 30) == []
+    assert db.session.execute.call_count == 1
+
+
+def test_no_models_cost_no_query():
+    db = _db()
+    assert db.adopt_shared_calibrations(7, [], 30) == []
+    db.session.execute.assert_not_called()

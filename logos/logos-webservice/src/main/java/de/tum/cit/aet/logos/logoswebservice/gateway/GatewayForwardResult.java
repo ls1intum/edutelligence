@@ -11,8 +11,20 @@ import java.util.Map;
  *                     streamed (a stream has no single body to store)
  * @param serviceTier  the tier the response reported (e.g. {@code flex}),
  *                     lowercased, or {@code null} when it reported none
+ * @param timings      when the upstream was called, answered first and finished
  */
-public record GatewayForwardResult(Map<String, Long> usage, byte[] responseBody, String serviceTier) {
+public record GatewayForwardResult(Map<String, Long> usage, byte[] responseBody, String serviceTier,
+                                   GatewayForwardTimings timings) {
+
+    public GatewayForwardResult(Map<String, Long> usage, byte[] responseBody, String serviceTier) {
+        this(usage, responseBody, serviceTier, GatewayForwardTimings.NONE);
+    }
+
+    public GatewayForwardResult {
+        if (timings == null) {
+            timings = GatewayForwardTimings.NONE;
+        }
+    }
 
     static GatewayForwardResult none() {
         return new GatewayForwardResult(Map.of(), null, null);

@@ -87,6 +87,9 @@ def test_unknown_gpu_inventory_does_not_invent_a_limit():
 
 @pytest.mark.parametrize("batch", [False, True])
 async def test_impossible_benchmark_is_rejected_before_job_creation(monkeypatch, batch):
+    from logos.benchmarks import nightly_store
+
+    monkeypatch.setattr(nightly_store, "manual_admission", lambda db, provider_id: True)
     import importlib
 
     main = importlib.import_module("logos.main")
@@ -174,3 +177,112 @@ def test_turboquant_cache_rejects_other_explicit_backends(backend):
     limits["current"] = {"attention_backend": backend}
     with pytest.raises(ValueError, match="TurboQuant KV cache requires"):
         validate_worker_overrides(ServingOverrides(kv_cache_dtype="turboquant_k8v4"), limits)
+
+
+def metal_snapshot():
+    status = snapshot()
+    status["runtime"]["devices"] = {
+        "mode": "metal",
+        "nvidia_smi_available": False,
+        "telemetry_available": True,
+        "devices": [{"kind": "metal", "memory_total_mb": 24000}],
+    }
+    status["runtime"]["lanes"][0]["lane_config"]["vllm_config"] = {
+        "max_num_seqs": 16,
+        "max_num_batched_tokens": 4096,
+    }
+    return status
+
+
+def test_measured_metal_supports_batching_without_inventing_nvidia_inventory():
+    limits = worker_limits(metal_snapshot(), "m")
+    assert limits["gpu_count"] is None
+    validate_worker_overrides(ServingOverrides(max_num_seqs=20, max_num_batched_tokens=5120), limits)
+    with pytest.raises(ValueError, match="at least max sequences"):
+        validate_worker_overrides(ServingOverrides(max_num_batched_tokens=8), limits)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"tensor_parallel_size": 1},
+        {"pipeline_parallel_size": 2},
+        {"gpu_memory_utilization": 0.8},
+        {"kv_cache_memory_bytes": "4G"},
+        {"attention_backend": "FLASH_ATTN"},
+    ],
+)
+def test_metal_rejects_gpu_topology_memory_and_attention_overrides(overrides):
+    with pytest.raises(ValueError, match="batching overrides only"):
+        validate_worker_overrides(ServingOverrides(**overrides), worker_limits(metal_snapshot(), "m"))
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"telemetry_available": False},
+        {"degraded_reason": "mlx unavailable"},
+        {"devices": []},
+        {"mode": "derived"},
+    ],
+)
+def test_missing_or_estimated_metal_telemetry_does_not_allow_tuning(change):
+    status = metal_snapshot()
+    status["runtime"]["devices"].update(change)
+    with pytest.raises(ValueError, match="GPU information is unavailable"):
+        validate_worker_overrides(ServingOverrides(max_num_seqs=20), worker_limits(status, "m"))
+
+
+@pytest.mark.parametrize("nightly", [False, True])
+async def test_metal_batching_is_admitted_through_internal_benchmark_route(monkeypatch, nightly):
+    import importlib
+
+    from logos.benchmarks import nightly_store
+
+    main = importlib.import_module("logos.main")
+    internal = importlib.import_module("logos.routers.internal")
+    db = MagicMock()
+    db.__enter__.return_value = db
+    db.find_active_model_benchmark_job.return_value = None
+    monkeypatch.setattr(internal, "_INTERNAL_SECRET", "test-secret")
+    db.create_job_record.return_value = 712
+    db.get_model_provider_benchmark_target.return_value = {
+        "provider_id": 7,
+        "provider_type": "logosnode",
+        "provider_name": "Metal worker",
+        "model_id": 1,
+        "model_name": "m",
+    }
+    monkeypatch.setattr(nightly_store, "manual_admission", lambda db, provider_id: True)
+    monkeypatch.setattr(main, "_maintenance_coordinator", None)
+    monkeypatch.setattr(main, "_calibration_orchestrator", None)
+    registry = MagicMock()
+    registry.active_provider_ids.return_value = [7]
+    registry.is_calibrating.return_value = False
+    registry.peek_runtime_snapshot.return_value = metal_snapshot()
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+    monkeypatch.setattr(main, "_capacity_planner", MagicMock())
+    monkeypatch.setattr(internal, "DBManager", lambda: db)
+    monkeypatch.setattr(internal, "_require_internal_secret", lambda _: None)
+    monkeypatch.setattr(internal, "dataset_metadata", AsyncMock(return_value={"text_columns": ["question"]}))
+    runner = AsyncMock(return_value=1)
+    monkeypatch.setattr(internal, "run_benchmark_job", runner)
+    from logos.benchmarks.nightly import NIGHTLY_CONTEXT
+    from logos.benchmarks.reservations import benchmark_reservations
+
+    monkeypatch.setattr(internal, "can_start", lambda _: True)
+    monkeypatch.setattr(nightly_store, "status", lambda _: {"enabled": True})
+    token = NIGHTLY_CONTEXT.set(nightly)
+    if nightly:
+        benchmark_reservations.reserve(7, "*", -31)
+    try:
+        response = await internal.internal_run_model_benchmark(
+            internal.InternalBenchmarkRequest(model_provider_id=31, serving_overrides={"max_num_seqs": 20}),
+            MagicMock(),
+        )
+        assert response.status_code == 202
+        await main._benchmark_tasks_by_job[712]
+    finally:
+        NIGHTLY_CONTEXT.reset(token)
+        benchmark_reservations.release(-31)
+    assert runner.await_args.kwargs["settings"].serving_overrides.max_num_seqs == 20

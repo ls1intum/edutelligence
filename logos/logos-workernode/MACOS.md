@@ -461,8 +461,12 @@ warms it up, and reads the memory delta via `vm_stat`. No KV sweep (there
 is no per-request KV-size flag to search over on this backend, only the
 whole-process `VLLM_METAL_MEMORY_FRACTION`), no TP (single GPU), no sleep
 (see above). The result is stored in Logos like every other profile, with
-`residency_source="calibrated"` — nightly ticks and the "Calibrate
-uncalibrated" admin action both work on Metal nodes now.
+`residency_source="calibrated"`. The "Calibrate uncalibrated" admin action
+remains available on Metal nodes. Automatic calibration runs first in the
+05:00–08:00 Berlin maintenance window. The opt-in
+[nightly benchmark rotation](../docs/admin/nightly-benchmarks.md) uses the remaining
+time on supported vLLM workers. Calibration and benchmarks never overlap across
+the cluster, including manual starts.
 
 `model_profile_overrides` remains available as a manual fallback (e.g. to
 pin a number before the automatic probe has run, or to work around a

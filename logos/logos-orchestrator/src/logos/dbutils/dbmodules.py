@@ -7,6 +7,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Date,
     Enum,
     Float,
     ForeignKey,
@@ -209,6 +210,8 @@ class LogEntry(Base):
     # The statistics page splits a finished request's wall time here: queue is
     # everything the request waited for, exec is the provider's own time.
     timestamp_provider_call = Column(TIMESTAMP(timezone=True))
+    # Reasoning effort the upstream received, after Logos remapped it.
+    reasoning_effort = Column(Text)
     # When the upstream provider's response has fully arrived — before logos'
     # own post-provider work (notably the cost lookup) runs. The statistics
     # page ends the exec figure here, so that internal post-provider time is
@@ -546,3 +549,15 @@ class BatchLineResult(Base):
         nullable=False,
         default=lambda: datetime.datetime.now(datetime.timezone.utc),
     )
+
+
+class NightlyBenchmark(Base):
+    __tablename__ = "nightly_benchmarks"
+
+    model_provider_id = Column(Integer, primary_key=True)
+    enabled = Column(Boolean, nullable=False, default=False)
+    last_run_date = Column(Date)
+    status = Column(Text, nullable=False, default="disabled")
+    report = Column(JSON, nullable=False, default=list)
+    recovery = Column(JSON)
+    updated_at = Column(TIMESTAMP(timezone=True))

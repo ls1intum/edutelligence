@@ -32,6 +32,13 @@ END $$;
 -- ---------------------------------------------------------------------------
 -- Wipe previous docs-role-screenshots run
 -- ---------------------------------------------------------------------------
+DELETE FROM nightly_benchmarks
+WHERE model_provider_id IN (
+    SELECT mp.id FROM model_provider mp
+    JOIN providers p ON p.id = mp.provider_id
+    WHERE p.name = 'Docs Local Worker'
+);
+
 DELETE FROM usage_tokens
 WHERE log_entry_id IN (
     SELECT id FROM log_entry WHERE environment = 'docs-role-screenshots'
@@ -258,6 +265,12 @@ FROM (VALUES
      NULL::cloud_provider_type_enum, 'LOCAL'::threshold_enum, 'Authorization', 'Bearer {}')
 ) AS v(name, base_url, provider_type, cloud_provider_type, privacy_level, auth_name, auth_format)
 WHERE NOT EXISTS (SELECT 1 FROM providers p WHERE p.name = v.name);
+
+-- Documentation-only worker identity for nightly-worker.mjs. This worker
+-- reports example telemetry but rejects inference and control commands.
+UPDATE providers
+SET api_key = 'docs-role-screenshots-worker'
+WHERE name = 'Docs Local Worker';
 
 INSERT INTO models (name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description)
 SELECT v.*

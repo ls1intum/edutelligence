@@ -41,8 +41,17 @@ def credential_safety_options() -> dict:
         "include_local_variables": False,
     }
 
+from iris.common.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 def init():
+    dsn = os.environ.get("SENTRY_DSN", "").strip()
+    if not dsn:
+        logger.info("Sentry is disabled because SENTRY_DSN is not set")
+        return
+
     tracing_enabled = os.environ.get("SENTRY_ENABLE_TRACING", "False").lower() in (
         "true",
         "1",
@@ -53,7 +62,7 @@ def init():
     sample_rate = 0.01 if sentry_environment == "staging" else 1.0
 
     sentry_sdk.init(
-        dsn="https://17806b3674c44a10ac10345ba7201cc6@sentry.aet.cit.tum.de/8",
+        dsn=dsn,
         environment=sentry_environment,
         server_name=os.environ.get("SENTRY_SERVER_NAME", "localhost"),
         release=os.environ.get("SENTRY_RELEASE", None),

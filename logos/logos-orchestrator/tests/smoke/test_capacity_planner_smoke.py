@@ -121,8 +121,7 @@ def _reject_cleartext_internal_secret_transport(api_base, internal_secret):
     an on-path attacker capture the secret and reuse it against the internal
     endpoints. Plain HTTP is only acceptable for loopback bases; a remote
     deployment must be HTTPS (or a local tunnel that lands on loopback, e.g.
-    http://127.0.0.1:18443). Mirrors the guard in the performance workload
-    runner (tests/performance/run_api_workload.py).
+    http://127.0.0.1:18443).
     """
     if not internal_secret:
         return  # nothing sensitive in flight; the scheduler_state calls will 401
@@ -403,11 +402,11 @@ def test_demand_score_visible_in_scheduler_state(client, http_headers, internal_
 def test_idle_lane_sleeps_after_threshold(client, http_headers, internal_secret, smoke_model, planner_cycle_s):
     """
     If smoke_model lane is loaded and has been idle, the planner must issue
-    sleep_l1 after IDLE_SLEEP_L1 = 300 s.  This test does not wait 5 minutes;
+    sleep_l1 after IDLE_SLEEP_L1 = 1800 s.  This test does not wait 30 minutes;
     instead it checks that the planner cycle did not erroneously reset the idle
     timer for a lane that had no traffic (observed within the last 3 cycles).
 
-    Practical use: run this test after the deployment has been idle for >5 min.
+    Practical use: run this test after the deployment has been idle for >30 min.
     """
     if not smoke_model:
         pytest.skip("--smoke-model not provided")

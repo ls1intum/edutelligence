@@ -7,14 +7,11 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.YearMonth;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -46,6 +43,8 @@ class GatewayBudgetCacheRaceTest {
     private ExecutorService executor;
 
     private final AtomicLong usageFromDb = new AtomicLong(100L);
+    private final java.util.concurrent.atomic.AtomicInteger usageLoads = new java.util.concurrent.atomic.AtomicInteger();
+    private volatile RuntimeException usageLoadFailure;
     private volatile CountDownLatch blockUsageLoad;
     private volatile CountDownLatch usageLoadStarted;
 
@@ -62,6 +61,11 @@ class GatewayBudgetCacheRaceTest {
 
         when(jdbc.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Long.class)))
             .thenAnswer(invocation -> {
+                usageLoads.incrementAndGet();
+                RuntimeException failure = usageLoadFailure;
+                if (failure != null) {
+                    throw failure;
+                }
                 CountDownLatch started = usageLoadStarted;
                 if (started != null) {
                     started.countDown();
@@ -120,57 +124,62 @@ class GatewayBudgetCacheRaceTest {
         assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(120L);
     }
 
-    /**
-     * A late refresh can register {@code inflight} after another caller already
-     * installed a fresh entry. {@code noteReservation} then queues pending; the
-     * early-return path must drop it or the next refresh double-counts.
-     */
     @Test
-    void freshEntryEarlyReturn_doesNotDoubleCountReservationOnNextRefresh() throws Exception {
+    void expiredSnapshot_answersAtOnceWhileOneRefreshRunsInTheBackground() throws Exception {
+        GatewayBudgetService stale = new GatewayBudgetService(jdbc, TTL_SECONDS, 60, clock, executor);
         GatewayKey key = applicationKey(KEY_ID);
-        budget.enforceCloudBudget(key);
         String usageKey = usageCacheKey(KEY_ID);
-
-        var inflightField = GatewayBudgetService.class.getDeclaredField("inflight");
-        inflightField.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        var inflight = (ConcurrentHashMap<String, CompletableFuture<?>>) inflightField.get(budget);
-        inflight.put(usageKey, new CompletableFuture<>());
-
-        budget.noteReservation(key, 50L);
-        assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
-
-        // Drop the planted flight so refresh can become the winner; pending stays.
-        inflight.remove(usageKey);
-
-        Class<?> loaderClass = null;
-        for (Class<?> nested : GatewayBudgetService.class.getDeclaredClasses()) {
-            if (nested.getSimpleName().equals("Loader")) {
-                loaderClass = nested;
-                break;
-            }
-        }
-        assertThat(loaderClass).isNotNull();
-        Object loader = Proxy.newProxyInstance(
-            loaderClass.getClassLoader(),
-            new Class<?>[] { loaderClass },
-            (proxy, method, args) -> {
-                if ("load".equals(method.getName())) {
-                    throw new AssertionError("early-return path must not load from the database");
-                }
-                throw new UnsupportedOperationException(method.getName());
-            });
-
-        Method refresh = GatewayBudgetService.class.getDeclaredMethod(
-            "refresh", String.class, loaderClass, long.class);
-        refresh.setAccessible(true);
-        refresh.invoke(budget, usageKey, loader, clock.millis());
+        stale.enforceCloudBudget(key);
+        assertThat(stale.cacheView().get(usageKey).value()).isEqualTo(100L);
 
         clock.advanceMillis(TTL_SECONDS * 1000L + 1);
-        usageFromDb.set(150L);
-        budget.enforceCloudBudget(key);
+        blockUsageLoad = new CountDownLatch(1);
+        usageLoadStarted = new CountDownLatch(1);
+        usageFromDb.set(200L);
+        int loadsBefore = usageLoads.get();
 
-        assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
+        // Neither admission waits for the blocked load, and only one starts.
+        CompletableFuture.runAsync(() -> stale.enforceCloudBudget(key)).get(2, TimeUnit.SECONDS);
+        assertThat(usageLoadStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        CompletableFuture.runAsync(() -> stale.enforceCloudBudget(key)).get(2, TimeUnit.SECONDS);
+        assertThat(usageLoads.get() - loadsBefore).isEqualTo(1);
+        assertThat(stale.cacheView().get(usageKey).value()).isEqualTo(100L);
+
+        blockUsageLoad.countDown();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!Long.valueOf(200L).equals(stale.cacheView().get(usageKey).value()) && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(stale.cacheView().get(usageKey).value()).isEqualTo(200L);
+    }
+
+    @Test
+    void snapshotPastTheStaleLimit_loadsInLine() {
+        // An executor that never runs anything: only an inline load can refresh.
+        GatewayBudgetService stale = new GatewayBudgetService(jdbc, TTL_SECONDS, 60, clock, task -> { });
+        GatewayKey key = applicationKey(KEY_ID);
+        String usageKey = usageCacheKey(KEY_ID);
+        stale.enforceCloudBudget(key);
+
+        clock.advanceMillis(61_000L);
+        usageFromDb.set(300L);
+        stale.enforceCloudBudget(key);
+
+        assertThat(stale.cacheView().get(usageKey).value()).isEqualTo(300L);
+    }
+
+    @Test
+    void failedBackgroundRefresh_keepsTheExpiredSnapshotAnswering() {
+        GatewayBudgetService stale = new GatewayBudgetService(jdbc, TTL_SECONDS, 60, clock, Runnable::run);
+        GatewayKey key = applicationKey(KEY_ID);
+        String usageKey = usageCacheKey(KEY_ID);
+        stale.enforceCloudBudget(key);
+
+        clock.advanceMillis(TTL_SECONDS * 1000L + 1);
+        usageLoadFailure = new IllegalStateException("database unavailable");
+        stale.enforceCloudBudget(key);
+
+        assertThat(stale.cacheView().get(usageKey).value()).isEqualTo(100L);
     }
 
     private static String usageCacheKey(int apiKeyId) {

@@ -13,6 +13,33 @@ See the [request lifecycle reference](logos-orchestrator/src/logos/pipeline/READ
 
 See the [agent runner](logos-agent/README.md) for how Logos runs coding agents in isolated containers on its own spare serving capacity, and the boundaries those sessions work within.
 
+## Nightly model benchmarks
+
+Automatic calibration runs first (05:00–08:00 Europe/Berlin by default).
+Benchmarks use the remaining time. `LOGOS_MAINTENANCE_MAX_NODES` limits simultaneous
+maintenance workers, including manual starts. The default `1` keeps runs sequential;
+`2` permits two workers in parallel. Reserved workers cannot serve normal requests.
+
+Logos admins can add model/worker pairs to a persistent nightly rotation from
+**Model Details → Performance**. Both activation and deactivation require
+confirmation. Schedules start disabled.
+
+- Test at most **2 enabled pairs per night**, within the maintenance worker limit. Untested
+  pairs come first, then the oldest previous attempt. Unavailable pairs are skipped.
+- Start configurations between **05:00 and 07:50 Europe/Berlin**. At 08:00,
+  continue only if at least 50% of measured requests completed successfully.
+- Stop after **5 minutes without output or completed requests**. Retry a stalled
+  configuration once before 07:50, then skip it if it stalls again.
+- Compare the current settings with selected batching-parameter variants on a
+  fixed dataset. Show the model and planned values above the dataset previews.
+- Restore the original worker configuration after the plan. Store results for
+  review; do not automatically apply a winning configuration to production.
+
+See the [nightly benchmark guide](docs/admin/nightly-benchmarks.md)
+for activation, selection, limits, deployment, recovery and API details. The
+[manual benchmark guide](logos-orchestrator/docs/benchmark-configuration.md)
+describes the separate dataset editor and benchmark batches.
+
 # Setup
 
 ## Prerequisites
@@ -34,12 +61,10 @@ pip install uv
 
 #### Dependencies
 
-From the repository root (`edutelligence/`), link the common `shared` package
-once and install the orchestrator dependencies:
+From the repository root (`edutelligence/`), install the orchestrator dependencies:
 
 ```bash
 cd logos/logos-orchestrator
-ln -s ../../shared shared
 uv sync --locked --python 3.13
 ```
 
@@ -50,9 +75,7 @@ orchestrator package. The warning about its missing `[project]` table is harmles
 In PyCharm, use `logos/logos-orchestrator/.venv/bin/python` as the interpreter.
 The **Package requirements are not satisfied** notification means that this
 interpreter is missing dependencies or has different versions than the project
-requires. **Sync project** installs them using uv. If it reports that the `shared`
-distribution cannot be found, check the symlink above before retrying. No separate
-`requirements.txt` is needed.
+requires. **Sync project** installs them using uv. No separate `requirements.txt` is needed.
 
 ## Development
 
@@ -207,116 +230,6 @@ environment:
 ```
 
 Worker nodes auto-calibrate model VRAM profiles (how much GPU memory each model needs when loaded vs sleeping). Logos stores the profiles in its database — the workers keep none on disk — and sends them to each worker at startup. No extra configuration needed on the worker side.
-
-## Scheduler Benchmarking
-
-To evaluate scheduler behaviour against the running Logos API, replay a scripted workload via the `/v1` endpoint using the helper in `tests/support/scheduling/run_api_workload.py`.
-
-A short guide on crafting compatible workload CSVs lives next to the sample workload in `tests/fixtures/scheduling/README.md`.
-
-### Testing Classification vs Direct Model Selection
-
-Logos supports two operational modes that can be benchmarked:
-
-**1. Direct Model Selection (Scheduling Only)**
-
-Test scheduling behavior with a specific model. Classification is skipped.
-
-```bash
-docker compose exec logos-orchestrator \
-  python logos/tests/support/scheduling/run_api_workload.py \
-    --logos-key "YourLogosApiKey" \
-    --workload logos/tests/fixtures/scheduling/sample_workload_direct.csv \
-    --api-base http://localhost:8080 \
-    --latency-slo-ms 10000 \
-    --output logos/tests/results/scheduling/api_benchmark_direct.csv
-```
-
-**2. Classification Mode (Classification + Scheduling)**
-
-Test the full classification pipeline. Logos selects the best model based on prompt content.
-
-```bash
-docker compose exec logos-orchestrator \
-  python logos/tests/support/scheduling/run_api_workload.py \
-    --logos-key "YourLogosApiKey" \
-    --workload logos/tests/fixtures/scheduling/sample_workload_classify.csv \
-    --api-base http://localhost:8080 \
-    --latency-slo-ms 10000 \
-    --output logos/tests/results/scheduling/api_benchmark_classify.csv
-```
-
-**3. Mixed Mode (Both in One Workload)**
-
-Test both modes together to compare behavior side-by-side.
-
-```bash
-docker compose exec logos-orchestrator \
-  python logos/tests/support/scheduling/run_api_workload.py \
-    --logos-key "YourLogosApiKey" \
-    --workload logos/tests/fixtures/scheduling/sample_workload_mixed.csv \
-    --api-base http://localhost:8080 \
-    --latency-slo-ms 10000 \
-    --output logos/tests/results/scheduling/api_benchmark_mixed.csv
-```
-
-### Workload CSV Format
-
-Workload files include the following columns:
-- **`request_id`** - Unique identifier for each request
-- **`arrival_offset`** - Time in milliseconds when the request should be sent
-- **`mode`** - Request mode: `"interactive"` (low-latency, real-time) or `"batch"` (background processing). Defaults to `"interactive"`.
-- **`priority`** - Priority level: `"low"` (1), `"mid"` (5), or `"high"` (10). Defaults to `"mid"`.
-- **`body_json`** - Complete JSON request payload
-
-See `tests/fixtures/scheduling/README.md` for detailed CSV format documentation.
-
-### Interpreting Results
-
-Workload definitions live under `tests/fixtures/scheduling/`, and the generated benchmark results are written to `tests/results/scheduling/` so they are accessible from the host machine.
-
-The script sends each request at its configured arrival offset (in milliseconds), waits for the system to schedule and execute it, and then pulls the resulting log entries.
-
-**Output Files:**
-
-The script generates **two separate CSV files** plus visualization charts:
-
-1. **`*_summary.csv`** - Compact aggregated metrics:
-   - Request counts (total, successful, failed)
-   - Error rate and SLO attainment rate
-   - **TTFT (Time-to-First-Token)** - avg, p50, p95, p99
-   - **TPOT (Time Per Output Token)** - avg, p50, p95, p99
-   - **Total latency** - avg, p50, p95, p99
-
-2. **`*_detailed.csv`** - Individual request data:
-   - Each row represents one request with full details
-   - Includes: request_id, mode, priority, model, TTFT, TPOT, tokens, latency, response text, errors
-
-3. **`*.png`** - Latency visualization charts for quick inspection
-
-Use `--latency-slo-ms` to tune the latency objective (in milliseconds) for SLO attainment calculations.
-
-**To verify which mode was used for each request:**
-
-Check the database for classification statistics:
-
-```bash
-docker compose exec logos-db psql -U postgres -d logosdb -c \
-  "SELECT id, model_id,
-   CASE WHEN classification_statistics IS NOT NULL THEN 'classification' ELSE 'direct' END as mode
-   FROM log_entry WHERE id > 85 ORDER BY id DESC LIMIT 10;"
-```
-
-If `classification_statistics` is NULL, the request used direct model selection. If it contains data, classification ran and selected the model.
-
-_The scheduling testing scaffolding was prepared with GPT-5 assistance._
-
-# Test Server
-
-The test instance runs at `logos-test.aet.cit.tum.de`. To access it you need:
-
-1. **EduVPN** — activate the "MWN full-tunnel" profile via the [EduVPN portal](https://rad.eduvpn.lrz.de/vpn-user-portal/home).
-2. **SSH access** — request access at [AET Request](https://request.aet.cit.tum.de/) using your TUM username and public SSH key. When filling in the free-text field, mention that you need access to the Logos project.
 
 ## Connecting via SSH
 

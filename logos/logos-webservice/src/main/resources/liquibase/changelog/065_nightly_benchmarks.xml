@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Schema preconditions also adopt databases migrated under the former changeSet identities. -->
+<databaseChangeLog
+ xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+ <changeSet id="065-nightly-benchmarks" author="logos">
+  <preConditions onFail="MARK_RAN">
+   <not><tableExists tableName="nightly_benchmarks"/></not>
+  </preConditions>
+  <sql>
+   CREATE TABLE nightly_benchmarks (
+     model_provider_id integer PRIMARY KEY,
+     enabled boolean NOT NULL DEFAULT false,
+     last_run_date date,
+     status text NOT NULL DEFAULT 'disabled',
+     report jsonb NOT NULL DEFAULT '[]'::jsonb,
+     recovery jsonb,
+     updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+   );
+  </sql>
+  <rollback><sql>DROP TABLE nightly_benchmarks;</sql></rollback>
+ </changeSet>
+ <changeSet id="065-maintenance-calibration" author="logos">
+  <preConditions onFail="MARK_RAN">
+   <not><and>
+    <tableExists tableName="maintenance_calibration"/>
+    <tableExists tableName="maintenance_benchmark"/>
+   </and></not>
+  </preConditions>
+  <sql>
+   CREATE TABLE maintenance_calibration (
+     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+     provider_id integer NOT NULL,
+     token text NOT NULL,
+     automatic boolean NOT NULL DEFAULT false,
+     confirmed boolean NOT NULL DEFAULT false,
+     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+   );
+   CREATE TABLE maintenance_benchmark (
+     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+     job_id integer NOT NULL,
+     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+   );
+  </sql>
+  <rollback><sql>DROP TABLE maintenance_benchmark; DROP TABLE maintenance_calibration;</sql></rollback>
+ </changeSet>
+ <changeSet id="065-parallel-maintenance" author="logos">
+  <preConditions onFail="MARK_RAN">
+   <not><columnExists tableName="maintenance_benchmark" columnName="provider_id"/></not>
+  </preConditions>
+  <sql>
+   ALTER TABLE maintenance_calibration DROP CONSTRAINT maintenance_calibration_pkey;
+   ALTER TABLE maintenance_calibration ADD PRIMARY KEY (provider_id);
+   ALTER TABLE maintenance_calibration ADD UNIQUE (token);
+   ALTER TABLE maintenance_benchmark DROP CONSTRAINT maintenance_benchmark_pkey;
+   ALTER TABLE maintenance_benchmark ADD PRIMARY KEY (job_id);
+   ALTER TABLE maintenance_benchmark ADD COLUMN provider_id integer;
+   UPDATE maintenance_benchmark AS claim SET provider_id = (job.request_payload->>'provider_id')::integer
+     FROM jobs AS job WHERE job.id = claim.job_id;
+   ALTER TABLE maintenance_benchmark ADD UNIQUE (provider_id);
+  </sql>
+  <!-- Rollback is transactional and fails if multiple claims still require the parallel schema. -->
+  <rollback>
+   <sql>
+    ALTER TABLE maintenance_benchmark DROP CONSTRAINT maintenance_benchmark_provider_id_key;
+    ALTER TABLE maintenance_benchmark DROP COLUMN provider_id;
+    ALTER TABLE maintenance_benchmark DROP CONSTRAINT maintenance_benchmark_pkey;
+    ALTER TABLE maintenance_benchmark ADD PRIMARY KEY (singleton);
+    ALTER TABLE maintenance_calibration DROP CONSTRAINT maintenance_calibration_token_key;
+    ALTER TABLE maintenance_calibration DROP CONSTRAINT maintenance_calibration_pkey;
+    ALTER TABLE maintenance_calibration ADD PRIMARY KEY (singleton);
+   </sql>
+  </rollback>
+ </changeSet>
+</databaseChangeLog>

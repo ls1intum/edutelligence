@@ -16,6 +16,7 @@ from logos.pipeline.effort_normalization import (
     EFFORT_LEVELS,
     VLLM_REASONING_EFFORT_VALUES,
     adapt_payload_after_effort_rejection,
+    effective_reasoning_effort,
     effort_scale_for_model,
     forget_learned_effort_scales,
     normalize_reasoning_effort,
@@ -190,3 +191,50 @@ def test_prepare_headers_and_payload_multipart_payload():
     }
     _, prepared = ContextResolver.prepare_headers_and_payload(_context(), payload)
     assert prepared["model"] == MODEL
+
+
+# ── the effort a payload sends ───────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"output_config": {"effort": "High"}},
+        {"reasoning_effort": "high"},
+        {"reasoning": {"effort": "high", "summary": "auto"}},
+        {"chat_template_kwargs": {"reasoning_effort": " high "}},
+    ],
+    ids=["anthropic", "chat-completions", "responses", "template-kwarg"],
+)
+def test_effective_effort_is_read_from_every_location(payload):
+    assert effective_reasoning_effort(payload) == "high"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"model": MODEL, "messages": []},
+        {"reasoning_effort": ""},
+        {"reasoning_effort": 3},
+        {"reasoning": "high"},
+        None,
+        b"multipart",
+    ],
+    ids=["absent", "empty", "non-string", "malformed-container", "none", "not-a-dict"],
+)
+def test_a_payload_without_an_effort_sends_none(payload):
+    assert effective_reasoning_effort(payload) is None
+
+
+def test_the_template_kwarg_wins_over_the_api_field():
+    # vLLM hands the explicit template kwarg to the chat template as given.
+    assert (
+        effective_reasoning_effort({"reasoning_effort": "low", "chat_template_kwargs": {"reasoning_effort": "medium"}})
+        == "medium"
+    )
+
+
+def test_the_effective_effort_of_a_normalized_payload_is_the_remapped_one():
+    _learn()
+    sent = normalize_reasoning_effort({"output_config": {"effort": "high"}}, MODEL)
+    assert effective_reasoning_effort(sent) == "xhigh"

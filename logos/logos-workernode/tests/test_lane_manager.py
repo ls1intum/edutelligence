@@ -194,12 +194,28 @@ async def test_reconfigure_lane_rejects_change_without_nvidia_smi() -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
-    manager = LaneManager(WorkerConfig(gpu_devices="all"), lane_port_start=15001, lane_port_end=15010)
+@pytest.mark.parametrize(
+    ("global_args", "lane_args", "pipeline_size"),
+    [
+        ([], [], 1),
+        (["--pipeline-parallel-size", "2"], [], 2),
+        (["-pp=2"], [], 2),
+        ([], ["-pp", "3"], 3),
+        (["--pipeline-parallel-size=2"], ["-pp", "3"], 3),
+        (["-pp", "2"], ["--pipeline-parallel-size=3", "-pp=4"], 4),
+    ],
+)
+async def test_build_lane_status_includes_vllm_runtime_fields(global_args, lane_args, pipeline_size) -> None:
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        vllm_engine_config=VllmEngineConfig(global_extra_args=global_args),
+        lane_port_start=15001,
+        lane_port_end=15010,
+    )
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
-        vllm_config=VllmConfig(enable_sleep_mode=True, tensor_parallel_size=2),
+        vllm_config=VllmConfig(enable_sleep_mode=True, tensor_parallel_size=2, extra_args=lane_args),
     )
 
     class FakeVllmHandle:
@@ -237,6 +253,7 @@ async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
     assert status.sleep_state == "sleeping"
     assert status.runtime_state == "sleeping"
     assert status.backend_metrics["tensor_parallel_size"] == 2
+    assert status.backend_metrics["pipeline_parallel_size"] == pipeline_size
     assert status.reported_vram_mb == pytest.approx(1.0)
     assert status.pid_vram_mb == pytest.approx(7680.0)
     assert status.vram_source == "pid"
@@ -3669,7 +3686,12 @@ async def test_tp_restart_refreshes_released_vram_and_resizes_per_rank_cache(mon
     )
     manager._handles["lane"] = old
     manager._port_alloc._used["lane"] = 15000
-    new = MagicMock(init=AsyncMock(), spawn=AsyncMock(), destroy=AsyncMock(), close=AsyncMock())
+    new = MagicMock(
+        init=AsyncMock(),
+        spawn=AsyncMock(return_value=ProcessStatus(state=ProcessState.RUNNING, pid=12345)),
+        destroy=AsyncMock(),
+        close=AsyncMock(),
+    )
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *args, **kwargs: new)
     requested = current.model_copy(
         update={
@@ -3703,6 +3725,39 @@ async def test_failed_restart_placement_removes_dead_lane_bookkeeping() -> None:
     assert "lane" not in manager._active_requests
     assert "lane" not in manager._starting_deadlines
     assert not manager.starting_models()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [ProcessState.STOPPED, ProcessState.ERROR])
+async def test_restart_rejects_a_replacement_that_exited_after_readiness(monkeypatch, state) -> None:
+    lane = LaneConfig(model="org/model", vllm=True)
+    old = _StubHandle(lane)
+    manager = _manager_with_handles({"lane": old})
+    manager._port_alloc._used["lane"] = 15000
+    manager._active_requests["lane"] = 0
+    manager._starting_deadlines["lane"] = 123
+    manager._get_status_unlocked = AsyncMock()
+    replacement = MagicMock(
+        init=AsyncMock(),
+        spawn=AsyncMock(return_value=ProcessStatus(state=state, pid=12345, return_code=1)),
+        destroy=AsyncMock(),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *args, **kwargs: replacement)
+
+    with pytest.raises(RuntimeError, match=f"state={state.value}, return_code=1"):
+        await manager.reconfigure_lane("lane", {}, force_restart=True)
+
+    replacement.destroy.assert_awaited_once()
+    replacement.close.assert_awaited_once()
+    assert "lane" not in manager._handles
+    assert manager._port_alloc.get_port("lane") is None
+    assert "lane" not in manager._active_requests
+    assert "lane" not in manager._starting_deadlines
+    assert not manager.starting_models()
+    events = [event.event for event in manager._event_log]
+    assert "restart_failed" in events
+    assert "restart_ok" not in events
 
 
 class TestValidateCapabilities:
@@ -4210,6 +4265,18 @@ async def test_apply_lanes_replans_after_rollback_restores_the_original_floor(mo
     assert replan_models == ["org/small", "org/big"]
 
 
+@pytest.mark.asyncio
+async def test_forced_benchmark_recovery_restarts_unchanged_configuration() -> None:
+    manager = LaneManager(WorkerConfig(), lane_port_start=15100, lane_port_end=15110)
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    await manager.reconfigure_lane("benchmark-lane", {"model": current.model}, force_restart=True)
+    manager._restart_lane_unlocked.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     ("selector", "gpu_count", "occupied"),
     [
@@ -4373,3 +4440,178 @@ async def test_lane_occupancy_follows_a_tensor_parallel_override_in_extra_args()
     manager = _inventory_manager([_inventory_gpu(0), _inventory_gpu(1)])
     count = LaneManager._launch_gpu_count(vc, [])  # noqa: SLF001
     assert await manager._lane_occupied_gpu_devices(lane, "1,0", count) == "1"  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active", [0, 1])
+async def test_explicit_benchmark_restart_with_unchanged_configuration(active):
+    manager = LaneManager(WorkerConfig(), lane_port_start=15100, lane_port_end=15110)
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["lane"] = _StubHandle(current)
+    manager._active_requests["lane"] = active
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    if active:
+        with pytest.raises(RuntimeError, match="still has 1 active request"):
+            await manager.reconfigure_lane("lane", {"model": current.model}, force_restart=True)
+        manager._restart_lane_unlocked.assert_not_awaited()
+    else:
+        await manager.reconfigure_lane("lane", {"model": current.model}, force_restart=True)
+        manager._restart_lane_unlocked.assert_awaited_once()
+
+
+def _shared_profile_manager(**profile: Any) -> LaneManager:
+    registry = ModelProfileRegistry()
+    registry.replace_from_sync(
+        {"org/m": {"base_residency_mb": 5.0, "sync_revision": 1, "calibration_id": 11, **profile}}
+    )
+    manager = LaneManager(WorkerConfig(), lane_port_start=15200, lane_port_end=15210, model_profiles=registry)
+    manager._note_lane_spawn("lane-1", "org/m")  # noqa: SLF001
+    return manager
+
+
+def _rejections(manager: LaneManager) -> list[tuple[str, str]]:
+    return [(e.model, e.details) for e in manager._event_log if e.event == "calibration_rejected"]  # noqa: SLF001
+
+
+_OOM = SimpleNamespace(recent_log_tail="INFO loading | torch.OutOfMemoryError: CUDA out of memory. Tried to allocate")
+
+
+def test_an_unproven_shared_calibration_is_reported_once_when_its_lane_runs_out_of_memory() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
+    assert _rejections(manager) == [("org/m", "11")]
+
+
+def test_a_start_failing_for_another_reason_says_nothing_about_the_calibration() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    for tail in ("OSError: Can't load tokenizer", "Address already in use", ""):
+        handle = SimpleNamespace(recent_log_tail=tail)
+        manager._reject_unproven_shared_calibration("lane-1", "org/m", handle)  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", None)  # noqa: SLF001
+    assert _rejections(manager) == []
+
+
+def test_a_shared_calibration_whose_lane_was_seen_serving_is_not_blamed() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    manager._note_lane_served("lane-1", "org/m")  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
+    assert _rejections(manager) == []
+
+
+def test_a_lane_started_before_the_calibration_changed_is_not_blamed_for_it() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    manager._lane_calibration_at_spawn["lane-1"] = 7  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
+    assert _rejections(manager) == []
+    # it is up under the old numbers; that proves nothing for the new ones
+    manager._note_lane_served("lane-1", "org/m")  # noqa: SLF001
+    assert manager._served_models == {}  # noqa: SLF001
+
+
+def test_serving_is_recorded_even_when_no_vram_is_measured() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    status = SimpleNamespace(lane_id="lane-1", model="org/m", runtime_state="running", effective_vram_mb=0.0)
+    manager._record_profile_from_status(status)  # noqa: SLF001
+    assert manager._served_models == {"org/m": 11}  # noqa: SLF001
+
+
+def test_a_local_calibration_is_never_reported_as_rejected() -> None:
+    manager = _shared_profile_manager(calibration_origin="local")
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
+    assert _rejections(manager) == []
+
+
+class _FailingStartHandle:
+    """A replacement process that dies while starting, with a log to show why."""
+
+    def __init__(self, tail: str) -> None:
+        self.recent_log_tail = tail
+        self.lane_config = None
+
+    async def init(self) -> None:
+        pass
+
+    async def spawn(self, _config: LaneConfig) -> ProcessStatus:
+        raise RuntimeError("process did not enter running state")
+
+    async def destroy(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+
+def _manager_with_lane_on_shared_profile(monkeypatch, tail: str) -> LaneManager:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    old_config = LaneConfig(lane_id="lane-1", model="org/old", vllm=True, vllm_config=VllmConfig())
+    old_handle = _StubHandle(old_config)
+    manager._handles["lane-1"] = old_handle  # noqa: SLF001
+    manager._port_alloc._used["lane-1"] = 15200  # noqa: SLF001
+    manager._wait_for_vram_headroom = AsyncMock()  # noqa: SLF001
+    manager._auto_place_gpu_devices = AsyncMock(side_effect=lambda _lid, cfg: cfg)  # noqa: SLF001
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *a, **k: _FailingStartHandle(tail))
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_a_reconfiguration_that_runs_out_of_memory_reports_its_shared_calibration(monkeypatch) -> None:
+    manager = _manager_with_lane_on_shared_profile(monkeypatch, "torch.OutOfMemoryError: CUDA out of memory")
+    new_config = LaneConfig(lane_id="lane-1", model="org/m", vllm=True, vllm_config=VllmConfig())
+    with pytest.raises(RuntimeError):
+        await manager._restart_lane_unlocked("lane-1", new_config)  # noqa: SLF001
+    assert _rejections(manager) == [("org/m", "11")]
+    assert "lane-1" not in manager._handles  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_a_reconfiguration_failing_for_another_reason_reports_nothing(monkeypatch) -> None:
+    manager = _manager_with_lane_on_shared_profile(monkeypatch, "OSError: Can't load tokenizer")
+    new_config = LaneConfig(lane_id="lane-1", model="org/m", vllm=True, vllm_config=VllmConfig())
+    with pytest.raises(RuntimeError):
+        await manager._restart_lane_unlocked("lane-1", new_config)  # noqa: SLF001
+    assert _rejections(manager) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fatal_cuda", "tail", "reported"),
+    [
+        (True, "RuntimeError: CUDA error: out of memory", True),  # the skip branch must not swallow it
+        (True, "CUDA error: all CUDA-capable devices are busy or unavailable | out of memory", False),  # wedged GPU
+        (False, "[metal::malloc] Attempting to allocate more than the maximum allowed buffer size", True),
+    ],
+)
+async def test_a_crash_the_restart_logic_gives_up_on_is_still_reported(fatal_cuda, tail, reported) -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    lane_config = LaneConfig(lane_id="lane-1", model="org/m", vllm=True, vllm_config=VllmConfig())
+
+    class _Dead:
+        lane_id = "lane-1"
+        port = 15200
+        has_stuck_vram = False
+        has_fatal_cuda_errors = fatal_cuda
+        has_metal_allocation_failure = "metal" in tail
+        recent_log_tail = tail
+
+        def __init__(self) -> None:
+            self.lane_config = lane_config
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.ERROR, pid=1, return_code=1)
+
+    manager._handles["lane-1"] = _Dead()  # noqa: SLF001
+    status = LaneStatus(
+        lane_id="lane-1",
+        lane_uid="vllm:lane-1",
+        model="org/m",
+        port=15200,
+        vllm=True,
+        process=ProcessStatus(state=ProcessState.ERROR, pid=1, return_code=1),
+        runtime_state="error",
+        lane_config=lane_config,
+    )
+    await manager._recover_dead_lanes([status])  # noqa: SLF001
+    assert _rejections(manager) == ([("org/m", "11")] if reported else [])
