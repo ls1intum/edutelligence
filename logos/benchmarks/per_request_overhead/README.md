@@ -59,7 +59,6 @@ docker exec -i logos-bench-db psql -U postgres -d logosdb \
 
 # 4. Venvs (once)
 cd logos/logos-orchestrator
-ln -sfn ../../shared shared
 uv venv .venv && uv pip install -q .
 # The worker under test runs in its own venv (the director launches
 # .venv-worker/bin/python for it) so the worker's pinned dependencies

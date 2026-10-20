@@ -77,10 +77,6 @@ This section is a behavioral rule, not a technical control — the repository ca
 - **Keep lock files current.** Re-lock to the latest versions that satisfy the manifest (`uv lock --upgrade`, `npm update`) instead of only editing the manifest, and commit the lock file with it.
 - **Watch security alerts.** Check `gh api repos/ls1intum/edutelligence/dependabot/alerts?state=open` for the packages you touch, fix them in the same change (upgrade, or an `overrides` entry when a transitive parent caps the version), and say in the PR which alerts remain because no patched release exists.
 
-### Shared sibling
-
-The `shared/` directory at the repo root (sibling of `logos/`) is symlinked into the orchestrator for local dev/CI: `ln -s ../../shared logos/logos-orchestrator/shared` (note the extra `../`).
-
 ### Running the full stack
 
 ```bash
