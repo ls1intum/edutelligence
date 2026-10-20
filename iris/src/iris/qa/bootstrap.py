@@ -19,6 +19,9 @@ CANDIDATE_MODEL_IDS = {
     "openai/gpt-oss-120b": "qa-gpt-oss-120b",
     "gpt-6.1-sol": "qa-gpt-61-sol",
     "gpt-6-luna": "qa-gpt-6-luna",
+    "gpt-6.1-sol-medium": "qa-gpt-61-sol-medium",
+    "gpt-6-luna-medium": "qa-gpt-6-luna-medium",
+    "gpt-6-luna-high": "qa-gpt-6-luna-high",
 }
 CANDIDATE_DEPLOYMENT_ENV = {
     "gpt-5.4-mini": "IRIS_QA_GPT_54_MINI_DEPLOYMENT",
@@ -49,6 +52,14 @@ LOGOS_CANDIDATES = {
         "reasoning_effort": "xhigh",
         "use_responses_api": True,
     },
+}
+# Further reasoning efforts of a Logos candidate, as candidate id -> (model, effort).
+# They send the same model with another effort, so the effort is the only difference
+# between two candidates of one model.
+LOGOS_CANDIDATE_VARIANTS = {
+    "gpt-6.1-sol-medium": ("gpt-6.1-sol", "medium"),
+    "gpt-6-luna-medium": ("gpt-6-luna", "medium"),
+    "gpt-6-luna-high": ("gpt-6-luna", "high"),
 }
 LOGOS_ENVIRONMENT_NAMES = (
     "IRIS_QA_LOGOS_BASE_URL",
@@ -297,7 +308,14 @@ def _model(
     return entry
 
 
-def _logos_model(*, model_id: str, model: str, rate, api_key: str) -> dict:
+def _logos_model(
+    *,
+    model_id: str,
+    model: str,
+    rate,
+    api_key: str,
+    reasoning_effort: str | None,
+) -> dict:
     base_url = _required("IRIS_QA_LOGOS_BASE_URL").rstrip("/")
     _validate_logos_base_url(base_url)
     if model not in LOGOS_CANDIDATES:
@@ -313,7 +331,6 @@ def _logos_model(*, model_id: str, model: str, rate, api_key: str) -> dict:
         "cost_per_million_input_token": float(rate.input_per_million),
         "cost_per_million_output_token": float(rate.output_per_million),
     }
-    reasoning_effort = candidate["reasoning_effort"]
     if reasoning_effort is not None:
         entry.update(
             {
@@ -399,6 +416,15 @@ def _application(candidate_id: str) -> dict:
     }
 
 
+def _logos_candidate(candidate_model: str) -> tuple[str, str | None] | None:
+    """Return the Logos model and reasoning effort of a candidate, if it is one."""
+    if candidate_model in LOGOS_CANDIDATE_VARIANTS:
+        return LOGOS_CANDIDATE_VARIANTS[candidate_model]
+    if candidate_model in LOGOS_CANDIDATES:
+        return candidate_model, LOGOS_CANDIDATES[candidate_model]["reasoning_effort"]
+    return None
+
+
 def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfiguration:
     if candidate_model not in CANDIDATE_MODEL_IDS:
         raise ValueError(f"Unsupported QA candidate model: {candidate_model}")
@@ -413,7 +439,8 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
         "gpt-5.4-mini": _required("IRIS_QA_GPT_54_MINI_DEPLOYMENT"),
         "gpt-5.4": _required("IRIS_QA_JUDGE_DEPLOYMENT"),
     }
-    if candidate_model not in {"gpt-5.4-mini", *LOGOS_CANDIDATES}:
+    logos_candidate = _logos_candidate(candidate_model)
+    if candidate_model != "gpt-5.4-mini" and logos_candidate is None:
         deployments[candidate_model] = _required(
             CANDIDATE_DEPLOYMENT_ENV[candidate_model]
         )
@@ -441,8 +468,9 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
         )
         for model, deployment in deployments.items()
     ]
-    if candidate_model in LOGOS_CANDIDATES:
-        logos_model = _required(str(LOGOS_CANDIDATES[candidate_model]["model_env"]))
+    if logos_candidate is not None:
+        base_model, reasoning_effort = logos_candidate
+        logos_model = _required(str(LOGOS_CANDIDATES[base_model]["model_env"]))
         logos_key = _required("IRIS_QA_LOGOS_API_KEY")
         models.append(
             _logos_model(
@@ -450,6 +478,7 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
                 model=logos_model,
                 rate=rates[candidate_model],
                 api_key=logos_key,
+                reasoning_effort=reasoning_effort,
             )
         )
     mini_rate = rates["gpt-5.4-mini"]

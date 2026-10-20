@@ -92,7 +92,23 @@ poetry run iris-benchmark run \
 
 Pass `--model` once or more to select candidates such as
 `openai/gpt-oss-120b`, `gpt-6.1-sol`, or `gpt-6-luna`. Omitting `--model`
-selects every candidate in the rate card.
+selects every candidate in the rate card, including the reasoning-effort
+variants below, so pass `--model` for a focused comparison.
+
+To compare reasoning efforts of one model, run its variants side by side, for
+example:
+
+```bash
+poetry run iris-benchmark run \
+  --llm-config /path/to/llm_config.local.yml \
+  --rates qa/config/rates.local.yml \
+  --budget-usd 30 \
+  --max-cost-usd 30 \
+  --repetitions 3 \
+  --model gpt-6-luna-medium --model gpt-6-luna-high \
+  --model gpt-6.1-sol-medium --model gpt-6.1-sol \
+  --output qa-results/effort-comparison
+```
 
 To reuse paid candidate answers after changing only evaluator context:
 
@@ -114,8 +130,21 @@ written only to the short-lived worker file and is never included in report
 metadata. The rate card is a cost guard; verify its values against actual
 billing before a paid run. For GPT-5.6 and GPT-OSS candidates, the harness
 omits reasoning effort and reasoning mode so the provider selects its defaults.
-The GPT-6 Logos candidates use the Responses API and fixed comparison settings:
-`gpt-6.1-sol` uses `high`, while `gpt-6-luna` uses `xhigh`.
+The GPT-6 Logos candidates use the Responses API and fixed comparison settings.
+Each candidate id sends one model with one reasoning effort:
+
+| Candidate            | Logos model   | Reasoning effort |
+| -------------------- | ------------- | ---------------- |
+| `gpt-6.1-sol`        | `gpt-6.1-sol` | `high`           |
+| `gpt-6.1-sol-medium` | `gpt-6.1-sol` | `medium`         |
+| `gpt-6-luna`         | `gpt-6-luna`  | `xhigh`          |
+| `gpt-6-luna-high`    | `gpt-6-luna`  | `high`           |
+| `gpt-6-luna-medium`  | `gpt-6-luna`  | `medium`         |
+
+The variants share the Logos model entry of the local LLM file, so no extra
+configuration is needed. They have their own rate-card rows so that their cost
+is reported separately; the example rows are zero like the other Logos
+candidates, so put real prices into `rates.local.yml` to compare cost.
 
 Before a worker starts, the runner records that trial's full cost bound. It
 replaces the bound with actual usage only after the candidate and evaluator

@@ -21,6 +21,9 @@ def _card():
             ModelRate("openai/gpt-oss-120b", Decimal("0"), Decimal("0")),
             ModelRate("gpt-6.1-sol", Decimal("0"), Decimal("0")),
             ModelRate("gpt-6-luna", Decimal("0"), Decimal("0")),
+            ModelRate("gpt-6.1-sol-medium", Decimal("0"), Decimal("0")),
+            ModelRate("gpt-6-luna-medium", Decimal("0"), Decimal("0")),
+            ModelRate("gpt-6-luna-high", Decimal("0"), Decimal("0")),
         ),
         judge=ModelRate("gpt-5.4", Decimal("5"), Decimal("6")),
     )
@@ -121,14 +124,47 @@ def test_logos_candidate_uses_openai_compatible_chat(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("model", "model_id", "environment_name", "effort"),
+    ("candidate_id", "model", "model_id", "environment_name", "effort"),
     (
-        ("gpt-6.1-sol", "qa-gpt-61-sol", "IRIS_QA_GPT_61_SOL_MODEL", "high"),
-        ("gpt-6-luna", "qa-gpt-6-luna", "IRIS_QA_GPT_6_LUNA_MODEL", "xhigh"),
+        (
+            "gpt-6.1-sol",
+            "gpt-6.1-sol",
+            "qa-gpt-61-sol",
+            "IRIS_QA_GPT_61_SOL_MODEL",
+            "high",
+        ),
+        (
+            "gpt-6.1-sol-medium",
+            "gpt-6.1-sol",
+            "qa-gpt-61-sol-medium",
+            "IRIS_QA_GPT_61_SOL_MODEL",
+            "medium",
+        ),
+        (
+            "gpt-6-luna",
+            "gpt-6-luna",
+            "qa-gpt-6-luna",
+            "IRIS_QA_GPT_6_LUNA_MODEL",
+            "xhigh",
+        ),
+        (
+            "gpt-6-luna-high",
+            "gpt-6-luna",
+            "qa-gpt-6-luna-high",
+            "IRIS_QA_GPT_6_LUNA_MODEL",
+            "high",
+        ),
+        (
+            "gpt-6-luna-medium",
+            "gpt-6-luna",
+            "qa-gpt-6-luna-medium",
+            "IRIS_QA_GPT_6_LUNA_MODEL",
+            "medium",
+        ),
     ),
 )
 def test_logos_gpt_6_candidates_use_responses_api_and_requested_effort(
-    monkeypatch, model, model_id, environment_name, effort
+    monkeypatch, candidate_id, model, model_id, environment_name, effort
 ):
     monkeypatch.setenv("IRIS_QA_AZURE_ENDPOINT", "https://qa.openai.azure.com")
     monkeypatch.setenv("IRIS_QA_GPT_54_MINI_DEPLOYMENT", "mini")
@@ -140,13 +176,14 @@ def test_logos_gpt_6_candidates_use_responses_api_and_requested_effort(
     )
     monkeypatch.setenv(environment_name, model)
 
-    config = create_worker_configuration(_card(), model)
+    config = create_worker_configuration(_card(), candidate_id)
     try:
         models = yaml.safe_load(
             Path(config.environment["LLM_CONFIG_PATH"]).read_text(encoding="utf-8")
         )
         candidate = next(item for item in models if item["id"] == model_id)
         assert candidate["type"] == "openai_chat"
+        # A variant sends the same model; only the effort differs.
         assert candidate["model"] == model
         assert candidate["use_responses_api"] is True
         assert candidate["supports_reasoning_effort"] is True

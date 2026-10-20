@@ -25,11 +25,17 @@ CANDIDATE_MODELS = (
     "openai/gpt-oss-120b",
     "gpt-6.1-sol",
     "gpt-6-luna",
+    "gpt-6.1-sol-medium",
+    "gpt-6-luna-medium",
+    "gpt-6-luna-high",
 )
 ZERO_RATE_CANDIDATES = {
     "openai/gpt-oss-120b",
     "gpt-6.1-sol",
     "gpt-6-luna",
+    "gpt-6.1-sol-medium",
+    "gpt-6-luna-medium",
+    "gpt-6-luna-high",
 }
 
 
