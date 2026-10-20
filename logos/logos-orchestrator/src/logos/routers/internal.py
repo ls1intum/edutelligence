@@ -615,14 +615,12 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
     with _benchmark_admission_lock, DBManager() as db:
         if NIGHTLY_CONTEXT.get() and not can_start(local_now()):
             raise NightlyStopped("window_closed")
-        if not NIGHTLY_CONTEXT.get() and not nightly_store.manual_admission(db):
-            raise HTTPException(
-                status_code=409, detail="Calibration, benchmarks or recovery already own the maintenance slot"
-            )
         target = db.get_model_provider_benchmark_target(data.model_provider_id)
         if target is None:
             raise HTTPException(status_code=404, detail="Provider-model pair not found")
         provider_id = int(target["provider_id"])
+        if not NIGHTLY_CONTEXT.get() and not nightly_store.manual_admission(db, provider_id):
+            raise HTTPException(status_code=409, detail="Maintenance capacity or the selected worker is reserved")
         provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
         if any(s.serving_overrides.model_dump(exclude_none=True) for s in configurations) and (
             provider_type != "logosnode" or _main._capacity_planner is None
@@ -695,7 +693,7 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
         )
 
         if not NIGHTLY_CONTEXT.get() and _main._maintenance_coordinator:
-            nightly_store.claim_benchmark(db, job_id)
+            nightly_store.claim_benchmark(db, job_id, provider_id)
 
     is_internal_worker_benchmark = provider_type == "logosnode"
     benchmark_target = (

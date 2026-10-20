@@ -101,7 +101,7 @@ async def test_runner_keeps_provider_lease_between_runs(monkeypatch, finalize):
 async def test_batch_endpoint_submits_once_and_uses_each_configuration(monkeypatch):
     from logos.benchmarks import nightly_store
 
-    monkeypatch.setattr(nightly_store, "manual_admission", lambda db: True)
+    monkeypatch.setattr(nightly_store, "manual_admission", lambda db, provider_id: True)
     import importlib
 
     internal = importlib.import_module("logos.routers.internal")

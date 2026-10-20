@@ -39,7 +39,7 @@ def coordinator(monkeypatch):
     monkeypatch.setattr(module.store, "lock_held", lambda _: state["locked"])
     monkeypatch.setattr(module.store, "has_active_benchmarks", lambda: state["benchmark"])
     monkeypatch.setattr(module.store, "has_recovery", lambda: state["recovery"])
-    monkeypatch.setattr(module.store, "calibration_claim", lambda: state["claim"])
+    monkeypatch.setattr(module.store, "calibration_claims", lambda: [state["claim"]] if state["claim"] else [])
     monkeypatch.setattr(module.store, "claim_calibration", claim)
     monkeypatch.setattr(module.store, "confirm_calibration", confirm)
     monkeypatch.setattr(module.store, "release_calibration", release)
@@ -62,10 +62,10 @@ async def test_serializes_calibrations_across_providers_and_until_worker_complet
     with pytest.raises(MaintenanceBusyError):
         await service.start_calibration(2, dispatch)
     service.registry.send_command.return_value = {"calibrating": True}
-    assert await service.reconcile() is None
+    assert await service.reconcile() == []
     assert state["claim"] is not None
     service.registry.send_command.return_value = {"calibrating": False}
-    assert await service.reconcile() == 1
+    assert await service.reconcile() == [1]
     await service.start_calibration(2, dispatch)
     assert state["claim"]["provider_id"] == 2
 
@@ -231,7 +231,7 @@ async def test_busy_admission_does_not_mark_calibration_attempt_completed():
     service = CalibrationOrchestrator(registry, facade)
     service._capacity_skip_models = lambda _: frozenset()
     await service._start_session_on(1)
-    assert service._active_provider_id is None
+    assert service._active_provider_ids == set()
     assert 1 not in service._completed_this_window
 
 
@@ -275,3 +275,71 @@ async def test_refused_start_retains_claim_until_fresh_idle_confirmation(coordin
     service.registry.send_command.return_value = {"calibrating": False}
     await service.reconcile()
     assert state["claim"] is None
+
+
+async def test_parallel_calibration_admission_respects_limit_and_worker_identity(coordinator, monkeypatch):
+    service, _ = coordinator
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", "2")
+    claims = {}
+    monkeypatch.setattr(module.store, "calibration_claims", lambda: list(claims.values()))
+    monkeypatch.setattr(
+        module.store,
+        "claim_calibration",
+        lambda pid, token, automatic: claims.update(
+            {pid: dict(provider_id=pid, token=token, automatic=automatic, confirmed=False)}
+        ),
+    )
+    monkeypatch.setattr(
+        module.store,
+        "confirm_calibration",
+        lambda token: next(claim for claim in claims.values() if claim["token"] == token).update(confirmed=True),
+    )
+    await service.start_calibration(1, dispatch)
+    with pytest.raises(MaintenanceBusyError):
+        await service.start_calibration(1, dispatch)
+    await service.start_calibration(2, dispatch)
+    with pytest.raises(MaintenanceBusyError):
+        await service.start_calibration(3, dispatch)
+    assert set(claims) == {1, 2}
+
+
+@pytest.mark.parametrize("failure", ["offline", "timeout", "command"])
+async def test_unreachable_claim_does_not_prevent_reconciliation_of_healthy_worker(coordinator, monkeypatch, failure):
+    from logos.logosnode_registry import LogosNodeOfflineError
+
+    service, _ = coordinator
+    claims = [dict(provider_id=1, token="one", confirmed=True), dict(provider_id=2, token="two", confirmed=True)]
+    monkeypatch.setattr(module.store, "calibration_claims", lambda: claims)
+    released = []
+    monkeypatch.setattr(module.store, "release_calibration", released.append)
+    error = {
+        "offline": LogosNodeOfflineError("offline"),
+        "timeout": TimeoutError(),
+        "command": LogosNodeCommandError("refused"),
+    }[failure]
+    service.registry.send_command.side_effect = [error, {"calibrating": False}]
+    assert await service.reconcile() == [2]
+    assert released == ["two"]
+
+
+async def test_automatic_calibration_starts_two_workers_and_stops_both_at_window_end(monkeypatch):
+    from logos.capacity.calibration_orchestrator import CalibrationOrchestrator
+
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", "2")
+    registry, facade = MagicMock(), MagicMock()
+    registry.send_command = AsyncMock()
+    facade.provider_ids.return_value = [1, 2, 3]
+    service = CalibrationOrchestrator(registry, facade)
+    service._is_in_window = lambda: True
+    service._provider_is_unhealthy = lambda _: False
+    service._provider_has_active_requests = lambda _: False
+    service._provider_has_uncalibrated_models = lambda _: True
+    service._capacity_skip_models = lambda _: frozenset()
+    await service._tick()
+    assert service._active_provider_ids == {1, 2}
+    assert [c.args[0] for c in registry.send_command.await_args_list] == [1, 2]
+    service._is_in_window = lambda: False
+    registry.send_command.reset_mock()
+    await service._tick()
+    assert {c.args[0] for c in registry.send_command.await_args_list} == {1, 2}
+    assert all(c.args[1] == "stop_calibration_session" for c in registry.send_command.await_args_list)

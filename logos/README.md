@@ -16,14 +16,15 @@ See the [agent runner](logos-agent/README.md) for how Logos runs coding agents i
 ## Nightly model benchmarks
 
 Automatic calibration runs first (05:00–08:00 Europe/Berlin by default).
-Benchmarks use the remaining time. Only one calibration or benchmark runs
-across the cluster, including manual starts.
+Benchmarks use the remaining time. `LOGOS_MAINTENANCE_MAX_NODES` limits simultaneous
+maintenance workers, including manual starts. The default `1` keeps runs sequential;
+`2` permits two workers in parallel. Reserved workers cannot serve normal requests.
 
 Logos admins can add model/worker pairs to a persistent nightly rotation from
 **Model Details → Performance**. Both activation and deactivation require
 confirmation. Schedules start disabled.
 
-- Test at most **2 enabled pairs per night**, one worker at a time. Untested
+- Test at most **2 enabled pairs per night**, within the maintenance worker limit. Untested
   pairs come first, then the oldest previous attempt. Unavailable pairs are skipped.
 - Start configurations between **05:00 and 07:50 Europe/Berlin**. At 08:00,
   continue only if at least 50% of measured requests completed successfully.

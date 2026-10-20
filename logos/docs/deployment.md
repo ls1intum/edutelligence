@@ -155,14 +155,18 @@ To see the latest deployment, run `docker exec logos-node-manager node-manager s
 ## Nightly benchmarks
 
 Nightly benchmarks require updates to the webservice, orchestrator, web application and selected workers.
-The webservice applies `065_nightly_benchmarks.xml` before the new scheduler starts.
+The webservice applies migrations `065_nightly_benchmarks.xml`, `066_maintenance_calibration.xml` and `067_parallel_maintenance.xml` before the new scheduler starts.
 Workers report `supports_benchmark_restart` in their runtime status.
 The activation API rejects workers without this capability.
 All schedules default to disabled.
 
 The selected model requires 1 loaded, awake vLLM lane on its worker.
-Admission requires at least 1 other healthy worker.
-The scheduler reserves 1 worker at a time and waits for its existing requests to finish.
+`LOGOS_MAINTENANCE_MAX_NODES` limits simultaneous maintenance workers. Its default is `1`.
+A value of `2` permits 2 workers at the same time.
+This limit also applies to manual calibration and benchmarks.
+The scheduler waits for each selected worker's existing requests to finish.
+No spare worker is required. If all workers are reserved, normal requests must wait.
+The old `LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER` variable no longer controls admission.
 
 Each night selects at most 2 enabled model/worker pairs.
 Untested pairs come first, followed by the oldest previous attempt.
@@ -191,7 +195,7 @@ Before activation:
 
 Automatic calibration runs first, from 05:00 to 08:00 in `Europe/Berlin` by default.
 Benchmarks use the remaining time and start no new configuration after 07:50.
-At most 1 calibration or benchmark runs across the cluster, including manual starts.
+`LOGOS_MAINTENANCE_MAX_NODES` limits simultaneous maintenance workers, including manual starts. The default `1` keeps runs sequential.
 Apply `066_maintenance_calibration.xml` and update workers for the `get_calibration_status` command.
 The coordinator releases calibration claims only after worker confirmation.
 The `LOGOS_MAINTENANCE_WINDOW_*` variables control both calibration and benchmarks.

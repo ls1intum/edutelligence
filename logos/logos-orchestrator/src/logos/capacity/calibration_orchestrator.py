@@ -16,7 +16,7 @@ model completes. The orchestrator only:
     free the active-provider slot so the next tick can pick someone else.
 
 Design invariants (unchanged from the previous design):
-- Only one worker calibrates at a time across the cluster.
+- LOGOS_MAINTENANCE_MAX_NODES limits simultaneous calibration workers.
 - A worker is considered idle if it has no active inference requests AND is
   not already running a calibration session.
 - The maintenance coordinator confirms worker completion before releasing the cluster slot.
@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo
 # registry, which uses the same names to track ProviderSession.calibrating —
 # one definition keeps the two from drifting apart.
 from logos.logosnode_registry import TERMINAL_CALIBRATION_SESSION_EVENTS as _TERMINAL_SESSION_EVENTS
-from logos.maintenance_window import MaintenanceWindow
+from logos.maintenance_window import MaintenanceWindow, maintenance_node_limit
 
 logger = logging.getLogger("logos.capacity.calibration_orchestrator")
 
@@ -122,11 +122,7 @@ class CalibrationOrchestrator:
         self._facade = facade
         self._config = config or CalibrationConfig.from_env()
         self._task: asyncio.Task[None] | None = None
-        # The single provider currently running a session, or None when no
-        # session is in flight anywhere in the cluster. Updated when we
-        # send start_calibration_session and cleared by on_event() when the
-        # worker emits a terminal session event.
-        self._active_provider_id: int | None = None
+        self._active_provider_ids: set[int] = set()
         # Providers we have already kicked off this window. A worker that
         # finishes its session is not asked again until the next window —
         # whatever models it couldn't calibrate (failures, unsupported)
@@ -204,16 +200,13 @@ class CalibrationOrchestrator:
             await self._stop_active_session_if_any("outside-window")
             return
 
-        # Inside window: do nothing if a session is already running.
-        if self._active_provider_id is not None:
-            return
-
-        target_provider_id = self._pick_next_provider()
-        if target_provider_id is None:
-            logger.debug("CalibrationOrchestrator: no idle worker with uncalibrated models — waiting for next tick")
-            return
-
-        await self._start_session_on(target_provider_id)
+        attempted = set()
+        while len(self._active_provider_ids) < maintenance_node_limit():
+            target_provider_id = self._pick_next_provider(excluding=attempted)
+            if target_provider_id is None:
+                return
+            attempted.add(target_provider_id)
+            await self._start_session_on(target_provider_id)
 
     # ------------------------------------------------------------------
     # Window check
@@ -225,7 +218,7 @@ class CalibrationOrchestrator:
             return False
         if not self._was_in_window:
             self._completed_this_window.clear()
-        if self._active_provider_id is not None:
+        if self._active_provider_ids:
             return True
         return any(
             pid not in self._completed_this_window
@@ -243,9 +236,11 @@ class CalibrationOrchestrator:
     # Provider selection
     # ------------------------------------------------------------------
 
-    def _pick_next_provider(self) -> int | None:
+    def _pick_next_provider(self, excluding: set[int] | None = None) -> int | None:
         """Return the first eligible provider that still has uncalibrated models."""
         for provider_id in self._facade.provider_ids():
+            if provider_id in self._active_provider_ids or provider_id in (excluding or set()):
+                continue
             if provider_id in self._completed_this_window:
                 continue
             if not self._registry.has_received_first_status(provider_id):
@@ -451,7 +446,7 @@ class CalibrationOrchestrator:
         # Mark active before sending so a concurrent terminal-event handler
         # (e.g. from a duplicate connect) can clear it cleanly without us
         # also firing the same start a second time on the next tick.
-        self._active_provider_id = provider_id
+        self._active_provider_ids.add(provider_id)
         skip_models = sorted(self._capacity_skip_models(provider_id))
         try:
             await self._registry.send_command(
@@ -466,20 +461,20 @@ class CalibrationOrchestrator:
                 self._config.sleep_level,
             )
         except MaintenanceBusyError:
-            self._active_provider_id = None
+            self._active_provider_ids.discard(provider_id)
         except LogosNodeOfflineError:
             logger.warning(
                 "CalibrationOrchestrator: provider=%s offline — could not start session",
                 provider_name,
             )
-            self._active_provider_id = None
+            self._active_provider_ids.discard(provider_id)
         except LogosNodeCommandError as exc:
             logger.warning(
                 "CalibrationOrchestrator: start_calibration_session failed on provider=%s: %s",
                 provider_name,
                 exc,
             )
-            self._active_provider_id = None
+            self._active_provider_ids.discard(provider_id)
             # Don't retry this provider in this window — whatever made the
             # worker refuse (e.g. node unhealthy at the last second) will
             # likely repeat next tick.
@@ -489,18 +484,14 @@ class CalibrationOrchestrator:
                 "CalibrationOrchestrator: unexpected error starting session on provider=%s",
                 provider_name,
             )
-            self._active_provider_id = None
+            self._active_provider_ids.discard(provider_id)
 
     async def _stop_active_session_if_any(self, reason: str) -> None:
-        """Outside the window (or on shutdown): tell the active worker to stop.
+        """Stop all automatic sessions; uncertain stops retain their durable claims."""
+        for provider_id in tuple(self._active_provider_ids):
+            await self._stop_session_on(provider_id, reason)
 
-        The worker reacts within ~2s — wait_ready polls cancel_event during
-        vLLM probe startup. The terminal session_cancelled event clears
-        ``_active_provider_id`` via on_event().
-        """
-        provider_id = self._active_provider_id
-        if provider_id is None:
-            return
+    async def _stop_session_on(self, provider_id: int, reason: str) -> None:
         from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
 
         provider_name = self._facade.get_provider_name(provider_id) or str(provider_id)
@@ -523,7 +514,7 @@ class CalibrationOrchestrator:
             )
             # The coordinator retains the durable claim on an uncertain stop.
             # The shared loop reattaches it before the next stop attempt.
-            self._active_provider_id = None
+            self._active_provider_ids.discard(provider_id)
 
     # ------------------------------------------------------------------
     # Event hook
@@ -535,7 +526,7 @@ class CalibrationOrchestrator:
         We only care about terminal session events on the active provider —
         they free the slot so the next tick can pick another worker.
         """
-        if self._active_provider_id is None or provider_id != self._active_provider_id:
+        if provider_id not in self._active_provider_ids:
             return
         if not isinstance(event, dict):
             return
@@ -552,4 +543,4 @@ class CalibrationOrchestrator:
         # didn't calibrate this round (failures, unsupported, skipped) won't
         # succeed on a retry in this window. Mark done so we move on.
         self._completed_this_window.add(provider_id)
-        self._active_provider_id = None
+        self._active_provider_ids.discard(provider_id)

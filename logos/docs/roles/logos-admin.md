@@ -114,7 +114,7 @@ The [Model Benchmarks guide](../admin/model-benchmarks.md) explains the confirma
 
 The **Performance** tab provides nightly benchmarks for each model/worker pair.
 Calibration runs first. Benchmarks use the remaining time.
-Only 1 calibration or benchmark runs across the cluster, including manual starts.
+The configured maintenance limit controls simultaneous workers, including manual starts. The default is 1 worker.
 Schedules are off by default. Activation requires an updated, connected worker.
 See [deployment requirements](../deployment.md#nightly-benchmarks) before activation.
 See the [nightly benchmark guide](../admin/nightly-benchmarks.md) for rotation, parameter values and recovery rules.

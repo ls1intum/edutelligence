@@ -1,7 +1,6 @@
 """Nightly admission, progress and bounded recovery policy."""
 
 import asyncio
-import os
 import time as clock
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -18,11 +17,6 @@ STALL_SECONDS = 300
 PREPARATION_SECONDS = 900
 POLL_SECONDS = 1
 MAX_PAIRS_PER_NIGHT = 2
-
-
-def requires_spare_worker() -> bool:
-    """Keep serving capacity unless single-worker maintenance is explicitly enabled."""
-    return os.getenv("LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER", "false").strip().lower() != "true"
 
 
 def local_now() -> datetime:

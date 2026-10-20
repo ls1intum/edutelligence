@@ -1,9 +1,13 @@
 """Cluster-wide admission and confirmed completion of worker calibration."""
 
+import logging
 import uuid
 from contextvars import ContextVar
 
 from logos.benchmarks import nightly_store as store
+from logos.maintenance_window import maintenance_node_limit
+
+logger = logging.getLogger(__name__)
 
 AUTOMATIC_CALIBRATION = ContextVar("automatic_calibration", default=False)
 
@@ -21,11 +25,13 @@ class MaintenanceCoordinator:
         with store.cluster_lock() as connection:
             if connection is None:
                 raise MaintenanceBusyError("Calibration or benchmarks already own the maintenance slot")
+            occupied = {claim["provider_id"] for claim in store.calibration_claims()}
+            occupied.update(pid for pid in self.registry.active_provider_ids() if self.registry.is_calibrating(pid))
             if (
-                store.calibration_claim()
+                provider_id in occupied
+                or len(occupied) >= maintenance_node_limit()
                 or store.has_active_benchmarks()
                 or store.has_recovery()
-                or self.live_calibration()
             ):
                 raise MaintenanceBusyError("Calibration, benchmarks or recovery already own the maintenance slot")
             token = str(uuid.uuid4())
@@ -65,21 +71,35 @@ class MaintenanceCoordinator:
             if connection is None:
                 raise MaintenanceBusyError("Maintenance command is still in progress")
             result = await send()
-            claim = store.calibration_claim()
-            if claim and claim["provider_id"] == provider_id:
-                await self._release_if_finished(claim)
+            for claim in store.calibration_claims():
+                if claim["provider_id"] == provider_id:
+                    await self._release_if_finished(claim)
             return result
 
     async def reconcile(self):
         # Acknowledged starts can finish between status pushes. Query the
         # worker directly; stale status and terminal events never release a claim.
+        from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
+
+        completed = []
         with store.cluster_lock() as connection:
             if connection is None:
-                return
-            claim = store.calibration_claim()
-            if claim and claim["confirmed"]:
-                if await self._release_if_finished(claim):
-                    return claim["provider_id"]
+                return completed
+            for claim in store.calibration_claims():
+                if not claim["confirmed"]:
+                    continue
+                try:
+                    if await self._release_if_finished(claim):
+                        completed.append(claim["provider_id"])
+                except (LogosNodeOfflineError, LogosNodeCommandError, TimeoutError) as exc:
+                    logger.warning(
+                        "Calibration status unavailable for provider %s (%s); claim %s remains reserved. "
+                        "Reconnect and stop calibration, or follow the offline calibration recovery procedure.",
+                        claim["provider_id"],
+                        exc,
+                        claim["token"],
+                    )
+        return completed
 
     async def _release_if_finished(self, claim):
         result = await self.registry.send_command(

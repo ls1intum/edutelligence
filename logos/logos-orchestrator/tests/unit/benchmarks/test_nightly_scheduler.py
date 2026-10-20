@@ -12,7 +12,7 @@ from logos.benchmarks.reservations import benchmark_reservations
 
 @pytest.fixture
 def scheduler(monkeypatch):
-    monkeypatch.delenv("LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER", raising=False)
+    monkeypatch.delenv("LOGOS_MAINTENANCE_MAX_NODES", raising=False)
     registry = MagicMock()
     registry.is_provider_online.return_value = True
     registry.has_received_first_status.return_value = True
@@ -120,15 +120,6 @@ async def test_recovery_failure_holds_node_and_stops_other_schedules(scheduler):
     assert not benchmark_reservations.allows(20, "other", "production")
 
 
-async def test_single_worker_never_taken_out_of_production(scheduler):
-    scheduler.registry.active_provider_ids.return_value = [20]
-    scheduler.submit = AsyncMock()
-    assert await scheduler.run_schedule(31, MagicMock())
-    scheduler.submit.assert_not_awaited()
-    scheduler.restore.assert_not_awaited()
-    assert "another healthy worker" in scheduler.saved[-1][2][0]["reason"]
-
-
 async def test_no_configuration_or_retry_starts_at_0450(scheduler, monkeypatch):
     monkeypatch.setattr(module, "local_now", lambda: datetime.fromisoformat("2026-10-13T07:50:00+02:00"))
     scheduler.submit = AsyncMock()
@@ -183,7 +174,7 @@ def rotation(scheduler, monkeypatch):
 
     monkeypatch.setattr(module.store, "claim", claim)
     scheduler.run_schedule = AsyncMock(return_value=True)
-    scheduler.target_lane = MagicMock()
+    scheduler.target_lane = MagicMock(side_effect=lambda pair: ({"provider_id": pair}, {}, {}))
     return rows, claimed
 
 
@@ -197,7 +188,11 @@ async def test_rotation_admits_two_pairs_sequentially_and_keeps_daily_cap(schedu
 
 async def test_unavailable_pair_does_not_consume_a_nightly_slot(scheduler, rotation):
     _, claimed = rotation
-    scheduler.target_lane.side_effect = [RuntimeError("Worker is offline"), None, None]
+    scheduler.target_lane.side_effect = [
+        RuntimeError("Worker is offline"),
+        ({"provider_id": 32}, {}, {}),
+        ({"provider_id": 33}, {}, {}),
+    ]
     await scheduler.tick()
     assert claimed == {32, 33}
     assert scheduler.saved[0][1] == "unavailable"
@@ -224,7 +219,7 @@ async def test_daily_quota_never_blocks_pending_recovery(scheduler, rotation):
 async def test_calibration_runs_before_benchmarks_even_without_enabled_schedules(scheduler, monkeypatch):
     events = []
     scheduler.calibration = MagicMock()
-    scheduler.calibration._active_provider_id = None
+    scheduler.calibration._active_provider_ids = set()
     scheduler.calibration._tick = AsyncMock(side_effect=lambda: events.append("calibration"))
     scheduler.tick = AsyncMock(side_effect=lambda: events.append("benchmarks"))
     monkeypatch.setattr(module.store, "has_recovery", lambda: False)
@@ -255,16 +250,16 @@ async def test_pending_calibration_prevents_next_configuration(scheduler):
 
 async def test_automatic_calibration_claim_is_reattached_after_restart(scheduler, monkeypatch):
     scheduler.calibration = MagicMock()
-    scheduler.calibration._active_provider_id = None
+    scheduler.calibration._active_provider_ids = set()
     scheduler.calibration._tick = AsyncMock()
     scheduler.maintenance = MagicMock()
-    scheduler.maintenance.reconcile = AsyncMock(return_value=None)
+    scheduler.maintenance.reconcile = AsyncMock(return_value=[])
     scheduler.tick = AsyncMock()
-    monkeypatch.setattr(module.store, "calibration_claim", lambda: {"provider_id": 20, "automatic": True})
+    monkeypatch.setattr(module.store, "calibration_claims", lambda: [{"provider_id": 20, "automatic": True}])
     monkeypatch.setattr(module.store, "has_recovery", lambda: False)
     monkeypatch.setattr(module.store, "has_active_benchmarks", lambda: False)
     await scheduler._cycle()
-    assert scheduler.calibration._active_provider_id == 20
+    assert scheduler.calibration._active_provider_ids == {20}
     scheduler.calibration._tick.assert_awaited_once()
 
 
@@ -377,7 +372,7 @@ async def test_terminal_orphan_job_still_requires_worker_cleanup_before_restore(
 
 
 async def test_explicit_single_worker_maintenance_runs_and_restores(scheduler, monkeypatch):
-    monkeypatch.setenv("LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER", "true")
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", "1")
     scheduler.registry.active_provider_ids.return_value = [20]
 
     async def submit(*args):
@@ -394,7 +389,7 @@ async def test_explicit_single_worker_maintenance_runs_and_restores(scheduler, m
 
 @pytest.mark.parametrize("condition", ["offline", "unhealthy", "calibrating"])
 def test_single_worker_override_still_requires_healthy_idle_worker(scheduler, monkeypatch, condition):
-    monkeypatch.setenv("LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER", "true")
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", "1")
     scheduler.registry.active_provider_ids.return_value = [20]
     if condition == "offline":
         scheduler.registry.is_provider_online.return_value = False
@@ -404,3 +399,108 @@ def test_single_worker_override_still_requires_healthy_idle_worker(scheduler, mo
         scheduler.registry.peek_runtime_snapshot.return_value["runtime"]["node_health"] = {"healthy": False}
     with pytest.raises(RuntimeError, match="selected worker must be online and healthy"):
         scheduler.target_lane(31)
+
+
+async def test_two_distinct_workers_run_concurrently_with_limit_two(scheduler, rotation, monkeypatch):
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", "2")
+    started = set()
+    both_started = asyncio.Event()
+
+    async def run(pair, connection):
+        started.add(pair)
+        if len(started) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        return True
+
+    scheduler.run_schedule.side_effect = run
+    await scheduler.tick()
+    assert started == {31, 32}
+    assert rotation[1] == {31, 32}
+
+
+async def test_two_models_on_same_worker_remain_sequential(scheduler, rotation, monkeypatch):
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", "2")
+    scheduler.target_lane.side_effect = lambda pair: ({"provider_id": 20}, {}, {})
+    active = set()
+    order = []
+
+    async def run(pair, connection):
+        assert not active
+        active.add(pair)
+        await asyncio.sleep(0)
+        active.remove(pair)
+        order.append(pair)
+        return True
+
+    scheduler.run_schedule.side_effect = run
+    await scheduler.tick()
+    assert order == [31, 32]
+
+
+async def test_parallel_wave_failure_waits_for_sibling_cleanup(scheduler, rotation, monkeypatch):
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", "2")
+    running = asyncio.Event()
+    cleaned = []
+
+    async def run(pair, connection):
+        if pair == 31:
+            await running.wait()
+            raise RuntimeError("database unavailable")
+        try:
+            running.set()
+            await asyncio.Future()
+        finally:
+            await asyncio.sleep(0)
+            cleaned.append(pair)
+
+    scheduler.run_schedule.side_effect = run
+    with pytest.raises(ExceptionGroup):
+        await scheduler.tick()
+    assert cleaned == [32]
+
+
+async def test_offline_calibration_keeps_claim_but_scheduler_cycle_continues(scheduler, monkeypatch, caplog):
+    from logos.benchmarks.maintenance import MaintenanceCoordinator
+    from logos.logosnode_registry import LogosNodeOfflineError
+
+    claim = {"provider_id": 20, "token": "offline", "automatic": True, "confirmed": True}
+    monkeypatch.setattr(module.store, "calibration_claims", lambda: [claim])
+    monkeypatch.setattr(module.store, "cluster_lock", lambda: nullcontext(object()))
+    monkeypatch.setattr(module.store, "has_recovery", lambda: False)
+    monkeypatch.setattr(module.store, "has_active_benchmarks", lambda: False)
+    release = MagicMock()
+    monkeypatch.setattr(module.store, "release_calibration", release)
+    scheduler.registry.send_command.side_effect = LogosNodeOfflineError("offline")
+    scheduler.maintenance = MaintenanceCoordinator(scheduler.registry)
+    scheduler.calibration = MagicMock()
+    scheduler.calibration._tick = AsyncMock()
+    scheduler.tick = AsyncMock()
+    await scheduler._cycle()
+    release.assert_not_called()
+    assert scheduler.calibration._active_provider_ids == {20}
+    scheduler.calibration._tick.assert_awaited_once()
+    scheduler.tick.assert_awaited_once()
+    assert "remains reserved" in caplog.text
+
+
+async def test_recovery_of_crashed_parallel_wave_excludes_only_orphaned_sibling_jobs(scheduler, rotation, monkeypatch):
+    rows, _ = rotation
+    rows[0]["recovery"] = {"provider_id": 20, "mutated": True}
+    rows[1]["recovery"] = {"provider_id": 21, "mutated": True}
+    monkeypatch.setattr(module.store, "recovery_jobs", lambda pair: {31: [7], 32: [8]}[pair])
+    checks = []
+    monkeypatch.setattr(module.store, "has_active_benchmarks", lambda excluding: checks.append(excluding) or False)
+    scheduler.recovery_worker_idle = AsyncMock(return_value=True)
+    assert await scheduler.recover(rows[0], MagicMock())
+    assert checks == [[7, 8]]
+    scheduler.restore.assert_awaited_once_with(31, rows[0]["recovery"])
+
+
+async def test_live_sibling_execution_prevents_parallel_wave_recovery(scheduler, rotation, monkeypatch):
+    rows, _ = rotation
+    rows[0]["recovery"] = {"provider_id": 20}
+    rows[1]["recovery"] = {"provider_id": 21}
+    monkeypatch.setattr(module.store, "execution_lock", lambda pair: nullcontext(None if pair == 32 else object()))
+    assert not await scheduler.recover(rows[0], MagicMock())
+    scheduler.restore.assert_not_awaited()

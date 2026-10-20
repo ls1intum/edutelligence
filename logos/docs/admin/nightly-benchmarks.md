@@ -117,13 +117,14 @@ production requests or automatically apply winning parameters.
 
 ## Worker ownership and recovery
 
-One PostgreSQL advisory lock serializes nightly plans across the cluster and
-excludes new manual benchmarks during the nightly maintenance slot. A persisted
+One PostgreSQL advisory lock gives 1 scheduler control of each nightly batch.
+Each batch uses at most `LOGOS_MAINTENANCE_MAX_NODES` distinct workers.
+The lock excludes new manual benchmarks until the batch finishes cleanup. A persisted
 local-date claim prevents re-running a schedule after an application restart.
 Existing manual benchmarks finish before nightly admission.
 
-The selected worker must be online, healthy and not calibrating. Another
-healthy worker must remain available by default. The model must have exactly one existing,
+The selected worker must be online, healthy and not calibrating.
+No spare worker is required. The model must have exactly one existing,
 loaded and awake vLLM lane. Production requests cannot enter the reserved node;
 existing traffic drains before a benchmark starts.
 Requests already accepted by the scheduler can finish, including requests that still wait for transport access.
@@ -166,8 +167,9 @@ Imported profiles are stale until calibration succeeds.
 Automatic calibration runs first during the maintenance window.
 Benchmarks use the remaining time.
 
-Deploy webservice migrations `065_nightly_benchmarks.xml` and `066_maintenance_calibration.xml`, the orchestrator,
-the web application and the updated worker code. Workers advertise
+Deploy webservice migrations `065_nightly_benchmarks.xml`, `066_maintenance_calibration.xml` and `067_parallel_maintenance.xml` before the orchestrator update.
+Then deploy the orchestrator, web application and updated worker code.
+Stop the old orchestrator before the migration changes the maintenance tables. Workers advertise
 `supports_benchmark_restart`; activation rejects workers without this feature.
 Enable only the desired model/worker pairs after deployment. No schedules are
 enabled by the migration or by application startup.
@@ -190,7 +192,9 @@ Benchmarks start only after these attempts finish and before 07:50.
 If new calibration work appears during a benchmark, the current run finishes first.
 The scheduler restores the worker and stops the remaining benchmark plan with `calibration_pending`.
 
-At most 1 calibration or benchmark runs across the cluster.
+`LOGOS_MAINTENANCE_MAX_NODES` limits simultaneous maintenance workers. The default is `1`.
+Set it to `2` to permit 2 calibrations or 2 benchmarks on different workers at the same time.
+Calibration and benchmark phases remain separate. Each worker runs only 1 maintenance operation at a time.
 This limit also applies to manual calibration and manual benchmarks, including cloud benchmarks.
 Conflicting manual starts return HTTP 409. They do not enter a queue.
 Automatic calibration stops at the end of its window. The 50% completion rule applies only to benchmarks.
@@ -216,14 +220,63 @@ An operator must stop the original benchmark process and verify worker cleanup b
 Then mark the affected job as failed and remove its matching `maintenance_benchmark` record.
 Keep every nightly recovery journal until the scheduler restores the original worker configuration.
 
-## Single-worker maintenance
+## Maintenance capacity
 
-`LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER=false` requires another healthy worker. This is the default.
-Set this variable to `true` only in an environment where normal requests can wait during benchmarks.
-The activation dialog states this policy. The selected worker must still be online, healthy and free of calibration.
-Existing requests drain first. New normal requests cannot enter the reserved worker.
+`LOGOS_MAINTENANCE_MAX_NODES=1` keeps maintenance sequential, including installations with only 1 worker.
+A larger positive integer permits parallel maintenance on different workers.
+The nightly quota remains 2 model/worker pairs per date, independent of this limit.
+Two pairs on the same worker run sequentially.
+Use the same limit on all orchestrators. Invalid values prevent startup.
+The old `LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER` variable no longer controls admission.
+
+The activation dialog shows the effective limit.
+The selected worker must still be online, healthy and free of calibration.
+Existing requests drain first. New normal requests cannot enter a reserved worker.
+If all workers are reserved, normal requests must wait.
 All time limits, recovery checks and configuration restoration still apply.
-This option does not enable schedules. Enable each intended model/worker pair separately.
+This setting does not enable schedules. Enable each intended model/worker pair separately.
+
+## Offline calibration recovery
+
+An offline worker keeps its durable calibration claim.
+The scheduler continues its cycle and checks other calibration claims.
+Benchmarks remain blocked until all calibration claims are released.
+Reconnection and a confirmed calibration stop are the preferred recovery path.
+
+If a worker cannot reconnect, use this procedure with database administrator access.
+
+1. Identify the affected `provider_id` and `token` in `maintenance_calibration`.
+2. Stop the worker and its inference processes through the host management system.
+3. Disable automatic restarts for that worker.
+4. Confirm that the worker processes cannot resume calibration.
+5. Record the provider, token and shutdown evidence in the incident record.
+6. Open a PostgreSQL session on the central Logos database.
+7. Set the variables below to the exact provider and token from step 1.
+8. Run the transaction below.
+9. Confirm that exactly 1 row was deleted.
+10. If no row was deleted, inspect the current claim before another attempt.
+11. Keep the worker stopped until its configuration and calibration state are verified.
+
+Do not release a claim based only on an offline indicator or a network timeout.
+Do not delete nightly recovery journals or manual benchmark claims through this procedure.
+The transaction uses the same maintenance lock as the application.
+A changed token prevents deletion of a newer claim.
+
+```sql
+-- In psql, replace these example values with the recorded provider and token.
+\set provider_id 20
+\set claim_token 'recorded-calibration-token'
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+SELECT pg_advisory_xact_lock(125500301);
+DELETE FROM maintenance_calibration
+WHERE provider_id = :provider_id AND token = :'claim_token'
+RETURNING provider_id, token;
+COMMIT;
+```
+
+A lock timeout aborts the transaction. Run `ROLLBACK` before another attempt.
+The next scheduler cycle reads the remaining claims from PostgreSQL.
 
 ## Deployment recovery
 
@@ -293,9 +346,20 @@ NIGHTLY_TEST_DB_URL="$TEST_DATABASE_URL" \
   uv run pytest --noconftest tests/integration/benchmarks/test_nightly_store.py -q
 ```
 
-Before the first production activation, deploy the complete change to a test
-environment with supported workers. Validate an actual benchmark and stored
-result, the confirmation controls, quota rotation, cancellation, retry and
-restoration. Exercise 07:50 and both sides of the 08:00 threshold with a
-controlled test clock. Verify that other workers still accept production traffic.
+Before the first production activation, complete these steps:
+
+1. Deploy the complete change to a test environment with supported workers.
+2. Run an actual benchmark on GPU hardware.
+3. Verify its stored result.
+4. Test both confirmation controls.
+5. Verify quota rotation.
+6. Test cancellation.
+7. Test retry after a stall.
+8. Verify restoration of the original configuration.
+9. Use a controlled test clock to verify the 07:50 cutoff.
+10. Test both sides of the 08:00 completion threshold with that clock.
+11. Set the maintenance limit to `2`.
+12. Verify parallel runs on different workers and sequential runs on the same worker.
+13. Verify that other workers still accept production traffic.
+
 A UI or database test alone does not verify an overnight run on real GPU hardware.

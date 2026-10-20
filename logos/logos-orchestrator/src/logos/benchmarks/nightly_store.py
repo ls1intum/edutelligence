@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from logos.benchmarks.nightly import MAX_PAIRS_PER_NIGHT
 from logos.dbutils.dbmanager import DBManager, _init_engine
+from logos.maintenance_window import maintenance_node_limit
 
 LOCK_ID = 125500301
 
@@ -145,7 +146,7 @@ def has_active_benchmarks(excluding: list[int] | None = None) -> bool:
         )
 
 
-def manual_admission(db) -> bool:
+def manual_admission(db, provider_id: int) -> bool:
     """Serialize admission against nightly execution, including recovery after a crash."""
     acquired = db.session.execute(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": LOCK_ID}).scalar()
     return (
@@ -154,9 +155,15 @@ def manual_admission(db) -> bool:
             text(
                 "SELECT EXISTS(SELECT 1 FROM nightly_benchmarks WHERE recovery IS NOT NULL) "
                 "OR EXISTS(SELECT 1 FROM maintenance_calibration) "
+                "OR EXISTS(SELECT 1 FROM maintenance_benchmark WHERE provider_id = :provider OR provider_id IS NULL) "
                 "OR EXISTS(SELECT 1 FROM jobs WHERE environment = 'model-provider-benchmark' "
-                "AND status IN ('pending', 'running')) OR EXISTS(SELECT 1 FROM maintenance_benchmark)"
-            )
+                "AND status IN ('pending', 'running') AND request_payload->>'provider_id' = :provider_text) "
+                "OR (SELECT COUNT(*) FROM ("
+                "SELECT id FROM jobs WHERE environment = 'model-provider-benchmark' "
+                "AND status IN ('pending', 'running') UNION SELECT job_id FROM maintenance_benchmark"
+                ") AS active_jobs) >= :limit"
+            ),
+            {"limit": maintenance_node_limit(), "provider": provider_id, "provider_text": str(provider_id)},
         ).scalar()
     )
 
@@ -209,10 +216,12 @@ def has_recovery():
         )
 
 
-def calibration_claim():
+def calibration_claims():
     with DBManager() as db:
-        row = db.session.execute(text("SELECT * FROM maintenance_calibration WHERE singleton")).mappings().first()
-        return dict(row) if row else None
+        return [
+            dict(row)
+            for row in db.session.execute(text("SELECT * FROM maintenance_calibration ORDER BY provider_id")).mappings()
+        ]
 
 
 def claim_calibration(provider_id, token, automatic=False):
@@ -240,8 +249,11 @@ def release_calibration(token):
         db.session.commit()
 
 
-def claim_benchmark(db, job_id):
-    db.session.execute(text("INSERT INTO maintenance_benchmark (job_id) VALUES (:job)"), {"job": job_id})
+def claim_benchmark(db, job_id, provider_id):
+    db.session.execute(
+        text("INSERT INTO maintenance_benchmark (job_id, provider_id) VALUES (:job, :provider)"),
+        {"job": job_id, "provider": provider_id},
+    )
     db.session.commit()
 
 

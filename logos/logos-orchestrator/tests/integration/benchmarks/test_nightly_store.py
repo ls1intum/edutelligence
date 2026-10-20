@@ -48,6 +48,10 @@ def database(monkeypatch):
             )
         )
 
+    with engine.begin() as connection:
+        parallel = ElementTree.parse(migration.with_name("067_parallel_maintenance.xml"))
+        connection.execute(text(parallel.find("{*}changeSet/{*}sql").text))
+
     class Database(store.DBManager):
         def __enter__(self):
             self.session = Session(engine)
@@ -83,9 +87,9 @@ def test_cluster_lock_excludes_other_scheduler_and_manual_runs(database):
         with store.cluster_lock() as second:
             assert second is None
         with Database() as db:
-            assert not store.manual_admission(db)
+            assert not store.manual_admission(db, 20)
     with Database() as db:
-        assert store.manual_admission(db)
+        assert store.manual_admission(db, 20)
 
 
 def test_recovery_journal_blocks_manual_admission_after_lock_release(database):
@@ -93,7 +97,7 @@ def test_recovery_journal_blocks_manual_admission_after_lock_release(database):
     store.set_enabled(31, True, False)
     store.save(31, "recovery_required", [{"status": "stalled"}], {"provider_id": 20})
     with Database() as db:
-        assert not store.manual_admission(db)
+        assert not store.manual_admission(db, 20)
     assert store.status(31)["recovery_required"]
     assert "recovery" not in store.status(31)
     store.set_enabled(31, False, True)
@@ -101,7 +105,7 @@ def test_recovery_journal_blocks_manual_admission_after_lock_release(database):
         store.set_enabled(31, True, False)
     store.save(31, "recovered", [], None)
     with Database() as db:
-        assert store.manual_admission(db)
+        assert store.manual_admission(db, 20)
 
 
 def test_progress_does_not_replace_job_result_or_renew_a_failed_job(database):
@@ -167,32 +171,32 @@ def test_calibration_claim_blocks_manual_admission_and_survives_connections(data
         store.claim_calibration(20, "owner", automatic=True)
         store.confirm_calibration("owner")
     engine.dispose()
-    assert store.calibration_claim()["confirmed"]
-    assert store.calibration_claim()["automatic"]
+    assert store.calibration_claims()[0]["confirmed"]
+    assert store.calibration_claims()[0]["automatic"]
     with Database() as db:
-        assert not store.manual_admission(db)
+        assert not store.manual_admission(db, 20)
     store.release_calibration("old-owner")
-    assert store.calibration_claim() is not None
+    assert store.calibration_claims()
     store.release_calibration("owner")
     with Database() as db:
-        assert store.manual_admission(db)
+        assert store.manual_admission(db, 20)
 
 
 def test_finished_job_keeps_slot_until_benchmark_cleanup_completes(database):
     engine, Database = database
     with Database() as db:
-        assert store.manual_admission(db)
-        store.claim_benchmark(db, 7)
+        assert store.manual_admission(db, 20)
+        store.claim_benchmark(db, 7, 20)
     # A second connection must not admit another job, even without a live jobs row.
     with Database() as db:
-        assert not store.manual_admission(db)
+        assert not store.manual_admission(db, 20)
     assert store.has_active_benchmarks()
     store.release_benchmark(6)
     assert store.has_active_benchmarks()
     store.release_benchmark(7)
     assert not store.has_active_benchmarks()
     with Database() as db:
-        assert store.manual_admission(db)
+        assert store.manual_admission(db, 20)
 
 
 def test_old_running_job_is_not_assumed_finished(database):
@@ -206,7 +210,7 @@ def test_old_running_job_is_not_assumed_finished(database):
         )
     assert store.has_active_benchmarks()
     with Database() as db:
-        assert not store.manual_admission(db)
+        assert not store.manual_admission(db, 20)
 
 
 def test_execution_lease_survives_maintenance_lock_release(database):
@@ -247,7 +251,65 @@ def test_orphan_fencing_targets_only_its_nightly_jobs_and_preserves_manual_claim
     with engine.connect() as connection:
         assert connection.execute(text("SELECT status FROM jobs WHERE id=7")).scalar() == "failed"
     with Database() as db:
-        store.claim_benchmark(db, 8)
+        store.claim_benchmark(db, 8, 20)
     assert store.has_active_benchmarks(excluding=[8, 9])
     store.release_benchmark(8)
     assert not store.has_active_benchmarks(excluding=[8, 9])
+
+
+def test_parallel_manual_claims_are_durable_bounded_and_provider_exclusive(database, monkeypatch):
+    engine, Database = database
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", "2")
+    with Database() as db:
+        assert store.manual_admission(db, 20)
+        store.claim_benchmark(db, 7, 20)
+    with Database() as db:
+        assert not store.manual_admission(db, 20)
+    with Database() as db:
+        assert store.manual_admission(db, 21)
+        store.claim_benchmark(db, 8, 21)
+    engine.dispose()
+    with Database() as db:
+        assert not store.manual_admission(db, 22)
+    store.release_benchmark(7)
+    with Database() as db:
+        assert store.manual_admission(db, 22)
+        store.claim_benchmark(db, 9, 22)
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", "1")
+    with Database() as db:
+        assert not store.manual_admission(db, 20)
+
+
+def test_parallel_calibration_rows_survive_restart_and_release_only_matching_token(database):
+    engine, Database = database
+    with store.cluster_lock():
+        store.claim_calibration(20, "first", automatic=True)
+        store.claim_calibration(21, "second", automatic=True)
+        store.confirm_calibration("first")
+        store.confirm_calibration("second")
+    engine.dispose()
+    assert {claim["provider_id"] for claim in store.calibration_claims()} == {20, 21}
+    store.release_calibration("stale-token")
+    assert len(store.calibration_claims()) == 2
+    store.release_calibration("first")
+    assert [claim["provider_id"] for claim in store.calibration_claims()] == [21]
+    with Database() as db:
+        assert not store.manual_admission(db, 22)
+
+
+def test_manual_job_and_cleanup_claim_count_once(database, monkeypatch):
+    engine, Database = database
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", "2")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO jobs(id, environment, status, request_payload) VALUES "
+                "(7, 'model-provider-benchmark', 'running', '{\"provider_id\": 20}')"
+            )
+        )
+    with Database() as db:
+        store.claim_benchmark(db, 7, 20)
+    with Database() as db:
+        assert store.manual_admission(db, 21)
+    with Database() as db:
+        assert not store.manual_admission(db, 20)

@@ -1,4 +1,4 @@
-"""Application-owned nightly runs, one reserved worker across the cluster."""
+"""Application-owned nightly runs with a bounded number of maintenance workers."""
 
 import asyncio
 import copy
@@ -18,12 +18,12 @@ from logos.benchmarks.nightly import (
     can_start,
     local_now,
     parameter_plan,
-    requires_spare_worker,
 )
 from logos.benchmarks.reservations import benchmark_reservations
 from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import InternalBenchmarkRequest
+from logos.maintenance_window import maintenance_node_limit
 
 logger = logging.getLogger(__name__)
 
@@ -59,22 +59,15 @@ class NightlyScheduler:
             await asyncio.sleep(15)
 
     async def _cycle(self):
-        claim = None
+        claims = []
         if self.maintenance:
             completed = await self.maintenance.reconcile()
-            if completed is not None and self.calibration:
-                self.calibration._completed_this_window.add(completed)
-                if self.calibration._active_provider_id == completed:
-                    self.calibration._active_provider_id = None
-            claim = store.calibration_claim()
-            if claim and claim["automatic"] and self.calibration:
-                self.calibration._active_provider_id = claim["provider_id"]
-        if (
-            self.calibration
-            and not store.has_recovery()
-            and not store.has_active_benchmarks()
-            and (claim is None or self.calibration._active_provider_id is not None)
-        ):
+            claims = store.calibration_claims()
+            if self.calibration:
+                self.calibration._completed_this_window.update(completed)
+                # Durable claims are authoritative after a restart or operator recovery.
+                self.calibration._active_provider_ids = {claim["provider_id"] for claim in claims if claim["automatic"]}
+        if self.calibration and not store.has_recovery() and not store.has_active_benchmarks():
             token = AUTOMATIC_CALIBRATION.set(True)
             try:
                 await self.calibration._tick()
@@ -96,7 +89,7 @@ class NightlyScheduler:
         with store.cluster_lock() as connection:
             if connection is None:
                 return
-            if self.maintenance and (store.calibration_claim() or self.maintenance.live_calibration()):
+            if self.maintenance and (store.calibration_claims() or self.maintenance.live_calibration()):
                 return
             for row in schedules:
                 pair_id = row["model_provider_id"]
@@ -110,32 +103,50 @@ class NightlyScheduler:
                         return
             if self.calibration and self.calibration.benchmarks_must_wait():
                 return
-            # Recover every reserved worker before considering the oldest untested pair.
-            for row in schedules:
-                pair_id = row["model_provider_id"]
-                day = local_now().date()
-                if (
-                    not can_start(local_now())
-                    or store.has_active_benchmarks()
-                    or (self.calibration and self.calibration.benchmarks_must_wait())
-                    or store.claimed_today(day) >= MAX_PAIRS_PER_NIGHT
-                ):
+            # One scheduler owns the cluster lease. Each wave uses distinct
+            # workers, and finishes cleanup before another wave can start.
+            remaining = list(schedules)
+            while remaining:
+                selected = []
+                providers = set()
+                deferred = []
+                for row in remaining:
+                    pair_id = row["model_provider_id"]
+                    day = local_now().date()
+                    if (
+                        not can_start(local_now())
+                        or store.has_active_benchmarks()
+                        or (self.calibration and self.calibration.benchmarks_must_wait())
+                        or store.claimed_today(day) >= MAX_PAIRS_PER_NIGHT
+                    ):
+                        break
+                    if not row["enabled"] or row["last_run_date"] == day:
+                        continue
+                    if len(selected) >= maintenance_node_limit():
+                        deferred.append(row)
+                        continue
+                    try:
+                        target, _, _ = self.target_lane(pair_id)
+                    except RuntimeError as exc:
+                        store.save(pair_id, "unavailable", [{"status": "skipped", "reason": str(exc)[:1000]}], None)
+                        continue
+                    provider_id = int(target["provider_id"])
+                    if provider_id in providers:
+                        deferred.append(row)
+                        continue
+                    if not store.lock_held(connection):
+                        return
+                    if store.claim(pair_id, day):
+                        selected.append(pair_id)
+                        providers.add(provider_id)
+                if not selected:
                     return
-                if not row["enabled"] or row["last_run_date"] == day:
-                    continue
-                try:
-                    self.target_lane(pair_id)
-                except RuntimeError as exc:
-                    # An unavailable worker must not use one of tonight's slots.
-                    store.save(pair_id, "unavailable", [{"status": "skipped", "reason": str(exc)[:1000]}], None)
-                    continue
-                if not store.claim(pair_id, day):
-                    continue
-                # Detect a lost session lock before touching a worker.
-                if not store.lock_held(connection):
+                # TaskGroup cancels and awaits every sibling's restoration on failure or shutdown.
+                async with asyncio.TaskGroup() as group:
+                    tasks = [group.create_task(self.run_schedule(pair, connection)) for pair in selected]
+                if not all(task.result() for task in tasks):
                     return
-                if not await self.run_schedule(pair_id, connection):
-                    return
+                remaining = deferred
 
     def healthy(self, provider_id):
         snapshot = self.registry.peek_runtime_snapshot(provider_id) or {}
@@ -193,10 +204,6 @@ class NightlyScheduler:
         pid, model = int(target["provider_id"]), str(target["model_name"])
         if not self.healthy(pid):
             raise RuntimeError("The selected worker must be online and healthy")
-        if requires_spare_worker() and not any(
-            other != pid and self.healthy(other) for other in self.registry.active_provider_ids()
-        ):
-            raise RuntimeError("Need the selected worker and another healthy worker for production")
         snapshot = self.registry.peek_runtime_snapshot(pid)
         if not (snapshot.get("runtime") or {}).get("supports_benchmark_restart"):
             raise RuntimeError("Update this worker before enabling nightly benchmarks")
@@ -226,8 +233,19 @@ class NightlyScheduler:
             if execution is None:
                 return False
             jobs = store.recovery_jobs(pair_id)
+            orphan_jobs = list(jobs)
+            for other in store.rows():
+                other_id = other["model_provider_id"]
+                if other_id == pair_id or not other["recovery"]:
+                    continue
+                # A crashed parallel wave can leave several running jobs.
+                # Never treat a sibling as orphaned while its execution lease survives.
+                with store.execution_lock(other_id) as sibling:
+                    if sibling is None:
+                        return False
+                orphan_jobs.extend(store.recovery_jobs(other_id))
             # Durable manual claims and unrelated jobs always retain their slot.
-            if store.has_active_benchmarks(excluding=jobs):
+            if store.has_active_benchmarks(excluding=orphan_jobs):
                 return False
             if any(not task.done() for task in main._benchmark_tasks_by_job.values()):
                 return False

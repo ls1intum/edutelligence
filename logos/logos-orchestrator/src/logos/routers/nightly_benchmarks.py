@@ -5,10 +5,10 @@ from fastapi import APIRouter, HTTPException, Request
 import logos.main as main
 from logos.benchmarks import nightly_store as store
 from logos.benchmarks.guidellm_runner import extract_serving_configuration
-from logos.benchmarks.nightly import parameter_plan, requires_spare_worker
+from logos.benchmarks.nightly import parameter_plan
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import NightlyStatusRequest, NightlyUpdateRequest
-from logos.maintenance_window import MaintenanceWindow
+from logos.maintenance_window import MaintenanceWindow, maintenance_node_limit
 from logos.routers.internal import _require_internal_secret
 
 router = APIRouter(prefix="/internal/model_benchmarks/nightly", tags=["admin"])
@@ -33,7 +33,7 @@ async def nightly_status(data: NightlyStatusRequest, request: Request):
     ]
     result["window"] = MaintenanceWindow.from_env().describe()
     result["timezone"] = result["window"]["timezone"]
-    result["requires_spare_worker"] = requires_spare_worker()
+    result["max_maintenance_nodes"] = maintenance_node_limit()
     return result
 
 
@@ -48,7 +48,7 @@ async def configure_nightly(data: NightlyUpdateRequest, request: Request):
     try:
         result = store.set_enabled(data.model_provider_id, data.enabled, data.expected_enabled)
         result["window"] = MaintenanceWindow.from_env().describe()
-        result["requires_spare_worker"] = requires_spare_worker()
+        result["max_maintenance_nodes"] = maintenance_node_limit()
         return result
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

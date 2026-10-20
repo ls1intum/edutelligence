@@ -17,11 +17,11 @@ describe('Nightly benchmark confirmation', () => {
   });
   afterEach(() => { control.ngOnDestroy(); http.verify(); });
 
-  it('explains the effective single-worker maintenance policy', () => {
-    expect(control.confirmationMessage).toContain('another healthy worker must remain available');
-    control.state.update(state => ({ ...state!, requires_spare_worker: false }));
+  it('explains the effective maintenance limit and serving impact', () => {
+    expect(control.confirmationMessage).toContain('maintenance worker limit is 1');
+    control.state.update(state => ({ ...state!, max_maintenance_nodes: 2 }));
+    expect(control.confirmationMessage).toContain('maintenance worker limit is 2');
     expect(control.confirmationMessage).toContain('cannot serve normal requests during benchmarks');
-    expect(control.confirmationMessage).not.toContain('another healthy worker must remain available');
   });
 
   it('does not activate with missing server window settings', () => {

@@ -6,6 +6,19 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 
+def maintenance_node_limit() -> int:
+    """Maximum simultaneous maintenance workers; one keeps maintenance sequential."""
+    raw = _env("LOGOS_MAINTENANCE_MAX_NODES", "1")
+    limit = int(raw)
+    if limit < 1:
+        raise ValueError("LOGOS_MAINTENANCE_MAX_NODES must be a positive integer")
+    return limit
+
+
+def _env(name: str, default: str) -> str:
+    return (os.getenv(name) or "").strip() or default
+
+
 @dataclass(frozen=True)
 class MaintenanceWindow:
     start: time = time(5)
@@ -15,11 +28,12 @@ class MaintenanceWindow:
     @classmethod
     def from_env(cls) -> "MaintenanceWindow":
         """Reject invalid shared settings instead of silently using different windows."""
+        maintenance_node_limit()
         defaults = cls()
         window = cls(
-            start=time.fromisoformat(os.getenv("LOGOS_MAINTENANCE_WINDOW_START", defaults.start.isoformat())),
-            end=time.fromisoformat(os.getenv("LOGOS_MAINTENANCE_WINDOW_END", defaults.end.isoformat())),
-            timezone=os.getenv("LOGOS_MAINTENANCE_TIMEZONE", defaults.timezone),
+            start=time.fromisoformat(_env("LOGOS_MAINTENANCE_WINDOW_START", defaults.start.isoformat())),
+            end=time.fromisoformat(_env("LOGOS_MAINTENANCE_WINDOW_END", defaults.end.isoformat())),
+            timezone=_env("LOGOS_MAINTENANCE_TIMEZONE", defaults.timezone),
         )
         if window.start.tzinfo or window.end.tzinfo:
             raise ValueError("Maintenance times must be local times without a UTC offset")

@@ -215,14 +215,3 @@ async def test_finish_reason_requires_successful_terminal_event(tail, expected):
         assert progress.completed == expected
     finally:
         nightly.PROGRESS.pop(7)
-
-
-@pytest.mark.parametrize(
-    "setting,expected", [(None, True), ("false", True), ("", True), ("typo", True), ("true", False)]
-)
-def test_single_worker_maintenance_requires_explicit_opt_in(monkeypatch, setting, expected):
-    if setting is None:
-        monkeypatch.delenv("LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER", raising=False)
-    else:
-        monkeypatch.setenv("LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER", setting)
-    assert nightly.requires_spare_worker() is expected

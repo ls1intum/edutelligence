@@ -38,3 +38,41 @@ def test_invalid_window_fails_before_startup(monkeypatch, end):
     monkeypatch.setenv("LOGOS_MAINTENANCE_WINDOW_END", end)
     with pytest.raises(ValueError):
         MaintenanceWindow.from_env()
+
+
+@pytest.mark.parametrize("value", [None, "", " \t "])
+def test_missing_or_blank_shared_settings_use_defaults(monkeypatch, value):
+    for name in ("START", "END", "TIMEZONE"):
+        key = "LOGOS_MAINTENANCE_" + (name if name == "TIMEZONE" else "WINDOW_" + name)
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+    assert MaintenanceWindow.from_env() == MaintenanceWindow()
+
+
+@pytest.mark.parametrize("name,value", [("WINDOW_START", "bad"), ("WINDOW_END", "25:00"), ("TIMEZONE", "bad/zone")])
+def test_nonempty_invalid_shared_settings_still_fail(monkeypatch, name, value):
+    from zoneinfo import ZoneInfoNotFoundError
+
+    monkeypatch.setenv("LOGOS_MAINTENANCE_" + name, value)
+    with pytest.raises((ValueError, ZoneInfoNotFoundError)):
+        MaintenanceWindow.from_env()
+
+
+@pytest.mark.parametrize("value,expected", [(None, 1), ("", 1), ("  ", 1), ("1", 1), (" 2 ", 2), ("10", 10)])
+def test_maintenance_node_limit(monkeypatch, value, expected):
+    from logos.maintenance_window import maintenance_node_limit
+
+    if value is None:
+        monkeypatch.delenv("LOGOS_MAINTENANCE_MAX_NODES", raising=False)
+    else:
+        monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", value)
+    assert maintenance_node_limit() == expected
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "invalid"])
+def test_invalid_maintenance_limit_fails_at_startup(monkeypatch, value):
+    monkeypatch.setenv("LOGOS_MAINTENANCE_MAX_NODES", value)
+    with pytest.raises(ValueError):
+        MaintenanceWindow.from_env()

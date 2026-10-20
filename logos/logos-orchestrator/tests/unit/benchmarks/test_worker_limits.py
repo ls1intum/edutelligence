@@ -89,7 +89,7 @@ def test_unknown_gpu_inventory_does_not_invent_a_limit():
 async def test_impossible_benchmark_is_rejected_before_job_creation(monkeypatch, batch):
     from logos.benchmarks import nightly_store
 
-    monkeypatch.setattr(nightly_store, "manual_admission", lambda db: True)
+    monkeypatch.setattr(nightly_store, "manual_admission", lambda db, provider_id: True)
     import importlib
 
     main = importlib.import_module("logos.main")
@@ -253,7 +253,7 @@ async def test_metal_batching_is_admitted_through_internal_benchmark_route(monke
         "model_id": 1,
         "model_name": "m",
     }
-    monkeypatch.setattr(nightly_store, "manual_admission", lambda _: True)
+    monkeypatch.setattr(nightly_store, "manual_admission", lambda db, provider_id: True)
     monkeypatch.setattr(main, "_maintenance_coordinator", None)
     monkeypatch.setattr(main, "_calibration_orchestrator", None)
     registry = MagicMock()
