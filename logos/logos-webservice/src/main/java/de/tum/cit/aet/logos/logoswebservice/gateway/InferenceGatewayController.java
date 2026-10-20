@@ -12,9 +12,11 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -114,8 +116,16 @@ public class InferenceGatewayController {
                 ctx.deploymentsForModel(), request, modelName);
             GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(privacyFiltered);
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
-                cloudRateLimiter.enforce(ctx.key(), body);
                 String logLevel = GatewayLoggingLevel.resolve(request, ctx.key().logLevel());
+                try {
+                    cloudRateLimiter.enforce(ctx.key(), body);
+                } catch (ResponseStatusException e) {
+                    if (e.getStatusCode().value() == HttpStatus.TOO_MANY_REQUESTS.value()) {
+                        cloudAccounting.recordRateLimited(
+                            ctx.key(), decision.deployment(), logLevel, e.getReason());
+                    }
+                    throw e;
+                }
                 Integer logId = cloudAccounting.admitAndReserve(
                     ctx.key(), decision.deployment(), body, logLevel);
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);

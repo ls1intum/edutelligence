@@ -7,6 +7,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -85,6 +87,8 @@ public class GatewayCloudAccounting {
            AND le.cost_finalized = FALSE
            AND %s
         """;
+
+    private static final Logger log = LoggerFactory.getLogger(GatewayCloudAccounting.class);
 
     /** The only levels {@code logging_enum} has; anything else is not a level we may store. */
     private static final String LEVEL_FULL = GatewayLoggingLevel.LEVEL_FULL;
@@ -434,6 +438,50 @@ public class GatewayCloudAccounting {
                 ids.put(rs.getString("name"), rs.getInt("id"));
             });
         return ids;
+    }
+
+    /**
+     * Record a request the cloud RPM/TPM limiter turned away, so it shows up in
+     * the request log and the stats like any other failed request.
+     *
+     * <p>The row is already settled: no reservation, no cost, and
+     * {@code rate_limit_admitted = FALSE} so the key's window usage does not
+     * count it, exactly as for a rejection on the orchestrator path. The request
+     * payload is not stored — a rejected request was never processed. A failure
+     * to write the row must not replace the 429 the caller is about to receive.
+     */
+    public void recordRateLimited(GatewayKey key, GatewayDeployment deployment,
+                                  String logLevel, String message) {
+        String msg = message == null ? null
+            : (message.length() > 500 ? message.substring(0, 500) : message);
+        try {
+            jdbc.update("""
+                INSERT INTO log_entry (
+                    timestamp_request, timestamp_response,
+                    api_key_id, team_id, user_id, environment,
+                    model_id, provider_id, request_id,
+                    result_status, error_message, rate_limit_admitted,
+                    cost_finalized, settled_cost_micro_cents, privacy_level
+                ) VALUES (
+                    NOW(), NOW(),
+                    :api_key_id, :team_id, :user_id, :environment,
+                    :model_id, :provider_id, :request_id,
+                    'error', :error_message, FALSE,
+                    TRUE, 0, CAST(:privacy_level AS logging_enum)
+                )
+                """, new MapSqlParameterSource()
+                .addValue("api_key_id", key.id())
+                .addValue("team_id", key.teamId())
+                .addValue("user_id", key.userId())
+                .addValue("environment", key.environment())
+                .addValue("model_id", deployment.modelId())
+                .addValue("provider_id", deployment.providerId())
+                .addValue("request_id", "gw-" + UUID.randomUUID())
+                .addValue("error_message", msg)
+                .addValue("privacy_level", privacyLevel(logLevel)));
+        } catch (RuntimeException e) {
+            log.warn("Could not record rate-limited request keyId={}", key.id(), e);
+        }
     }
 
     /** Drop the reservation so a failed upstream does not consume budget. */

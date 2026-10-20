@@ -203,6 +203,25 @@ class GatewayCloudAccountingTest {
     }
 
     @Test
+    void recordRateLimited_writesAFailedRowThatCostsNothingAndIsNotCountedInTheWindow() {
+        Fixture f = seedPricedDeployment();
+
+        accounting.recordRateLimited(f.key(), f.deployment(), "BILLING", "TPM limit reached (100000/60s)");
+
+        Map<String, Object> row = jdbc.queryForMap(
+            "SELECT result_status::text AS status, error_message, rate_limit_admitted, "
+            + "settled_cost_micro_cents, cost_finalized, model_id, input_payload "
+            + "FROM log_entry WHERE api_key_id = ?", f.key().id());
+        assertThat(row.get("status")).isEqualTo("error");
+        assertThat(row.get("error_message")).isEqualTo("TPM limit reached (100000/60s)");
+        assertThat(row.get("rate_limit_admitted")).isEqualTo(false);
+        assertThat(row.get("settled_cost_micro_cents")).isEqualTo(0L);
+        assertThat(row.get("cost_finalized")).isEqualTo(true);
+        assertThat(row.get("model_id")).isEqualTo(f.modelId());
+        assertThat(row.get("input_payload")).isNull();
+    }
+
+    @Test
     void settleFailure_zerosTheReservation() {
         Fixture f = seedPricedDeployment();
         int logId = admit(f);
