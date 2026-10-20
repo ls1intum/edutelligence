@@ -143,14 +143,21 @@ The leg (`budget_admission.py`) then:
    crosses at least one cache expiry (the gateway reloads an expired
    snapshot in the background, so no request should wait for the refresh);
 4. times the refresh query again. The gateway finalizes unpriced history in
-   the background, so the second figure shows how far that got.
+   the background, so the second figure shows how far that got;
+5. reads back each load request's `log_entry` row and takes the time it spent
+   in Logos: arrival at the controller to the end of the response, minus the
+   provider window. That is the gateway's own cost without the fake
+   upstream's fixed delay (and without the Traefik hop), split out into its
+   admission part (authentication, rate limit, budget check, reservation).
 
-The report shows baseline vs. load percentiles, latency per send-time window
-(a slow refresh shows as a window whose requests all finish late together),
-the status histogram (5xx = pool exhaustion), and both query timings.
+The report shows baseline vs. load percentiles, the time in Logos, latency per
+send-time window (a slow refresh shows as a window whose requests all finish
+late together), the status histogram (5xx = pool exhaustion), and both query
+timings.
 
-**Threshold.** Set `LOGOS_BENCH_GW_BUDGET_P99_MAX_MS` to flag a load p99 above
-it in the report. The run still exits 0 unless
+**Threshold.** Set `LOGOS_BENCH_GW_BUDGET_LOGOS_P50_MAX_MS` and/or
+`LOGOS_BENCH_GW_BUDGET_LOGOS_P99_MAX_MS` to flag a median or p99 of the time
+in Logos above it in the report. The run still exits 0 unless
 `LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD=1` is also set.
 
 Standalone (stack and fake upstream already up):

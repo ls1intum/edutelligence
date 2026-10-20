@@ -22,9 +22,18 @@ What it measures:
   load (``docker exec <db> psql``). The gateway finalizes unpriced history in
   the background, so the "after" figure also shows how far that got.
 
-No gate by default. With ``LOGOS_BENCH_GW_BUDGET_P99_MAX_MS`` set, the report
-flags a p99 above it; ``LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD=1`` also makes
-``run_benchmark.py`` exit non-zero.
+- the time each request of the load spent in Logos itself, read back from its
+  ``log_entry`` row: the whole request (arrival at the controller to the end
+  of the response) minus the provider window (provider call to provider
+  response). The fake upstream's fixed delay is the provider window, so this
+  is the gateway's own cost: authentication, rate limit, budget check,
+  reservation and relaying. It excludes the hop through Traefik.
+
+No gate by default. With ``LOGOS_BENCH_GW_BUDGET_LOGOS_P50_MAX_MS`` or
+``LOGOS_BENCH_GW_BUDGET_LOGOS_P99_MAX_MS`` set, the report flags a median or
+p99 of the time in Logos above it;
+``LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD=1`` also makes ``run_benchmark.py``
+exit non-zero.
 
 Environment (all optional, defaults in parentheses):
   LOGOS_BENCH_GW_BUDGET_API_KEY        (lg-bench-gw-budget-0000)
@@ -33,7 +42,8 @@ Environment (all optional, defaults in parentheses):
   LOGOS_BENCH_GW_BUDGET_DURATION_S     (2 x cache TTL + 10)
   LOGOS_BENCH_GW_BUDGET_BASELINE       (10)     sequential baseline requests
   LOGOS_BENCH_GW_BUDGET_WINDOW_S       (5)      width of a latency window
-  LOGOS_BENCH_GW_BUDGET_P99_MAX_MS     (unset)  flag threshold
+  LOGOS_BENCH_GW_BUDGET_LOGOS_P50_MAX_MS  (unset)  threshold on the median time in Logos
+  LOGOS_BENCH_GW_BUDGET_LOGOS_P99_MAX_MS  (unset)  threshold on the p99 time in Logos
   LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD  (unset)  "1" = exit non-zero on a flag
   LOGOS_BENCH_GW_DB_CONTAINER          (logos-db)  Postgres container for the query timing
   LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS  (15)  informational; must match the webservice
@@ -95,6 +105,30 @@ SELECT COUNT(*) FROM log_entry
 WHERE api_key_id = {key_id} AND result_status = 'success' AND NOT cost_finalized;
 """
 
+# Per request of the load: the time in Logos (whole request minus the provider
+# window) and the admission part of it (arrival to forwarding).
+_LOGOS_TIME_QUERY = """
+WITH r AS (
+    SELECT EXTRACT(EPOCH FROM ((le.timestamp_response - le.timestamp_request)
+                               - (le.timestamp_provider_response - le.timestamp_provider_call))) * 1000 AS logos_ms,
+           EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) * 1000 AS admission_ms
+    FROM log_entry le
+    WHERE le.api_key_id = {key_id}
+      AND le.timestamp_request >= CAST('{since}' AS TIMESTAMPTZ)
+      AND le.timestamp_request IS NOT NULL
+      AND le.timestamp_forwarding IS NOT NULL
+      AND le.timestamp_provider_call IS NOT NULL
+      AND le.timestamp_provider_response IS NOT NULL
+      AND le.timestamp_response IS NOT NULL
+)
+SELECT COUNT(*),
+       array_to_string(percentile_cont(ARRAY[0.5, 0.95, 0.99]) WITHIN GROUP (ORDER BY logos_ms), ','),
+       MAX(logos_ms),
+       array_to_string(percentile_cont(ARRAY[0.5, 0.95, 0.99]) WITHIN GROUP (ORDER BY admission_ms), ','),
+       MAX(admission_ms)
+FROM r;
+"""
+
 _TIME_RE = re.compile(r"^Time: ([0-9.]+) ms", re.MULTILINE)
 
 
@@ -149,6 +183,34 @@ def budget_query_snapshot(key_id: int) -> Dict[str, Any]:
         return {"query_ms": None, "unfinalized_rows": None, "error": repr(exc)[:300]}
 
 
+def _db_now() -> Optional[str]:
+    try:
+        lines = [ln for ln in _psql("SELECT now();", timeout_s=30.0).splitlines() if ln and not ln.startswith("Time")]
+        return lines[-1].strip() if lines else None
+    except Exception:  # noqa: BLE001 — the time-in-Logos figure is then reported as missing
+        return None
+
+
+def logos_time(key_id: int, since: Optional[str]) -> Dict[str, Any]:
+    """Percentiles of the time the load's requests spent in Logos (see the module docstring)."""
+    if since is None:
+        return {"n": 0, "error": "could not read the database clock"}
+    try:
+        out = _psql(_LOGOS_TIME_QUERY.format(key_id=key_id, since=since), timeout_s=120.0)
+        row = next(ln for ln in out.splitlines() if "|" in ln)
+        n, logos_pcts, logos_max, adm_pcts, adm_max = row.split("|")
+        if int(n) == 0:
+            return {"n": 0}
+
+        def _summary(pcts: str, mx: str) -> Dict[str, float]:
+            p50, p95, p99 = (float(v) for v in pcts.split(","))
+            return {"p50_ms": p50, "p95_ms": p95, "p99_ms": p99, "max_ms": float(mx)}
+
+        return {"n": int(n), "logos": _summary(logos_pcts, logos_max), "admission": _summary(adm_pcts, adm_max)}
+    except Exception as exc:  # noqa: BLE001 — reported, not raised
+        return {"n": 0, "error": repr(exc)[:300]}
+
+
 async def _worker(
     client: httpx.AsyncClient,
     url: str,
@@ -197,7 +259,8 @@ async def run() -> Dict[str, Any]:
     baseline_n = _env_int("LOGOS_BENCH_GW_BUDGET_BASELINE", 10)
     window_s = _env_int("LOGOS_BENCH_GW_BUDGET_WINDOW_S", 5)
     key_id = _env_int("LOGOS_BENCH_GW_BUDGET_API_KEY_ID", 502)
-    p99_max_ms = _env_float_opt("LOGOS_BENCH_GW_BUDGET_P99_MAX_MS")
+    p50_max_ms = _env_float_opt("LOGOS_BENCH_GW_BUDGET_LOGOS_P50_MAX_MS")
+    p99_max_ms = _env_float_opt("LOGOS_BENCH_GW_BUDGET_LOGOS_P99_MAX_MS")
 
     url = f"{gw.gateway_url()}/v1/chat/completions"
     headers = {"Authorization": f"Bearer {budget_api_key()}", "Content-Type": "application/json"}
@@ -226,6 +289,7 @@ async def run() -> Dict[str, Any]:
                 baseline_failures.append(f"baseline {i}: {r.error}")
 
         rows: List[Dict[str, Any]] = []
+        load_since = _db_now()
         t_start = time.perf_counter()
         deadline = t_start + duration_s
         await asyncio.gather(*(_worker(client, url, headers, t_start, deadline, rows) for _ in range(concurrency)))
@@ -233,6 +297,8 @@ async def run() -> Dict[str, Any]:
 
     db_after = budget_query_snapshot(key_id)
     print(f"  [budget] refresh query after load: {db_after}")
+    in_logos = logos_time(key_id, load_since)
+    print(f"  [budget] time in Logos: {in_logos}")
 
     ok_ms = [r["total_ms"] for r in rows if r["ok"]]
     status_counts: Dict[str, int] = {}
@@ -243,15 +309,20 @@ async def run() -> Dict[str, Any]:
     load = summarize(ok_ms)
     slowest = sorted(rows, key=lambda r: r["total_ms"], reverse=True)[:5]
 
-    threshold: Dict[str, Any] = {"p99_max_ms": p99_max_ms, "exceeded": False}
-    if p99_max_ms is not None:
-        if load.get("n", 0):
-            threshold["exceeded"] = load["p99_ms"] > p99_max_ms
+    threshold: Dict[str, Any] = {"p50_max_ms": p50_max_ms, "p99_max_ms": p99_max_ms, "exceeded": False}
+    if p50_max_ms is not None or p99_max_ms is not None:
+        if load.get("n", 0) and in_logos.get("n", 0):
+            logos = in_logos["logos"]
+            threshold["p50_exceeded"] = p50_max_ms is not None and logos["p50_ms"] > p50_max_ms
+            threshold["p99_exceeded"] = p99_max_ms is not None and logos["p99_ms"] > p99_max_ms
+            threshold["exceeded"] = threshold["p50_exceeded"] or threshold["p99_exceeded"]
         else:
-            # No successful request means no p99 to hold against the limit; a
+            # No measured request means no p99 to hold against the limit; a
             # run where every request failed must not read as passing.
             threshold["exceeded"] = True
-            threshold["reason"] = "no successful requests"
+            threshold["reason"] = (
+                "no successful requests" if not load.get("n", 0) else "no time in Logos could be measured"
+            )
 
     print(
         f"  [budget] {len(rows)} requests in {wall_s:.1f}s, "
@@ -273,6 +344,7 @@ async def run() -> Dict[str, Any]:
         "baseline": summarize(baseline_ms),
         "baseline_failures": baseline_failures[:10],
         "load": load,
+        "in_logos": in_logos,
         "windows": _windows(rows, window_s, duration_s),
         "window_s": window_s,
         "slowest": [

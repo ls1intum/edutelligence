@@ -34,19 +34,29 @@ def _budget_section(bud: Dict[str, Any]) -> List[str]:
     load = bud.get("load", {})
     base = bud.get("baseline", {})
     thr = bud.get("threshold", {})
-    flag = ""
-    if thr.get("p99_max_ms") is not None:
-        flag = (
-            f" ❌ above the {_ms(thr['p99_max_ms'])} ms threshold"
-            if thr.get("exceeded")
-            else f" ✅ within the {_ms(thr['p99_max_ms'])} ms threshold"
-        )
+    in_logos = bud.get("in_logos", {})
+    logos = in_logos.get("logos", {})
+
+    def _flag(label: str, key: str) -> str:
+        limit = thr.get(f"{key}_max_ms")
+        if limit is None:
+            return ""
+        if not logos or thr.get(f"{key}_exceeded"):
+            return f" ❌ {label} above the {_ms(limit)} ms threshold" if logos else " ❌ not measured"
+        return f" ✅ {label} within the {_ms(limit)} ms threshold"
+
+    logos_str = (
+        f"Time in Logos median = **{_ms(logos['p50_ms'])} ms**{_flag('median', 'p50')}, "
+        f"p99 = **{_ms(logos['p99_ms'])} ms**{_flag('p99', 'p99')}."
+        if logos
+        else f"Time in Logos: not measured ({in_logos.get('error', 'no rows')}){_flag('', 'p99')}."
+    )
     lines.append(
         f"Application key **with** a budget limit and a month of history (`seed_budget.sql`), "
         f"{bud['concurrency']} concurrent workers for {bud['duration_s']} s "
         f"(budget cache TTL {bud['cache_ttl_s']} s, so the load spans at least one refresh). "
         f"{bud['requests']} requests, {bud['failed']} failed, **{bud['n_5xx']} HTTP 5xx**. "
-        f"Load p99 = **{_ms(load.get('p99_ms', 0))} ms**{flag}."
+        f"{logos_str}"
     )
     lines.append("")
     lines.append("| Phase | n | p50 | p95 | p99 | max |")
@@ -57,6 +67,24 @@ def _budget_section(bud: Dict[str, Any]) -> List[str]:
                 f"| {label} | {s['n']} | {_ms(s['p50_ms'])} ms | {_ms(s['p95_ms'])} ms | "
                 f"{_ms(s['p99_ms'])} ms | {_ms(s['max_ms'])} ms |"
             )
+    if logos:
+        adm = in_logos.get("admission", {})
+        lines.append(
+            f"| Time in Logos, per request of the load | {in_logos['n']} | {_ms(logos['p50_ms'])} ms | "
+            f"{_ms(logos['p95_ms'])} ms | {_ms(logos['p99_ms'])} ms | {_ms(logos['max_ms'])} ms |"
+        )
+        if adm:
+            lines.append(
+                f"| … of which admission (auth, rate limit, budget, reservation) | {in_logos['n']} | "
+                f"{_ms(adm['p50_ms'])} ms | {_ms(adm['p95_ms'])} ms | {_ms(adm['p99_ms'])} ms | "
+                f"{_ms(adm['max_ms'])} ms |"
+            )
+    lines.append("")
+    lines.append(
+        "_Time in Logos_ is read back from each request's `log_entry` row: arrival at the controller to the "
+        "end of the response, minus the provider window. It is the gateway's own cost without the fake "
+        "upstream's fixed delay and without the hop through Traefik; the two phase rows above it include both."
+    )
     lines.append("")
     lines.append(
         f"Budget refresh query in the database (`apiKeyBudgetUsage`): before the load "
@@ -204,10 +232,10 @@ def build_markdown(result: Dict[str, Any]) -> str:
         "so the numbers above are the gateway's own overhead/limits, not a real cloud provider's throttling."
     )
     lines.append(
-        "- No PASS/FAIL gate: this is the first version of this benchmark, so there is no baseline yet "
-        "to set a threshold against. See the PR description. The budget-admission leg can flag a p99 "
-        "above `LOGOS_BENCH_GW_BUDGET_P99_MAX_MS`; it fails the run only with "
-        "`LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD=1`."
+        "- The concurrency, latency and failover legs have no PASS/FAIL gate yet. The budget-admission leg "
+        "checks the median and p99 time in Logos against `LOGOS_BENCH_GW_BUDGET_LOGOS_P50_MAX_MS` and "
+        "`LOGOS_BENCH_GW_BUDGET_LOGOS_P99_MAX_MS`; with `LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD=1` "
+        "a breach fails the run."
     )
     lines.append(f"- Env: `{json.dumps(result.get('env', {}), sort_keys=True)}`")
     lines.append("")

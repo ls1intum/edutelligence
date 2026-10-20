@@ -6,10 +6,10 @@ name: Logos - Gateway Concurrency Benchmark
 # requests it holds open concurrently, added latency vs. a direct call to a
 # fake upstream, behaviour at the concurrency limit, and (2 replicas) whether
 # killing one is visible to clients under real load, and admission latency
-# for a key with a budget and a month of history. Informational only —
-# posts a PR comment, does not gate the PR. No baseline exists yet to set a
-# blocking threshold against; see the PR description that introduced this
-# workflow.
+# for a key with a budget and a month of history. Posts a PR comment. Only
+# the budget-admission leg is asserted (the time a request spends in Logos,
+# below); the other legs have no baseline yet to set a blocking threshold
+# against.
 on:
   pull_request:
     branches:
@@ -42,12 +42,15 @@ jobs:
     env:
       LOGOS_BENCH_GW_URL: http://localhost:18081
       LOGOS_BENCH_GW_OUTPUT: ${{ github.workspace }}/logos/benchmarks/gateway_concurrency/reports/ci
-      # Budget-admission flag: the fake upstream alone takes ~1.2 s and a
-      # healthy run's load p99 stays near 2 s, while the unfinalized-cost
-      # stall this leg exists for pushed it to ~12 s. 5 s leaves room for
-      # noisy shared runners and still catches that stall. Flag only: the
-      # workflow stays informational.
-      LOGOS_BENCH_GW_BUDGET_P99_MAX_MS: "5000"
+      # Assertion on the time a request of the budget-admission load spends
+      # in Logos itself (whole request minus the provider window, read from
+      # log_entry), so the fake upstream's fixed delay cannot hide a
+      # regression. Measured end to end through Traefik, Logos added ~15 ms
+      # at the median and ~115 ms at p99 under this load; the limits leave
+      # room for noisy shared runners and still fail a refresh stall (~0.7 s).
+      LOGOS_BENCH_GW_BUDGET_LOGOS_P50_MAX_MS: "20"
+      LOGOS_BENCH_GW_BUDGET_LOGOS_P99_MAX_MS: "150"
+      LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD: "1"
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6

@@ -211,14 +211,17 @@ def run() -> int:
                 (
                     f"  budget admission gate failed: {reason}"
                     if reason
-                    else "  budget admission p99 above LOGOS_BENCH_GW_BUDGET_P99_MAX_MS"
+                    else "  budget admission time in Logos above its median or p99 threshold"
                 ),
                 file=sys.stderr,
             )
             return 1
         if (
             fail_on_threshold
-            and os.environ.get("LOGOS_BENCH_GW_BUDGET_P99_MAX_MS")
+            and (
+                os.environ.get("LOGOS_BENCH_GW_BUDGET_LOGOS_P50_MAX_MS")
+                or os.environ.get("LOGOS_BENCH_GW_BUDGET_LOGOS_P99_MAX_MS")
+            )
             and budget_result.get("skipped")
             and not skip_budget
         ):
