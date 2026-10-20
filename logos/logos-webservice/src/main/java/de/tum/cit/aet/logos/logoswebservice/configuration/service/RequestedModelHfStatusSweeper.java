@@ -60,14 +60,20 @@ public class RequestedModelHfStatusSweeper implements ApplicationRunner {
         int recorded = 0;
         int stillUnknown = 0;
         for (RequestedModel model : unverified) {
-            HfReachabilityResult result = hfReachabilityClient.check(model.getName());
-            if (result == null
-                || HfReachabilityResult.STATUS_UNKNOWN.equals(result.status())) {
+            try {
+                HfReachabilityResult result = hfReachabilityClient.check(model.getName());
+                if (result == null
+                    || HfReachabilityResult.STATUS_UNKNOWN.equals(result.status())) {
+                    stillUnknown++;
+                    continue;
+                }
+                if (requestedModelService.recordHfVerdictIfAbsent(model.getId(), result.status()) > 0) {
+                    recorded++;
+                }
+            } catch (RuntimeException e) {
                 stillUnknown++;
-                continue;
-            }
-            if (requestedModelService.recordHfVerdictIfAbsent(model.getId(), result.status()) > 0) {
-                recorded++;
+                log.warn("Hugging Face status sweep failed for requested model {}: {}",
+                    model.getId(), e.getMessage());
             }
         }
         log.info("Hugging Face status sweep: {} unverified model(s) checked, {} verdict(s) recorded, {} still unknown",
