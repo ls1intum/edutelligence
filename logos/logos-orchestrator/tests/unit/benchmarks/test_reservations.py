@@ -148,6 +148,198 @@ def test_benchmark_permission_survives_processing_until_completion(lease, action
     assert lease.owner(9001, "model") == 9002
 
 
+def test_nightly_node_reservation_blocks_all_models_until_restoration():
+    lease = BenchmarkReservations()
+    lease.reserve(1, "*", -31)
+    assert not lease.allows(1, "other", "production")
+    assert lease.allows(2, "other", "production")
+    lease.reserve(1, "m", 7)
+    lease.register_request(1, "m", 7, "benchmark")
+    assert lease.allows(1, "m", "benchmark")
+    lease.release(7)
+    assert not lease.allows(1, "m", "production")
+    lease.release(-31)
+    assert lease.allows(1, "m", "production")
+
+
+def test_nightly_owner_allows_recovery_but_blocks_unrelated_lane_changes():
+    from logos.benchmarks.nightly import NIGHTLY_CONTEXT
+
+    benchmark_reservations.reserve(9001, "*", -31)
+    session = SimpleNamespace(provider_id=9001)
+    try:
+        with pytest.raises(LogosNodeCommandError, match="reserved"):
+            LogosNodeRuntimeRegistry._check_benchmark_reservation(session, "reconfigure_lane", {}, None)
+        token = NIGHTLY_CONTEXT.set(True)
+        try:
+            LogosNodeRuntimeRegistry._check_benchmark_reservation(session, "reconfigure_lane", {}, None)
+        finally:
+            NIGHTLY_CONTEXT.reset(token)
+    finally:
+        benchmark_reservations.release(-31)
+
+
+@pytest.mark.parametrize("action", ["infer", "sync_model_profiles"])
+async def test_reserved_worker_commands_preserve_dispatch_confirmation(action, lease):
+    import asyncio
+
+    registry = LogosNodeRuntimeRegistry()
+    session = SimpleNamespace(
+        provider_id=9001,
+        latest_runtime={"lanes": [{"lane_id": "lane", "model": "model"}]},
+        pending_commands={},
+        send_lock=asyncio.Lock(),
+        calibrating=False,
+        optimistic_calibration_until=None,
+    )
+    dispatched = []
+
+    async def reply(message):
+        future = session.pending_commands.pop(message["cmd_id"])
+        assert dispatched == [future]
+        future.set_result({"success": True, "result": {"ok": True}})
+
+    session.websocket = SimpleNamespace(send_json=AsyncMock(side_effect=reply))
+    registry._get_active_session = AsyncMock(return_value=session)
+    lease.register_request(9001, "model", 9002, "benchmark")
+    lease.reserve(9001, "*", 9002)
+    result = await registry.send_command(
+        9001,
+        action,
+        {"lane_id": "lane"},
+        request_id="benchmark",
+        on_dispatched=dispatched.append,
+    )
+    assert result == {"ok": True}
+    session.websocket.send_json.assert_awaited_once()
+    assert dispatched[0].done()
+    assert not session.pending_commands
+
+
+async def test_nightly_drain_preserves_admitted_requests_through_lane_selection_and_send():
+    facade = LogosNodeSchedulingDataFacade(MagicMock())
+    provider = MagicMock(provider_id=9001)
+    provider._model_id_to_name = {1: "model"}
+    provider.get_model_status.return_value = SimpleNamespace(queue_depth=0)
+    facade._get_provider_for_model = MagicMock(return_value=provider)
+    facade.get_model_name = MagicMock(return_value="model")
+    facade.on_request_start("admitted", 1, 9001, api_key_id=31)
+    facade.reserve_worker_for_drain(9001, -31)
+    lane = {"lane_id": "lane", "model": "model", "runtime_state": "running"}
+    session = SimpleNamespace(provider_id=9001, capabilities_models=["model"], latest_runtime={"lanes": [lane]})
+    registry = LogosNodeRuntimeRegistry()
+    registry._get_active_session = AsyncMock(return_value=session)
+    try:
+        assert await registry.select_lane_for_model(9001, "model", request_id="admitted") == lane
+        assert await registry.select_lane_for_model(9001, "model", request_id="new") is None
+        for action in ("infer", "infer_stream"):
+            registry._check_benchmark_reservation(session, action, {"lane_id": "lane"}, "admitted")
+            with pytest.raises(LogosNodeCommandError):
+                registry._check_benchmark_reservation(session, action, {"lane_id": "lane"}, "new")
+        with pytest.raises(RuntimeError, match="reserved"):
+            facade.on_request_start("new", 1, 9001)
+        assert facade.model_inflight_requests(9001, "model") == 1
+        facade.on_request_complete("admitted", False, 10, provider_id=9001)
+        assert facade.model_inflight_requests(9001, "model") == 0
+        assert not benchmark_reservations.allows(9001, "model", "admitted")
+    finally:
+        benchmark_reservations.release(-31)
+
+
+def test_fenced_benchmark_cannot_send_previously_admitted_request(lease):
+    active = True
+    lease.register_request(9001, "model", 9002, "request", guard=lambda: active)
+    assert lease.allows(9001, "model", "request")
+    active = False
+    session = SimpleNamespace(provider_id=9001, latest_runtime={"lanes": [{"lane_id": "lane", "model": "model"}]})
+    with pytest.raises(LogosNodeCommandError):
+        LogosNodeRuntimeRegistry._check_benchmark_reservation(session, "infer_stream", {"lane_id": "lane"}, "request")
+
+
+async def test_already_admitted_request_waiting_for_send_lock_survives_nightly_reservation():
+    import asyncio
+
+    facade = LogosNodeSchedulingDataFacade(MagicMock())
+    provider = MagicMock(provider_id=9001)
+    provider._model_id_to_name = {1: "model"}
+    provider.get_model_status.return_value = SimpleNamespace(queue_depth=0)
+    facade._get_provider_for_model = MagicMock(return_value=provider)
+    facade.get_model_name = MagicMock(return_value="model")
+    facade.on_request_start("admitted", 1, 9001)
+    session = SimpleNamespace(
+        provider_id=9001,
+        latest_runtime={"lanes": [{"lane_id": "lane", "model": "model"}]},
+        pending_commands={},
+        send_lock=asyncio.Lock(),
+        calibrating=False,
+        optimistic_calibration_until=None,
+    )
+
+    async def reply(message):
+        session.pending_commands.pop(message["cmd_id"]).set_result({"success": True, "result": {"choices": []}})
+
+    session.websocket = SimpleNamespace(send_json=AsyncMock(side_effect=reply))
+    registry = LogosNodeRuntimeRegistry()
+    registry._get_active_session = AsyncMock(return_value=session)
+    await session.send_lock.acquire()
+    task = asyncio.create_task(registry.send_command(9001, "infer", {"lane_id": "lane"}, request_id="admitted"))
+    await asyncio.sleep(0)
+    session.websocket.send_json.assert_not_awaited()
+    try:
+        facade.reserve_worker_for_drain(9001, -31)
+        session.send_lock.release()
+        assert await task == {"choices": []}
+        facade.on_request_complete("admitted", False, 10, provider_id=9001)
+        assert not benchmark_reservations.allows(9001, "model", "admitted")
+    finally:
+        benchmark_reservations.release(-31)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_worker_ok_false_has_an_explicit_refusal_type():
+    import asyncio
+
+    from logos.logosnode_registry import LogosNodeCommandRejectedError
+
+    registry = LogosNodeRuntimeRegistry()
+    session = SimpleNamespace(
+        provider_id=9001,
+        latest_runtime={},
+        pending_commands={},
+        send_lock=asyncio.Lock(),
+        calibrating=False,
+        optimistic_calibration_until=None,
+    )
+
+    async def reply(message):
+        session.pending_commands.pop(message["cmd_id"]).set_result(
+            {"success": True, "result": {"ok": False, "error": "Worker is degraded"}}
+        )
+
+    session.websocket = SimpleNamespace(send_json=AsyncMock(side_effect=reply))
+    registry._get_active_session = AsyncMock(return_value=session)
+    with pytest.raises(LogosNodeCommandRejectedError, match="degraded"):
+        await registry.send_command(9001, "reconfigure_lane")
+
+
+def test_lost_execution_lease_blocks_worker_mutations_but_allows_cleanup():
+    from logos.benchmarks.nightly import LEASE_CHECK, NIGHTLY_CONTEXT
+
+    nightly = NIGHTLY_CONTEXT.set(True)
+    lease = LEASE_CHECK.set(lambda: False)
+    session = SimpleNamespace(provider_id=9001)
+    try:
+        with pytest.raises(LogosNodeCommandError, match="lease was lost"):
+            LogosNodeRuntimeRegistry._check_benchmark_reservation(session, "reconfigure_lane", {}, None)
+        LogosNodeRuntimeRegistry._check_benchmark_reservation(session, "cancel_command", {}, None)
+        LogosNodeRuntimeRegistry._check_benchmark_reservation(session, "get_runtime", {}, None)
+    finally:
+        LEASE_CHECK.reset(lease)
+        NIGHTLY_CONTEXT.reset(nightly)
+
+
 @pytest.mark.parametrize("action", ["infer", "infer_stream"])
 async def test_admitted_production_survives_reservation_until_completion(action):
     registry = LogosNodeRuntimeRegistry()
@@ -368,3 +560,22 @@ async def test_released_queue_request_keeps_transport_access_during_benchmark(ac
     finally:
         benchmark_reservations.finish_request("released-production")
         benchmark_reservations.release(9031)
+
+
+def test_model_job_cleanup_takes_priority_over_owning_nightly_reservation():
+    lease = BenchmarkReservations()
+    lease.reserve(1, "*", -31)
+    lease.reserve(1, "model", 7)
+    assert lease.provider_owner(1) == 7
+    lease.release(7)
+    assert lease.provider_owner(1) == -31
+
+
+def test_atomic_capacity_admission_survives_nightly_worker_drain():
+    lease = BenchmarkReservations()
+    assert lease.try_admit(1, "model", "admitted", lambda: True)
+    lease.reserve(1, "*", -31)
+    assert lease.allows(1, "model", "admitted")
+    assert not lease.try_admit(1, "model", "new", lambda: True)
+    lease.finish_request("admitted", deployment=(1, "model"))
+    assert not lease.allows(1, "model", "admitted")

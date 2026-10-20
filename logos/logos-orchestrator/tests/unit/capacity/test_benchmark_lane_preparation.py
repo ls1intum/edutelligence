@@ -305,6 +305,45 @@ async def test_reserved_benchmark_fails_if_existing_requests_do_not_drain():
         benchmark_reservations.release(7001)
 
 
+async def test_measured_metal_batching_reaches_worker_reconfiguration():
+    from logos.benchmarks.configuration import ServingOverrides
+    from logos.benchmarks.guidellm_runner import apply_serving_overrides
+
+    planner, _, _ = _configured_planner()
+    overrides = ServingOverrides(max_num_seqs=20, max_num_batched_tokens=5120)
+    current = {"max_num_seqs": 16, "extra_args": ["--max-num-batched-tokens", "4096"]}
+    updated = apply_serving_overrides(current, overrides)
+
+    def snapshot(config):
+        return {
+            "runtime": {
+                "devices": {
+                    "mode": "metal",
+                    "telemetry_available": True,
+                    "nvidia_smi_available": False,
+                    "devices": [{"kind": "metal", "memory_total_mb": 24000}],
+                },
+                "lanes": [
+                    {
+                        "lane_id": "model-lane",
+                        "model": "org/model",
+                        "lane_config": {"vllm": True, "vllm_config": config},
+                    }
+                ],
+            }
+        }
+
+    planner._registry.peek_runtime_snapshot.side_effect = [snapshot(current), snapshot(current), snapshot(updated)]
+    planner._registry.send_command.return_value = {"lane_config": {"vllm_config": updated}}
+    assert await planner.prepare_configured_benchmark_lane(7, "org/model", overrides)
+    planner._registry.send_command.assert_awaited_once_with(
+        7,
+        "reconfigure_lane",
+        {"lane_id": "model-lane", "updates": {"vllm_config": updated}, "require_idle": True},
+        timeout_seconds=600,
+    )
+
+
 @pytest.mark.parametrize("state", ["error", "stopped"])
 async def test_unchanged_configuration_explicitly_restarts_recovering_lane(state):
     from logos.benchmarks.configuration import ServingOverrides

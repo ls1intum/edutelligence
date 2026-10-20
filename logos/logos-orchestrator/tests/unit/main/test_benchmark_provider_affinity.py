@@ -12,6 +12,7 @@ from logos.routers import internal as internal_mod
 
 @pytest.fixture(autouse=True)
 def mock_dataset_metadata(monkeypatch):
+    monkeypatch.setattr(internal_mod.nightly_store, "manual_admission", lambda db, provider_id: True)
     monkeypatch.setattr(internal_mod, "dataset_metadata", AsyncMock(return_value={"text_columns": ["question"]}))
 
 

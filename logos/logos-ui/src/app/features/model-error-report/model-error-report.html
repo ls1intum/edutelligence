@@ -524,6 +524,12 @@
             </span>
           </div>
 
+          @for (pair of benchmarkPairs(); track pair.model_provider_id) {
+            @if (pair.provider_type === 'logosnode') {
+              <app-nightly-benchmarks [pairId]="pair.model_provider_id" [providerName]="pair.provider_name" [modelName]="model.name" />
+            }
+          }
+
           <nav id="performance-view-controls" class="performance-views" aria-label="Performance views">
             <button type="button" [attr.aria-pressed]="performanceView() === 'results'"
               (click)="performanceView.set('results')">Results</button>

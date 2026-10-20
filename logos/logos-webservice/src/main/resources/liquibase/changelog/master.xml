@@ -69,4 +69,5 @@
     <include file="liquibase/changelog/063_lane_lock_revisions.xml"/>
     <include file="liquibase/changelog/064_model_calibration_sharing.xml"/>
 
+    <include file="liquibase/changelog/065_nightly_benchmarks.xml"/>
 </databaseChangeLog>

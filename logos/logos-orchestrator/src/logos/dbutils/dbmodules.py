@@ -7,6 +7,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Date,
     Enum,
     Float,
     ForeignKey,
@@ -548,3 +549,15 @@ class BatchLineResult(Base):
         nullable=False,
         default=lambda: datetime.datetime.now(datetime.timezone.utc),
     )
+
+
+class NightlyBenchmark(Base):
+    __tablename__ = "nightly_benchmarks"
+
+    model_provider_id = Column(Integer, primary_key=True)
+    enabled = Column(Boolean, nullable=False, default=False)
+    last_run_date = Column(Date)
+    status = Column(Text, nullable=False, default="disabled")
+    report = Column(JSON, nullable=False, default=list)
+    recovery = Column(JSON)
+    updated_at = Column(TIMESTAMP(timezone=True))

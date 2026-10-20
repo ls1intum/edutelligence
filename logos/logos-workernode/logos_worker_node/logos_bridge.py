@@ -627,6 +627,7 @@ class LogosBridgeClient:
                     "reconfigure_lane",
                     "start_calibration_session",
                     "stop_calibration_session",
+                    "get_calibration_status",
                     "sync_model_profiles",
                 ],
             },
@@ -955,6 +956,8 @@ class LogosBridgeClient:
 
         if action == "infer":
             return await self._execute_infer_command(params)
+        if action == "get_calibration_status":
+            return {"calibrating": self._calibration_session_is_live()}
         if action == "get_runtime":
             runtime = await build_runtime_status(self._app)
             return runtime.model_dump(mode="json")
@@ -989,6 +992,7 @@ class LogosBridgeClient:
             updates = params.get("updates") or {}
             if params.get("force_restart"):
                 status = await lane_manager.reconfigure_lane(lane_id, updates, require_idle=True, force_restart=True)
+                return {**status.model_dump(mode="json"), "restarted": True}
             elif params.get("require_idle"):
                 status = await lane_manager.reconfigure_lane(lane_id, updates, require_idle=True)
             else:

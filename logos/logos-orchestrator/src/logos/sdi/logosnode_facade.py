@@ -367,6 +367,9 @@ class LogosNodeSchedulingDataFacade:
     ) -> None:
         with self._lock:
             provider = self._get_provider_for_model(model_id, provider_id)
+            model = self.get_model_name(model_id, provider_id)
+            if not benchmark_reservations.allows(provider_id, model, request_id):
+                raise RuntimeError("Worker is reserved for benchmarks")
             status = provider.get_model_status(model_id)
             self._request_tracking[request_id] = {
                 "model_id": model_id,
@@ -434,6 +437,16 @@ class LogosNodeSchedulingDataFacade:
                 queue_depth_at_arrival=tracking_data["queue_depth_at_arrival"],
                 priority=tracking_data["priority"],
             )
+
+    def reserve_worker_for_drain(self, provider_id: int, owner: int) -> None:
+        """Close admission atomically while preserving already admitted requests."""
+        with self._lock:
+            draining = {
+                request_id: self.get_model_name(tracking["model_id"], provider_id)
+                for request_id, tracking in self._request_tracking.items()
+                if tracking.get("provider_id") == provider_id
+            }
+            benchmark_reservations.reserve(provider_id, "*", owner, draining=draining)
 
     def model_inflight_requests(self, provider_id: int, model_name: str) -> int:
         """Count locally admitted requests, including sends not in worker status yet."""

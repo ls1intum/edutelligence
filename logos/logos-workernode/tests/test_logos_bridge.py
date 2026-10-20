@@ -4091,6 +4091,23 @@ async def test_a_command_answer_carries_the_lifecycle_revision_after_the_command
     assert sent[-1]["lifecycle_revision"] == 7
 
 
+async def test_calibration_status_waits_for_task_cleanup(tmp_path):
+    from types import SimpleNamespace
+
+    app = _make_app_for_calibration(tmp_path)
+    client = LogosBridgeClient(app, LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"))
+    assert await client._execute_command("get_calibration_status", {}) == {"calibrating": False}
+    finished = asyncio.Event()
+    task = asyncio.create_task(finished.wait())
+    client._active_calibration_session = SimpleNamespace(task=task)
+    try:
+        assert await client._execute_command("get_calibration_status", {}) == {"calibrating": True}
+    finally:
+        finished.set()
+        await task
+    assert await client._execute_command("get_calibration_status", {}) == {"calibrating": False}
+
+
 @pytest.mark.asyncio
 async def test_reconfigure_passes_explicit_restart_to_lane_manager():
     client = _client_with_calibration_session(session_done=True)

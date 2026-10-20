@@ -17,8 +17,7 @@ from dateutil.parser import isoparse
 from sqlalchemy import MetaData, Table, create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from logos.dbutils.dbmodules import *
-from logos.dbutils.dbmodules import JobStatus
+from logos.dbutils.dbmodules import Base, JobStatus, ResultStatus, ThresholdLevel
 from logos.dbutils.types import (
     Deployment,
     get_unique_models_from_deployments,
@@ -807,6 +806,7 @@ class DBManager:
                 WHERE id = :job_id
                   AND environment = 'model-provider-benchmark'
                   AND status IN ('pending', 'running')
+                  AND COALESCE(request_payload->>'recovery_fenced', 'false') <> 'true'
                 """),
             {"job_id": int(job_id)},
         )

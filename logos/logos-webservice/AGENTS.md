@@ -19,6 +19,7 @@ mvn compile -q             # fast check
 2. **Always** add `<include file="liquibase/changelog/NNN_description.xml"/>` to `master.xml` in the same directory — Liquibase only applies changelogs listed there; a file left out is silently never run.
 3. Changelogs run automatically on service startup (`spring.liquibase.change-log` in `application.properties`). There is no `init.sql` to keep in sync — `logos/db/` is a plain postgres Dockerfile.
 4. After a schema change, update the orchestrator side (`dbutils/dbmanager.py` raw SQL, `dbutils/dbmodules.py` ORM models) to match — see `logos-orchestrator/AGENTS.md`.
+5. **Every changeSet ID must start with the number of its containing changelog file.** For example, all IDs in `065_nightly_benchmarks.xml` must start with `065-`; use distinct descriptive suffixes for multiple changeSets. When renumbering or consolidating changelogs, align their IDs with the resulting filename and verify upgrades from already deployed schemas.
 
 ## Architecture
 

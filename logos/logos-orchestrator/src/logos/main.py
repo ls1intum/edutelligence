@@ -45,6 +45,8 @@ from logos.benchmarks.guidellm_runner import (
     BENCHMARK_TOKEN_HEADER,
     benchmark_affinity_token,
 )
+from logos.benchmarks.maintenance import MaintenanceCoordinator
+from logos.benchmarks.nightly_scheduler import NightlyScheduler
 from logos.benchmarks.reservations import benchmark_reservations
 from logos.billing.budget import check_monthly_budget
 from logos.billing.finalize import finalize_billing_inputs
@@ -57,7 +59,7 @@ from logos.client_tags import ClientTagCancellationMiddleware
 from logos.context_budget import estimate_prompt_tokens, required_context_tokens
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.dbrequest import *
+from logos.dbutils.dbrequest import *  # noqa: F401,F403 - compatibility exports for callers
 from logos.dbutils.types import (
     Deployment,
     get_unique_models_from_deployments,
@@ -226,6 +228,9 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
+_nightly_scheduler: Optional[NightlyScheduler] = None
+_maintenance_coordinator: Optional[MaintenanceCoordinator] = None
+_pipeline: Optional[RequestPipeline] = None
 _azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
 _cloud_model_sync: Optional[CloudModelSyncService] = None
 
@@ -741,6 +746,8 @@ async def lifespan(app: FastAPI):
         if batch_task:
             batch_task.cancel()
             await asyncio.gather(batch_task, return_exceptions=True)
+    if _nightly_scheduler:
+        await _nightly_scheduler.stop()
     benchmark_tasks = list(_benchmark_tasks)
     for task in benchmark_tasks:
         task.cancel()
@@ -1302,11 +1309,15 @@ async def start_pipeline():
         facade=_logosnode_facade,
         config=CalibrationConfig.from_env(),
     )
-    await _calibration_orchestrator.start()
-    logger.info(
-        "Calibration orchestrator started (enabled=%s)",
-        _calibration_orchestrator._config.enabled,
+    global _nightly_scheduler, _maintenance_coordinator
+    _maintenance_coordinator = MaintenanceCoordinator(_logosnode_registry)
+    _logosnode_registry.maintenance = _maintenance_coordinator
+    _logosnode_registry.subscribe_to_events(_calibration_orchestrator._on_provider_event)
+    _nightly_scheduler = NightlyScheduler(
+        _logosnode_registry, _capacity_planner, _calibration_orchestrator, _logosnode_registry.maintenance
     )
+    await _nightly_scheduler.start()
+    logger.info("Nightly benchmark scheduler started; schedules require explicit admin opt-in")
 
     # Azure deployment auto-sync: discover deployed models and upsert them into
     # the DB on startup and every 24h. Runs after facade registration so its
@@ -3856,6 +3867,8 @@ def _benchmark_provider_affinity(
             raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    if payload.get("recovery_fenced"):
+        raise HTTPException(status_code=409, detail="Benchmark recovery has fenced this execution")
 
     try:
         payload_provider_id = int(payload.get("provider_id"))
@@ -5142,12 +5155,13 @@ def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
 # and is included last, so no route of another router can be shadowed by it.
 # Add new routers above that line.
 
-from logos.routers import admin, internal, logosnode, monitoring, user_facing  # noqa: E402
+from logos.routers import admin, internal, logosnode, monitoring, nightly_benchmarks, user_facing  # noqa: E402
 
 _logosnode_registry.on_cold_mark_changed = logosnode.republish_lane_snapshot
 
 app.include_router(monitoring.router)
 app.include_router(internal.router)
+app.include_router(nightly_benchmarks.router)
 app.include_router(logosnode.router)
 app.include_router(admin.router)
 app.include_router(user_facing.router)

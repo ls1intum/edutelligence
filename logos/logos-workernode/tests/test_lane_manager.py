@@ -4265,6 +4265,18 @@ async def test_apply_lanes_replans_after_rollback_restores_the_original_floor(mo
     assert replan_models == ["org/small", "org/big"]
 
 
+@pytest.mark.asyncio
+async def test_forced_benchmark_recovery_restarts_unchanged_configuration() -> None:
+    manager = LaneManager(WorkerConfig(), lane_port_start=15100, lane_port_end=15110)
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    await manager.reconfigure_lane("benchmark-lane", {"model": current.model}, force_restart=True)
+    manager._restart_lane_unlocked.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     ("selector", "gpu_count", "occupied"),
     [

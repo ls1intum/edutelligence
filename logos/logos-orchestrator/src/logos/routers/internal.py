@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import logos.main as _main
 from logos.auth import AuthContext
 from logos.batch_credential import issue_batch_credential
+from logos.benchmarks import nightly_store
 from logos.benchmarks.batch_runner import run_benchmark_batch
 from logos.benchmarks.configuration import BenchmarkRunSettings
 from logos.benchmarks.guidellm_runner import (
@@ -28,6 +29,16 @@ from logos.benchmarks.guidellm_runner import (
     run_benchmark_job,
 )
 from logos.benchmarks.huggingface_datasets import dataset_metadata, search_datasets
+from logos.benchmarks.nightly import (
+    NIGHTLY_CONTEXT,
+    PROGRESS,
+    NightlyStopped,
+    RunProgress,
+    can_start,
+    local_now,
+    supervise,
+)
+from logos.benchmarks.progress import observe_response
 from logos.benchmarks.reservations import benchmark_reservations
 from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
 from logos.client_tags import cancel as cancel_client_tag
@@ -596,11 +607,20 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
     # One orchestrator process owns benchmark execution. Serialize the short
     # check-and-create section in memory so simultaneous starts cannot both
     # admit a benchmark for the same provider.
+    if not NIGHTLY_CONTEXT.get() and (
+        (_main._calibration_orchestrator and _main._calibration_orchestrator.benchmarks_must_wait())
+        or any(_main._logosnode_registry.is_calibrating(pid) for pid in _main._logosnode_registry.active_provider_ids())
+    ):
+        raise HTTPException(status_code=409, detail="Calibration has priority over benchmarks")
     with _benchmark_admission_lock, DBManager() as db:
+        if NIGHTLY_CONTEXT.get() and not can_start(local_now()):
+            raise NightlyStopped("window_closed")
         target = db.get_model_provider_benchmark_target(data.model_provider_id)
         if target is None:
             raise HTTPException(status_code=404, detail="Provider-model pair not found")
         provider_id = int(target["provider_id"])
+        if not NIGHTLY_CONTEXT.get() and not nightly_store.manual_admission(db, provider_id):
+            raise HTTPException(status_code=409, detail="Maintenance capacity or the selected worker is reserved")
         provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
         if any(s.serving_overrides.model_dump(exclude_none=True) for s in configurations) and (
             provider_type != "logosnode" or _main._capacity_planner is None
@@ -620,7 +640,9 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
                 detail="Provider credentials require HTTPS (plain HTTP is allowed only on loopback)",
             )
 
-        if provider_type == "logosnode" and benchmark_reservations.provider_owner(provider_id) is not None:
+        owner = benchmark_reservations.provider_owner(provider_id)
+        owns_nightly_reservation = NIGHTLY_CONTEXT.get() and owner == -data.model_provider_id
+        if provider_type == "logosnode" and owner is not None and not owns_nightly_reservation:
             raise HTTPException(
                 status_code=409, detail="A benchmark still owns this worker. Wait for cleanup to finish."
             )
@@ -651,6 +673,7 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         serving_configuration = extract_serving_configuration(runtime_snapshot, model_name)
         job_payload = {
+            "nightly": NIGHTLY_CONTEXT.get(),
             "model_provider_id": data.model_provider_id,
             "provider_id": provider_id,
             "provider_name": target["provider_name"],
@@ -668,6 +691,9 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             user_id=None,
             environment="model-provider-benchmark",
         )
+
+        if not NIGHTLY_CONTEXT.get() and _main._maintenance_coordinator:
+            nightly_store.claim_benchmark(db, job_id, provider_id)
 
     is_internal_worker_benchmark = provider_type == "logosnode"
     benchmark_target = (
@@ -746,13 +772,39 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
 
     if is_internal_worker_benchmark:
         benchmark_reservations.reserve(provider_id, model_name, job_id)
-    task = asyncio.create_task(run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data))
+
+    async def nightly_run():
+        progress = RunProgress(data.samples)
+        PROGRESS[job_id] = progress
+        try:
+            return await supervise(
+                lambda: execute_run(data), progress, lambda: nightly_store.status(data.model_provider_id)["enabled"]
+            )
+        except NightlyStopped as exc:
+            with DBManager() as db:
+                db.update_job_status(job_id, "failed", error_message=exc.reason)
+            raise
+        finally:
+            PROGRESS.pop(job_id, None)
+
+    async def manual_run():
+        async def execute():
+            return await (run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data))
+
+        if _main._maintenance_coordinator:
+            return await _main._maintenance_coordinator.run_benchmark(job_id, execute)
+        return await execute()
+
+    task = asyncio.create_task(nightly_run() if NIGHTLY_CONTEXT.get() else manual_run())
     _background_tasks.add(task)
     _benchmark_tasks.add(task)
     _benchmark_tasks_by_job[job_id] = task
     if is_internal_worker_benchmark:
         _benchmark_sessions_by_job[job_id] = (provider_id, str(job_payload["provider_session_id"]))
     task.add_done_callback(lambda done, jid=job_id: _forget_benchmark_task(jid, done))
+    if not NIGHTLY_CONTEXT.get() and _main._maintenance_coordinator:
+        # Also release when cancellation happens before the coroutine starts.
+        task.add_done_callback(lambda done, jid=job_id: nightly_store.release_benchmark(jid))
     return JSONResponse(
         status_code=202,
         content={
@@ -845,7 +897,11 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
     request_id = secrets.token_urlsafe(16)
     try:
         benchmark_reservations.register_request(
-            int(target["provider_id"]), str(target["model_name"]), job_id, request_id
+            int(target["provider_id"]),
+            str(target["model_name"]),
+            job_id,
+            request_id,
+            guard=(lambda: nightly_store.benchmark_requests_allowed(job_id)) if payload.get("nightly") else None,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -860,7 +916,7 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
             request_id=request_id,
         )
     log_id = int(log_result["log-id"])
-    return await _execute_cancelling_on_disconnect(
+    response = await _execute_cancelling_on_disconnect(
         request,
         deployments=deployments,
         body=body,
@@ -871,12 +927,17 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         request_id=request_id,
         required_provider_id=required_provider_id,
     )
+    if headers.get("x-logos-benchmark-phase") == "measurement":
+        return observe_response(response, job_id)
+    return response
 
 
 @router.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
 async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateRequest, request: Request):
     """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
     _require_internal_secret(request)
+    if benchmark_reservations.owner(data.provider_id, "*") is not None:
+        raise HTTPException(status_code=409, detail="Worker is reserved for nightly benchmarks")
     snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})

@@ -963,6 +963,8 @@ class CapacityPlanner:
           not available. A lane placed here would take the memory the
           probes need and make them fail.
         """
+        if benchmark_reservations.owner(provider_id, "*") is not None:
+            return False
         if self._registry is None:
             return True
         if not self._registry.has_received_first_status(provider_id):

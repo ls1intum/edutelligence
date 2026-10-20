@@ -61,6 +61,25 @@ Implementation entry points:
 | Drain requests and prepare the model | [`capacity_planner.py`](../src/logos/capacity/capacity_planner.py) |
 | Release ownership when the job task finishes | [`main.py`](../src/logos/main.py) |
 
+## Manual runs and nightly runs
+
+This guide describes the manual runner and its batches. The
+[nightly rotation](../../docs/admin/nightly-benchmarks.md) is a separate opt-in schedule on the
+same Performance tab.
+
+| Behavior | Manual runner | Nightly rotation |
+|---|---|---|
+| Selection | Admin selects a pair and starts a run or batch | Up to 2 enabled, available pairs per night; oldest attempts first |
+| Workload | Editable dataset, sample count and request settings | GSM8K main/test, 50 requests, 512 max output tokens, concurrency 4, seed 42 |
+| Parameter search | Admin's overrides or batch sweep | Baseline and ±25% variants of known sequence/batch-token limits |
+| Admission window | Explicit admin start | 05:00–07:50 Europe/Berlin, including retries |
+| Failure handling | Failed batch stops its remaining runs | One retry after a stall; skip the configuration after another stall |
+| After the run | Applied serving overrides remain active | Restore the original production configuration |
+
+The dataset editor and its question previews do not configure nightly runs.
+During nightly execution or pending worker recovery, the orchestrator rejects
+new manual benchmarks. Existing manual benchmarks finish before nightly admission.
+
 ## Data loading
 
 The default is `openai/gsm8k`, configuration `main`, split `test`, prompt column `question`.
@@ -90,9 +109,7 @@ A historical result's Configuration section offers **Use for next benchmark**. I
 
 vLLM overrides apply only to Logos workers. Blank fields keep the current worker value; explicit false is preserved. The orchestrator prepares an idle lane, prevents routing during reconfiguration, merges the selected overrides, and asks the worker to reload. The worker checks its active-request counters under the lane lock before restarting. The orchestrator waits for the updated configuration to appear in worker status before measuring. Unsupported settings, worker errors and timeouts fail the job instead of recording a successful run. When retrying a failed lane with corrected settings, the new configuration is applied before another startup attempt.
 
-Applied vLLM settings remain active after completion, failure or cancellation.
-There is no automatic rollback.
-The worker must support the `require_idle` reconfiguration guard.
+For manual runs, changed vLLM settings remain active after the benchmark, including if measurement fails or is cancelled after reconfiguration. There is no automatic rollback. Deploy the updated workernode together with the orchestrator to enforce the `require_idle` reconfiguration guard.
 
 `attention_backend` can be fixed for a run or varied in a batch: `FLASHINFER`,
 `FLASH_ATTN`, `TRITON_ATTN`, `FLEX_ATTENTION`, and `TURBOQUANT`. An empty
@@ -118,6 +135,8 @@ The job stores the selected settings.
 Successful results store the actual GuideLLM scenario and the worker's serving snapshot.
 Pipeline parallelism uses the worker's effective value, including global flags and lane overrides.
 For older workers, explicit lane flags remain usable. Missing values remain unknown instead of defaulting to 1.
+
+The manual configuration API requires no additional migration. Nightly schedules require `065_nightly_benchmarks.xml`.
 
 
 ## Benchmark batches and comparison
@@ -147,7 +166,7 @@ installed-library or runtime compatibility. Missing architecture telemetry does 
 A failed run records its configuration, selected attention backend and diagnostic text. The worker
 preserves useful exception lines ahead of generic engine shutdown messages. The UI exposes these
 under **View error details & configuration**; historical records may contain only the old truncated error.
-Batches still stop at the first failed run. There is no automatic retry or backend probing.
+Manual batches stop at the first failed run and do not retry automatically. Nightly runs use the separate retry and restoration policy linked above.
 
 When an admin starts another run with serving overrides, an existing `error` or
 `stopped` lane receives the selected configuration before another startup attempt.
@@ -195,3 +214,15 @@ The CI forwarding-overhead benchmark uses a mock lane; it does not replace this 
    run. Verify that reconfiguration precedes startup and the lane reaches ready state.
 7. Verify that the applied vLLM settings remain active after completion or cancellation.
    Restore the intended serving settings explicitly if required.
+
+## Shared maintenance admission
+
+Calibration runs first during its configured window (05:00–08:00 Europe/Berlin
+by default). Benchmarks use the remaining time; new nightly configurations stop
+at 07:50. Manual starts share the same PostgreSQL admission lock and durable
+claims. At most one calibration or benchmark runs across all providers.
+Conflicting manual starts return HTTP 409 rather than queueing.
+Migration `065_nightly_benchmarks.xml` and workers with
+`get_calibration_status` support are required. Calibration completion and
+benchmark cleanup must finish before their claims are released.
+See the [operator guide](../../docs/admin/nightly-benchmarks.md#calibration-priority-and-shared-execution).

@@ -152,6 +152,58 @@ The node manager reserves the tag `previous`. Do not deploy that tag.
 
 To see the latest deployment, run `docker exec logos-node-manager node-manager status`.
 
+## Nightly benchmarks
+
+Nightly benchmarks require updates to the webservice, orchestrator, web application and selected workers.
+The webservice applies changelog `065_nightly_benchmarks.xml` before the new scheduler starts.
+Workers report `supports_benchmark_restart` in their runtime status.
+The activation API rejects workers without this capability.
+All schedules default to disabled.
+
+The selected model requires 1 loaded, awake vLLM lane on its worker.
+`LOGOS_MAINTENANCE_MAX_NODES` limits simultaneous maintenance workers. Its default is `1`.
+A value of `2` permits 2 workers at the same time.
+This limit also applies to manual calibration and benchmarks.
+The scheduler waits for each selected worker's existing requests to finish.
+No spare worker is required. If all workers are reserved, normal requests must wait.
+The old `LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER` variable no longer controls admission.
+
+Each night selects at most 2 enabled model/worker pairs.
+Untested pairs come first, followed by the oldest previous attempt.
+Unavailable pairs do not consume a place in that night's limit.
+Failed or cancelled plans consume a place after admission.
+The limit persists across restarts and changes to activation.
+
+New configurations and retries start between 05:00 and 07:50 in `Europe/Berlin`.
+At 08:00, a run continues only if at least 50% of its requests completed successfully.
+A run stops after 5 minutes without output content or a successful request completion.
+A stalled configuration gets at most 1 retry before 07:50.
+The existing 2-hour measurement timeout also applies.
+
+The scheduler restores the original worker configuration after the plan.
+If restoration fails, the worker remains reserved and further plans stop until recovery succeeds.
+The recovery journal stays in PostgreSQL until the original configuration is ready.
+Do not delete the journal to release a worker.
+
+Before activation:
+
+1. Deploy the matching components to a test environment.
+2. Confirm that the migration succeeds and the workers report restart support.
+3. Test a benchmark, result storage, cancellation, retry and restoration.
+4. Test the time limits and rotation with a controlled test clock.
+5. Check that another worker still accepts production requests.
+
+Automatic calibration runs first, from 05:00 to 08:00 in `Europe/Berlin` by default.
+Benchmarks use the remaining time and start no new configuration after 07:50.
+`LOGOS_MAINTENANCE_MAX_NODES` limits simultaneous maintenance workers, including manual starts. The default `1` keeps runs sequential.
+Apply `065_nightly_benchmarks.xml` and update workers for the `get_calibration_status` command.
+The coordinator releases calibration claims only after worker confirmation.
+The `LOGOS_MAINTENANCE_WINDOW_*` variables control both calibration and benchmarks.
+`LOGOS_MAINTENANCE_TIMEZONE` controls their shared timezone.
+
+See the [nightly benchmark guide](admin/nightly-benchmarks.md)
+for activation, the fixed workload, parameter values, API requests and diagnostic states.
+
 ## Security & rate limiting
 
 The API surface of the orchestrator has tiers:
