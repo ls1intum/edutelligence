@@ -5,14 +5,24 @@
   [empty]="rows().length === 0"
   [emptyMessage]="
     failed()
-      ? 'Could not load cloud request delays.'
-      : 'No finished cloud requests in the selected range.'
+      ? 'Could not load request delays.'
+      : 'No finished requests in the selected range.'
   "
 >
-  @for (row of rows(); track row.modelName + '|' + row.providerName) {
+  @for (row of rows(); track row.modelName + '|' + row.providerName + '|' + row.reasoningEffort) {
     <div class="table-row" role="row">
       <div role="cell" data-label="Model" class="cell-name">{{ row.modelName }}</div>
-      <div role="cell" data-label="Provider" class="cell-name">{{ row.providerName }}</div>
+      <div role="cell" data-label="Provider" class="cell-name">
+        {{ row.providerName }}
+        <span class="cell-kind">{{ row.local ? 'Local' : 'Cloud' }}</span>
+      </div>
+      <div role="cell" data-label="Effort">
+        @if (row.reasoningEffort) {
+          {{ row.reasoningEffort }}
+        } @else {
+          <span class="cell-muted">default</span>
+        }
+      </div>
       <div role="cell" data-label="Requests">
         {{ row.requestCount }}
         @if (row.errorCount > 0) {

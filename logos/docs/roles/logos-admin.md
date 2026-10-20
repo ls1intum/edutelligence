@@ -77,22 +77,29 @@ the error reports and the scheduling statistics of the model.
 
 ![Models page](/img/roles/logos-admin-models.png)
 
-For a model with a cloud provider, the **Cloud Delays** tab of the **Model
-Details** view shows where the time of a cloud request goes. The tab has one
-row for each cloud provider of the model. The row shows these values, each as
-the median (p50) and as the 95th percentile (p95):
+The **Delays** tab of the **Model Details** view shows where the time of a
+request goes. The tab shows local and cloud providers. It has one row for each
+provider of the model and for each reasoning effort. A **Local** or **Cloud** tag
+next to the provider name shows the provider type. The row shows these values,
+each as the median (p50) and as the 95th percentile (p95):
 
 - **Logos wait**: the time from the arrival of the request at Logos until the
-  call to the provider. This includes the authentication, the rate limit and the
-  budget check.
+  call to the provider. This includes the authentication, the rate limit, the
+  budget check and the scheduling.
 - **Provider**: the time from the call to the provider until the end of the
   response.
 - **TTFT**: the time from the arrival of the request until the first token.
 
+The **Effort** column shows the reasoning effort that Logos sent to the
+provider. Some local models accept only some effort levels. For these models,
+Logos changes the effort of the client to the nearest level that the model
+accepts. The column then shows the changed level, not the level of the client.
+The value `default` shows that the request did not contain an effort.
+
 If the **Logos wait** values increase, Logos itself slows the requests down.
 Use the time range bar of the tab to select the period.
 
-![Cloud Delays tab of a model](/img/roles/logos-admin-model-details-cloud-delays.png)
+![Delays tab of a model](/img/roles/logos-admin-model-details-delays.png)
 
 ## Providers
 

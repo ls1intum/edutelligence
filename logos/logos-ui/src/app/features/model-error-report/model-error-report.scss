@@ -1024,15 +1024,15 @@
   }
 }
 
-// ── Cloud Delays tab ─────────────────────────────────────────────────────────
+// ── Delays tab ───────────────────────────────────────────────────────────────
 
-.cloud-delays {
+.delays {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-.cloud-delays__header {
+.delays__header {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -1040,14 +1040,14 @@
   gap: 12px;
 }
 
-.cloud-delays__title {
+.delays__title {
   margin: 0;
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-100));
 }
 
-.cloud-delays__subtitle {
+.delays__subtitle {
   margin: 4px 0 0;
   max-width: 640px;
   font-size: var(--font-size-sm);

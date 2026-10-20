@@ -1,18 +1,20 @@
 import { TestBed } from '@angular/core/testing';
 
-import { CloudLatencyPanel, formatDelayMs } from './cloud-latency-panel';
+import { RequestLatencyPanel, formatDelayMs } from './request-latency-panel';
 import { StatisticsService } from '../../statistics/services/statistics.service';
 import type {
-  CloudLatencyRow,
-  CloudLatencyScope,
-  CloudLatencyStats,
-} from '../../statistics/services/cloud-latency.models';
+  RequestLatencyRow,
+  RequestLatencyScope,
+  RequestLatencyStats,
+} from '../../statistics/services/request-latency.models';
 
-const row = (over: Partial<CloudLatencyRow> = {}): CloudLatencyRow => ({
+const row = (over: Partial<RequestLatencyRow> = {}): RequestLatencyRow => ({
   modelId: 1,
   modelName: 'gpt-x',
   providerId: 2,
   providerName: 'azure',
+  local: false,
+  reasoningEffort: null,
   requestCount: 10,
   errorCount: 0,
   queueP50Ms: 12,
@@ -25,7 +27,7 @@ const row = (over: Partial<CloudLatencyRow> = {}): CloudLatencyRow => ({
   ...over,
 });
 
-const SCOPE: CloudLatencyScope = {
+const SCOPE: RequestLatencyScope = {
   teamId: null,
   userId: null,
   providerId: null,
@@ -48,22 +50,22 @@ describe('formatDelayMs', () => {
   });
 });
 
-describe('CloudLatencyPanel', () => {
-  let calls: Array<{ start: string; end: string; scope: CloudLatencyScope }>;
-  let respond: (stats: CloudLatencyStats) => void;
+describe('RequestLatencyPanel', () => {
+  let calls: Array<{ start: string; end: string; scope: RequestLatencyScope }>;
+  let respond: (stats: RequestLatencyStats) => void;
   let reject: (err: unknown) => void;
 
   beforeEach(() => {
     calls = [];
     TestBed.configureTestingModule({
-      imports: [CloudLatencyPanel],
+      imports: [RequestLatencyPanel],
       providers: [
         {
           provide: StatisticsService,
           useValue: {
-            getCloudLatencyStats: (start: string, end: string, scope: CloudLatencyScope) => {
+            getRequestLatencyStats: (start: string, end: string, scope: RequestLatencyScope) => {
               calls.push({ start, end, scope });
-              return new Promise<CloudLatencyStats>((res, rej) => {
+              return new Promise<RequestLatencyStats>((res, rej) => {
                 respond = res;
                 reject = rej;
               });
@@ -75,7 +77,7 @@ describe('CloudLatencyPanel', () => {
   });
 
   function create() {
-    const fixture = TestBed.createComponent(CloudLatencyPanel);
+    const fixture = TestBed.createComponent(RequestLatencyPanel);
     fixture.componentRef.setInput('start', '2026-10-19T00:00:00.000Z');
     fixture.componentRef.setInput('end', '2026-10-19T12:00:00.000Z');
     fixture.componentRef.setInput('scope', SCOPE);
@@ -101,6 +103,31 @@ describe('CloudLatencyPanel', () => {
     expect(rows[0].textContent).toContain('gpt-x');
     expect(rows[0].textContent).toContain('52.0 s');
     expect(rows[1].textContent).toContain('2 failed');
+  });
+
+  it('shows the effort of each row, "default" when none was sent, and whether the provider is local', async () => {
+    const fixture = create();
+    respond({
+      range: { start: '', end: '' },
+      rows: [
+        row({ providerName: 'node-a', local: true, reasoningEffort: 'xhigh' }),
+        row({ providerName: 'node-a', local: true, reasoningEffort: null }),
+        row({ providerName: 'azure', local: false, reasoningEffort: 'low' }),
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const rows = fixture.nativeElement.querySelectorAll('.table-row');
+    expect(rows.length).toBe(3);
+    const effort = (r: Element) => r.querySelector('[data-label="Effort"]')?.textContent?.trim();
+    const kind = (r: Element) => r.querySelector('.cell-kind')?.textContent?.trim();
+    expect(effort(rows[0])).toBe('xhigh');
+    expect(kind(rows[0])).toBe('Local');
+    expect(effort(rows[1])).toBe('default');
+    expect(rows[1].querySelector('.cell-muted')).not.toBeNull();
+    expect(effort(rows[2])).toBe('low');
+    expect(kind(rows[2])).toBe('Cloud');
   });
 
   it('reloads when the scope changes', async () => {
@@ -133,7 +160,7 @@ describe('CloudLatencyPanel', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(fixture.nativeElement.textContent).toContain(
-      'No finished cloud requests in the selected range.',
+      'No finished requests in the selected range.',
     );
 
     fixture.componentRef.setInput('end', '2026-10-19T13:00:00.000Z');
@@ -141,6 +168,6 @@ describe('CloudLatencyPanel', () => {
     reject(new Error('boom'));
     await fixture.whenStable();
     fixture.detectChanges();
-    expect(fixture.nativeElement.textContent).toContain('Could not load cloud request delays.');
+    expect(fixture.nativeElement.textContent).toContain('Could not load request delays.');
   });
 });

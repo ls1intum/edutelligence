@@ -34,8 +34,8 @@ import {
 } from '../../shared/models/provider.model';
 import { priceProviderCards } from './model-prices';
 import { ModelPricesTab } from './model-prices-tab';
-import { CloudLatencyPanel } from './cloud-latency-panel/cloud-latency-panel';
-import type { CloudLatencyScope } from '../statistics/services/cloud-latency.models';
+import { RequestLatencyPanel } from './request-latency-panel/request-latency-panel';
+import type { RequestLatencyScope } from '../statistics/services/request-latency.models';
 import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
 import { TimePreset, calendarRange } from '../../shared/utils/time-range';
 
@@ -55,7 +55,7 @@ type ModelErrorTab =
   | 'error_report'
   | 'complete_logs'
   | 'performance'
-  | 'cloud_delays'
+  | 'delays'
   | 'access'
   | 'prices';
 
@@ -638,7 +638,7 @@ const GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80;
     ErrorMessageComponent,
     ModelAccess,
     ModelPricesTab,
-    CloudLatencyPanel,
+    RequestLatencyPanel,
     TimeRangeBarComponent,
   ],
 
@@ -797,7 +797,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     'error_report',
     'complete_logs',
     'performance',
-    'cloud_delays',
+    'delays',
     'access',
     'prices',
   ];
@@ -806,7 +806,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     error_report: 'Error Report',
     complete_logs: 'Complete Logs',
     performance: 'Performance',
-    cloud_delays: 'Cloud Delays',
+    delays: 'Delays',
     access: 'Access',
     prices: 'Prices',
   };
@@ -822,42 +822,43 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly showSelectedFailure = computed(() => this.selectedLog()?.success === false);
 
   /**
-   * The Prices and Cloud Delays tabs only exist for cloud models: a model
-   * served solely by local (logosnode) providers has no catalogue pricing and
-   * no cloud requests to show. Until a successful response proves that, the
-   * tabs stay visible so their loading and error states remain reachable.
+   * The Prices tab only exists for cloud models: a model served solely by
+   * local (logosnode) providers has no catalogue pricing. Until a successful
+   * response proves that, the tab stays visible so its loading and error
+   * states remain reachable. The Delays tab covers local and cloud providers
+   * alike, so every model has it.
    */
   readonly visibleTabs = computed<readonly ModelErrorTab[]>(() => {
     const hasCloudProvider = this.priceProviders().some(
       provider => provider.provider_type === 'cloud'
     );
     if (hasCloudProvider || !this.pricesLoaded()) return this.tabs;
-    return this.tabs.filter(tab => tab !== 'prices' && tab !== 'cloud_delays');
+    return this.tabs.filter(tab => tab !== 'prices');
   });
 
   // ==========================================================================
-  // Cloud Delays
+  // Delays
   // ==========================================================================
 
   /** Same presets and paging as the statistics page, so the ranges read alike. */
-  readonly cloudDelayPreset = signal<TimePreset>('30d');
-  readonly cloudDelayOffset = signal(0);
+  readonly delayPreset = signal<TimePreset>('30d');
+  readonly delayOffset = signal(0);
   /** Bumped by Refresh and on opening the tab, so a range that ends now moves its end along. */
-  readonly cloudDelayRefresh = signal(0);
+  readonly delayRefresh = signal(0);
 
   /**
    * The window the delay table covers. Recomputed only when the preset, the
    * offset or the refresh counter changes, so the table does not refetch on
    * every change detection pass. Each recomputation reads the clock again.
    */
-  readonly cloudDelayWindow = computed(() => {
-    this.cloudDelayRefresh();
-    const range = calendarRange(this.cloudDelayPreset(), this.cloudDelayOffset());
+  readonly delayWindow = computed(() => {
+    this.delayRefresh();
+    const range = calendarRange(this.delayPreset(), this.delayOffset());
     return { start: range.currStart.toISOString(), end: range.currEnd.toISOString() };
   });
 
-  /** The delay table narrowed to this model, across all its cloud providers. */
-  readonly cloudDelayScope = computed<CloudLatencyScope>(() => {
+  /** The delay table narrowed to this model, across all its local and cloud providers. */
+  readonly delayScope = computed<RequestLatencyScope>(() => {
     const id = this.modelId();
     return { teamId: null, userId: null, providerId: null, apiKeyId: null, modelIds: id === null ? [] : [id] };
   });
@@ -1412,8 +1413,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   setTab(tab: ModelErrorTab): void {
     this.activeTab.set(tab);
-    if (tab === 'cloud_delays') {
-      this.refreshCloudDelays();
+    if (tab === 'delays') {
+      this.refreshDelays();
     }
     if (tab === 'performance') {
       void this.loadPerformance(this.modelId(), true);
@@ -1422,8 +1423,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     }
   }
 
-  refreshCloudDelays(): void {
-    this.cloudDelayRefresh.update(n => n + 1);
+  refreshDelays(): void {
+    this.delayRefresh.update(n => n + 1);
   }
 
   formatDuration(milliseconds: number | null): string {

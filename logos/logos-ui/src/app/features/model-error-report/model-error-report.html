@@ -882,40 +882,41 @@
 
         }
 
-        <!-- Cloud Delays -->
-        @case ('cloud_delays') {
+        <!-- Delays -->
+        @case ('delays') {
 
-          <div class="cloud-delays">
-            <div class="cloud-delays__header">
+          <div class="delays">
+            <div class="delays__header">
               <div>
-                <h2 class="cloud-delays__title">Cloud request delays</h2>
-                <p class="cloud-delays__subtitle">
-                  Where the time of a cloud request goes, per provider: the wait inside Logos before
-                  the provider call (key lookup, rate limit, budget check), the provider time, and the
-                  time to the first token.
+                <h2 class="delays__title">Request delays</h2>
+                <p class="delays__subtitle">
+                  Where the time of a request goes, per provider and reasoning effort: the wait inside
+                  Logos before the provider call (key lookup, rate limit, budget check, scheduling), the
+                  provider time, and the time to the first token. For local models the effort is the one
+                  Logos sent after mapping it onto the levels the model supports.
                 </p>
               </div>
               <app-time-range-bar
-                [preset]="cloudDelayPreset()"
-                [offset]="cloudDelayOffset()"
-                (presetChange)="cloudDelayPreset.set($event)"
-                (offsetChange)="cloudDelayOffset.set($event)"
+                [preset]="delayPreset()"
+                [offset]="delayOffset()"
+                (presetChange)="delayPreset.set($event)"
+                (offsetChange)="delayOffset.set($event)"
               />
               <button
                 type="button"
                 class="btn-copy-log"
-                aria-label="Refresh cloud request delays"
-                (click)="refreshCloudDelays()"
+                aria-label="Refresh request delays"
+                (click)="refreshDelays()"
               >
                 <i class="pi pi-refresh" aria-hidden="true"></i> Refresh
               </button>
             </div>
             @if (modelId() !== null) {
-              <app-stats-cloud-latency-panel
-                [start]="cloudDelayWindow().start"
-                [end]="cloudDelayWindow().end"
-                [scope]="cloudDelayScope()"
-                [refresh]="cloudDelayRefresh()"
+              <app-request-latency-panel
+                [start]="delayWindow().start"
+                [end]="delayWindow().end"
+                [scope]="delayScope()"
+                [refresh]="delayRefresh()"
               />
             }
           </div>
