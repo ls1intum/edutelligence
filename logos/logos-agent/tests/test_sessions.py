@@ -5525,7 +5525,7 @@ class TestTakingWorkUpAgain:
     }
 
     @staticmethod
-    def install(monkeypatch, *, attempts: int):
+    def install(monkeypatch, *, attempts: int, pull=None):
         from app import sessions
 
         created: list = []
@@ -5543,10 +5543,16 @@ class TestTakingWorkUpAgain:
         async def scheduler_pass(_self=None):
             return None
 
+        async def pull_request_for_head(_branch, *, repo_slug=None):
+            if isinstance(pull, Exception):
+                raise pull
+            return pull
+
         monkeypatch.setattr(sessions.db, "attempts_for_trigger", attempts_for_trigger)
         monkeypatch.setattr(sessions.db, "create_session", create_session)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
         monkeypatch.setattr(sessions.SessionManager, "scheduler_pass", scheduler_pass)
+        monkeypatch.setattr(sessions.github, "pull_request_for_head", pull_request_for_head)
         return created
 
     async def test_the_work_comes_back_where_it_came_from(self, monkeypatch):
@@ -5569,6 +5575,28 @@ class TestTakingWorkUpAgain:
 
         assert await sessions.manager.take_up_again(dict(self.ROW)) is None
         assert created == []
+
+    async def test_work_whose_pull_request_merged_is_not_taken_up(self, monkeypatch):
+        # A push to the branch would open a duplicate of finished work;
+        # the settled pull request is the answer that stops the follow-up
+        # before it is queued.
+        from app import sessions
+
+        created = self.install(monkeypatch, attempts=1, pull={"number": 771, "state": "closed", "merged": True})
+
+        assert await sessions.manager.take_up_again(dict(self.ROW)) is None
+        assert created == []
+
+    async def test_a_settled_check_that_cannot_be_read_fails_open(self, monkeypatch):
+        # GitHub briefly unreachable is not the pull request being merged:
+        # the follow-up is owed, and the finalizer re-checks the state
+        # before it pushes anyway.
+        from app import sessions
+
+        created = self.install(monkeypatch, attempts=1, pull=RuntimeError("502"))
+
+        assert await sessions.manager.take_up_again(dict(self.ROW)) == 99
+        assert len(created) == 1
 
 
 class TestAPausedSessionThatCannotComeBack:
@@ -5863,7 +5891,7 @@ class TestFollowingTheChecks:
     }
 
     @staticmethod
-    def install(monkeypatch, *, checks, attempts=0):
+    def install(monkeypatch, *, checks, attempts=0, failure=""):
         from app import sessions
 
         taken: list = []
@@ -5871,6 +5899,9 @@ class TestFollowingTheChecks:
 
         async def wait_for_checks(_sha, **_kwargs):
             return checks
+
+        async def check_failure_details(_sha, **_kwargs):
+            return failure
 
         async def take_up_again(_self, session, *, by="the runner", note=""):
             taken.append(note)
@@ -5883,6 +5914,7 @@ class TestFollowingTheChecks:
             return attempts
 
         monkeypatch.setattr(sessions.github, "wait_for_checks", wait_for_checks)
+        monkeypatch.setattr(sessions.github, "check_failure_details", check_failure_details)
         monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
         monkeypatch.setattr(sessions.db, "update_session", update_session)
         monkeypatch.setattr(sessions.db, "attempts_for_trigger", attempts_for_trigger)
@@ -5897,6 +5929,28 @@ class TestFollowingTheChecks:
 
         assert taken and "Logos Lint" in taken[0]
         assert (12, {"checks_watch": "done"}) in updates
+
+    async def test_the_note_carries_what_the_failing_checks_report(self, monkeypatch):
+        # The sandbox cannot open CI logs, so a note that says a check
+        # failed without saying what the check reported is an answer the
+        # session has to guess: the runner's read of the failure rides in
+        # the note, quoted.
+        from app import sessions
+
+        taken, _ = self.install(
+            monkeypatch,
+            checks=("failed", "Logos Build (failure)"),
+            failure="Logos Build:\n##[error]error: cannot find symbol",
+        )
+
+        await sessions.manager._take_up_a_red_build(dict(self.ROW), "logos/agent/issue-797", "d" * 40)
+
+        note = taken[0]
+        assert "What the failing checks report" in note
+        assert "> ##[error]error: cannot find symbol" in note
+        # The note names what the sandbox cannot do: reading the checks is
+        # the runner's job, and the quoted output is all there is to read.
+        assert "cannot open CI logs" in note
 
     async def test_checks_that_have_not_concluded_are_not_a_failure(self, monkeypatch):
         from app import sessions
