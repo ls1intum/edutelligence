@@ -52,13 +52,32 @@ import gateway_client as gw
 import httpx
 from stats import summarize
 
+# The gateway's key usage query (GatewayBudgetService.apiKeyBudgetUsage):
+# stored prices summed straight from log_entry, only unpriced rows priced
+# through log_entry_cost, plus the in-flight reservations.
+_MONTH = (
+    "le.timestamp_request >= CAST(date_trunc('month', NOW()) AS DATE)"
+    " AND le.timestamp_request < CAST(date_trunc('month', NOW()) AS DATE) + INTERVAL '1 month'"
+)
 _BUDGET_QUERY = """
 SELECT COALESCE((
+    SELECT SUM(le.settled_cost_micro_cents)
+    FROM log_entry le
+    WHERE le.api_key_id = {key_id}
+      AND le.cost_finalized
+      AND le.result_status IN ('success', 'error', 'timeout')
+      AND MONTH
+), 0) + COALESCE((
     SELECT SUM(lec.cost_micro_cents)
     FROM log_entry_cost lec
-    WHERE lec.api_key_id = {key_id}
-      AND lec.timestamp_request >= CAST(date_trunc('month', NOW()) AS DATE)
-      AND lec.timestamp_request < CAST(date_trunc('month', NOW()) AS DATE) + INTERVAL '1 month'
+    WHERE lec.log_entry_id IN (
+        SELECT le.id
+        FROM log_entry le
+        WHERE le.api_key_id = {key_id}
+          AND le.cost_finalized IS NOT TRUE
+          AND le.result_status IN ('success', 'error', 'timeout')
+          AND MONTH
+    )
 ), 0) + COALESCE((
     SELECT SUM(le.settled_cost_micro_cents)
     FROM log_entry le
@@ -67,10 +86,9 @@ SELECT COALESCE((
       AND le.request_id LIKE 'gw-%'
       AND le.settled_cost_micro_cents IS NOT NULL
       AND le.settled_cost_micro_cents > 0
-      AND le.timestamp_request >= CAST(date_trunc('month', NOW()) AS DATE)
-      AND le.timestamp_request < CAST(date_trunc('month', NOW()) AS DATE) + INTERVAL '1 month'
+      AND MONTH
 ), 0);
-"""
+""".replace("MONTH", _MONTH)
 
 _UNFINALIZED_QUERY = """
 SELECT COUNT(*) FROM log_entry
