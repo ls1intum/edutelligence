@@ -158,7 +158,6 @@ services:
       - ./logos-orchestrator/src/logos/capacity:/app/src/logos/capacity:ro
       - ./logos-orchestrator/src/logos/pipeline:/app/src/logos/pipeline:ro
       - ./logos-orchestrator/src/logos/sdi:/app/src/logos/sdi:ro
-      - ./logos-orchestrator/tests/performance/results:/app/tests/performance/results
       - ./logos-orchestrator/tests/integration:/app/tests/integration
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"

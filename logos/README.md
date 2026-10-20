@@ -208,11 +208,6 @@ environment:
 
 Worker nodes auto-calibrate model VRAM profiles (how much GPU memory each model needs when loaded vs sleeping). Logos stores the profiles in its database — the workers keep none on disk — and sends them to each worker at startup. No extra configuration needed on the worker side.
 
-## Scheduler Benchmarking
-
-Replay scripted workloads against the running Logos API with the runner described in
-[`logos-orchestrator/tests/performance/README.md`](logos-orchestrator/tests/performance/README.md).
-
 ## Connecting via SSH
 
 Once your access is granted and VPN is active:

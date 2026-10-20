@@ -79,7 +79,7 @@ pytest tests/unit -v         # full suite
 pytest tests/unit/main/test_route_and_execute.py -v   # one file
 ```
 
-Tests stub heavy dependencies (sentence_transformers, gRPC) via `tests/conftest.py`. `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` decorators needed. `run_tests.sh` also has `performance|all` tiers.
+Tests stub heavy dependencies (sentence_transformers, gRPC) via `tests/conftest.py`. `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` decorators needed.
 
 ## Conventions
 
