@@ -705,6 +705,13 @@ class CapacityPlanner:
         A lock means the lane stays warm, so one found asleep (it was asleep
         when it was locked, or an operator slept it on purpose) is woken. The
         wake goes through VRAM validation like any other; it never evicts.
+
+        Every locked lane is considered on its own: the model-wide cycle set is
+        only written here, never read. Reading it would let a locked copy on
+        one worker whose wake fails VRAM validation suppress the wake of a
+        locked copy on another worker that has the memory, every cycle.
+        Writing it still keeps the demand pass from planning a second wake for
+        the same model in this cycle.
         """
         actions: List[CapacityPlanAction] = []
         for lane in lanes:
@@ -713,8 +720,6 @@ class CapacityPlanner:
             if lane.sleep_state != "sleeping" and lane.runtime_state != "sleeping":
                 continue
             if self._lane_is_in_wake_failure_cooldown(provider_id, lane.lane_id):
-                continue
-            if cycle_planned_models is not None and lane.model_name in cycle_planned_models:
                 continue
             actions.append(
                 CapacityPlanAction(
@@ -5023,6 +5028,12 @@ class CapacityPlanner:
                     continue
                 if lane.active_requests == 0 and lane.queue_waiting == 0:
                     continue  # Already idle — normal reclaim handles this
+                if self.is_lane_locked(provider_id, lane.lane_id):
+                    # A locked lane is never a victim. Skipping it here, not
+                    # only in the executor, lets the next busy lane be drained
+                    # instead of a rejected drain blocking the starving model
+                    # every cycle (and counting as freed VRAM in validation).
+                    continue
                 if self._should_initiate_drain(
                     provider_id,
                     lane,

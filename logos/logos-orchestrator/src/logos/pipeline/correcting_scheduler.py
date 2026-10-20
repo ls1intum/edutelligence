@@ -272,12 +272,14 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         so the caller keeps its current reservation when nothing better
         exists.
 
-        On success the reservation on ``exclude_provider_id`` is already
-        released: request tracking is keyed by request id, so the old
-        reservation must end before the new one starts. In the rare race where
-        the ready deployment fills up between the check and the reservation,
-        this returns ``None`` with the old reservation released; the caller's
-        later release of it is then a no-op.
+        The new slot is reserved before the old one is released, so a ready
+        deployment that fills up between the check and the reservation leaves
+        the caller exactly where it was: still holding its reservation on
+        ``exclude_provider_id``, and ``None`` returned. Capacity is reserved
+        per provider, so the two reservations never collide. On success the
+        old reservation (and the request tracking that points at it) is
+        released before the result for the new deployment re-registers the
+        request.
         """
         if request.required_provider_id is not None:
             return None
@@ -306,16 +308,15 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         ]
         if not ready:
             return None
-        self.release(model_id, exclude_provider_id, "logosnode", request.request_id)
         best = self._try_immediate_select(ready, request.request_id)
         if best is None:
             logger.info(
-                "Reroute of request %s found no free slot after releasing worker=%s; "
-                "keeps waiting for the original lane",
+                "Reroute of request %s found no free slot on another deployment; " "keeps its reservation on worker=%s",
                 request.request_id,
                 self._logosnode.get_provider_name(exclude_provider_id) or exclude_provider_id,
             )
             return None
+        self.release(model_id, exclude_provider_id, "logosnode", request.request_id)
         chosen_model_id, provider_id, provider_type, _score, priority_int, ettft = best
         logger.info(
             "Rerouted request %s for model=%s from worker=%s to worker=%s (tier=%s): "

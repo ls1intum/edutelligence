@@ -334,3 +334,40 @@ def test_the_executor_still_runs_an_operator_sleep_of_a_locked_lane():
 
     assert asyncio.run(planner._execute_action_with_confirmation(action)) is True
     assert ran == ["sleep_l1"]
+
+
+def test_a_locked_lane_on_one_worker_does_not_suppress_another_workers_lock_wake():
+    # The model was already planned this cycle — by the lock wake of a copy on
+    # another worker whose wake may still fail VRAM validation. This worker's
+    # locked copy must be woken on its own.
+    lanes = [_signal(LANE, MODEL, runtime_state="sleeping", sleep_state="sleeping")]
+    planner = _planner(_Facade(lanes), lock_reader=lambda: [(PROVIDER, LANE)])
+    planner._refresh_lane_locks()
+
+    actions = planner._compute_lock_wake_actions(PROVIDER, lanes, {MODEL})
+
+    assert [(a.action, a.lane_id) for a in actions] == [("wake", LANE)]
+
+
+class _DrainFacade(_Facade):
+    def get_worker_capabilities(self, provider_id):  # noqa: ARG002
+        return [MODEL, OTHER_MODEL, "third/model"]
+
+    def get_model_profiles(self, provider_id):  # noqa: ARG002
+        return {}
+
+
+def test_demand_drain_skips_a_locked_busy_lane_and_takes_the_next_one():
+    third_lane = "planner-third_model"
+    lanes = [
+        _signal(LANE, MODEL, active=2),
+        _signal(third_lane, "third/model", active=1),
+    ]
+    planner = _planner(_DrainFacade(lanes), lock_reader=lambda: [(PROVIDER, LANE)])
+    planner._refresh_lane_locks()
+    planner._demand.get_ranked_models = lambda: [(OTHER_MODEL, planner.DRAIN_DEMAND_SCORE_THRESHOLD + 5)]
+    planner._should_initiate_drain = lambda *args, **kwargs: True  # noqa: ARG005
+
+    actions = planner._compute_demand_drain_actions(PROVIDER, lanes)
+
+    assert [a.lane_id for a in actions] == [third_lane]
