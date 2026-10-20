@@ -714,6 +714,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly performanceLoading = signal(false);
   private performanceRequestVersion = 0;
   readonly performanceError = signal(false);
+  readonly performanceView = signal<'results' | 'run'>('results');
   readonly benchmarkStartingPairId = signal<number | null>(null);
   readonly benchmarkCancellingJobId = signal<number | null>(null);
   readonly benchmarkStartError = signal<string | null>(null);
@@ -727,16 +728,11 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly benchmarkConfirmPair = computed(() => this.benchmarkPairs().find(
     pair => pair.model_provider_id === this.benchmarkConfirmPairId(),
   ) ?? null);
-  readonly benchmarkConfirmationMessage = computed(() => {
-    const count = this.benchmarkTotalRuns();
-    const parts = [`Start ${count} ${count === 1 ? 'run' : 'runs'} on ${this.benchmarkConfirmPair()?.provider_name ?? ''}?`,
-      this.benchmarkConfirmPair()?.provider_type === 'logosnode'
-        ? 'The model lanes on this worker will be reserved for the benchmark. Existing requests finish first; new production requests wait or use another worker. The reservation ends when the benchmark finishes or is stopped.'
-        : 'The benchmark runs alongside other requests. Concurrent traffic can affect measured performance.'];
-    if (this.hasServingOverrides()) parts.push('The selected vLLM settings may reload the model and remain active after the run.');
-    if (this.benchmarkBatch()) parts.push('The entire batch starts once, with no confirmation between runs.');
-    return parts.join(' ');
-  });
+  readonly benchmarkConfirmationMessage = computed(() =>
+    this.benchmarkConfirmPair()?.provider_type === 'logosnode'
+      ? 'Existing requests finish first. New production requests wait or use another worker until this benchmark ends.'
+      : 'Other traffic can affect the results. This benchmark uses the provider alongside normal requests.',
+  );
   readonly benchmarkTotalRuns = computed(() => {
     const batch = this.benchmarkBatch();
     return batch ? batch.configurations.length * batch.repetitions : 1;
@@ -754,9 +750,10 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   }
 
   useBenchmarkConfiguration(benchmark: ModelProviderBenchmark): void {
+    this.performanceView.set('run');
     this.benchmarkSettings.set(settingsFromBenchmark(benchmark));
     this.benchmarkSampleSize.set(Math.min(100, Math.max(1, benchmark.sample_size)));
-    document.getElementById('benchmark-runner')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('performance-view-controls')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   hasServingOverrides(): boolean {
@@ -766,10 +763,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   readonly benchmarkSampleLabel = computed(
     () => this.formatSampleCount(this.benchmarkSampleSize()),
-  );
-  readonly benchmarkSampleTicks = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100] as const;
-  readonly benchmarkSampleProgress = computed(
-    () => `${((this.benchmarkSampleSize() - 1) / 99) * 100}%`,
   );
   private readonly selectedBenchmarkIds = signal<ReadonlyMap<number, number>>(new Map());
   readonly benchmarkDeletingId = signal<number | null>(null);
@@ -1250,6 +1243,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     this.benchmarkStartError.set(null);
     try {
       await this.modelService.startBenchmark(pair.model_provider_id, sampleSize, settings, batch);
+      this.performanceView.set('results');
       await this.loadPerformance(this.modelId(), true);
     } catch (error) {
       const response = error instanceof HttpErrorResponse ? error.error : null;

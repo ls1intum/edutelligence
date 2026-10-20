@@ -524,128 +524,19 @@
             </span>
           </div>
 
-          <details class="performance-glossary">
-            <summary>
-              <span>
-                <i class="pi pi-info-circle" aria-hidden="true"></i>
-                Glossary &amp; abbreviations
-              </span>
-              <small>Metrics and vLLM parameters</small>
-            </summary>
+          <nav id="performance-view-controls" class="performance-views" aria-label="Performance views">
+            <button type="button" [attr.aria-pressed]="performanceView() === 'results'"
+              (click)="performanceView.set('results')">Results</button>
+            <button type="button" [attr.aria-pressed]="performanceView() === 'run'"
+              (click)="performanceView.set('run')">Run benchmark</button>
+          </nav>
 
-            <dl class="glossary-grid">
-              <div><dt>TTFT</dt><dd>Time To First Token</dd></div>
-              <div><dt>TPOT</dt><dd>Time Per Output Token</dd></div>
-              <div><dt>Latency</dt><dd>Full request duration</dd></div>
-              <div><dt>Throughput</dt><dd>Output tokens per second</dd></div>
-              <div><dt>p50 / p95 / p100</dt><dd>Median / 95% / slowest</dd></div>
-              <div><dt>Prefix hit</dt><dd>Reused prompt-prefix rate</dd></div>
-              <div><dt>MTP accept</dt><dd>Multi-Token Prediction acceptance</dd></div>
-              <div><dt>AWQ</dt><dd>Activation-aware Weight Quantization</dd></div>
-              <div><dt>KV cache</dt><dd>Cached attention keys and values</dd></div>
-              <div><dt>GSM8K</dt><dd>Grade School Math 8K dataset</dd></div>
-              <div><dt>CUDA</dt><dd>Compute Unified Device Architecture</dd></div>
-              <div><dt>vLLM</dt><dd>Model-serving engine</dd></div>
-              <div><dt><code>tensor_parallel_size</code></dt><dd>GPUs sharing tensor work</dd></div>
-              <div><dt><code>pipeline_parallel_size</code></dt><dd>Model-layer pipeline stages</dd></div>
-              <div><dt><code>kv_cache_dtype</code></dt><dd>KV-cache precision</dd></div>
-              <div><dt><code>kv_cache_memory</code></dt><dd>Memory reserved for KV cache</dd></div>
-              <div><dt><code>max_num_seqs</code></dt><dd>Concurrent sequences</dd></div>
-              <div><dt><code>max_num_batched_tokens</code></dt><dd>Tokens per batch</dd></div>
-              <div><dt><code>enable_prefix_caching</code></dt><dd>Reuse common prompt starts</dd></div>
-              <div><dt><code>max_model_len</code></dt><dd>Maximum context length</dd></div>
-              <div><dt><code>gpu_memory_utilization</code></dt><dd>vLLM GPU-memory fraction</dd></div>
-              <div><dt><code>quantization</code></dt><dd>Weight-compression format</dd></div>
-              <div><dt><code>dtype</code></dt><dd>Calculation precision</dd></div>
-              <div><dt><code>enforce_eager</code></dt><dd>Disable CUDA graph execution</dd></div>
-              <div><dt><code>disable_custom_all_reduce</code></dt><dd>Use standard GPU reduction</dd></div>
-              <div><dt><code>hf_overrides</code></dt><dd>Hugging Face config overrides</dd></div>
-            </dl>
-          </details>
-
-          @if (benchmarkPairs().length > 0) {
-            <section class="benchmark-runner" id="benchmark-runner">
-              <header class="benchmark-runner__header">
-                <div>
-                  <h3>Run benchmark</h3>
-                  <p>Choose a provider and sample size. Review the settings before starting.</p>
-                </div>
-                @if (selectedBenchmarkPair()?.provider_type === 'logosnode') {
-                  <button type="button" class="benchmark-run-button" (click)="useComparisonBaseline()"
-                    title="Prepare GSM8K main/test, 50 requests, 512 max output tokens, seed 42, TP 1, PP 1 and concurrency 4. Other worker settings stay unchanged.">
-                    Load comparison preset
-                  </button>
-                }
-              </header>
-
-              <label class="benchmark-worker-select">Provider
-                <select [value]="selectedBenchmarkPair()?.model_provider_id" (change)="selectedBenchmarkPairId.set(+$any($event.target).value)">
-                  @for (pair of benchmarkPairs(); track pair.model_provider_id) {
-                    <option [value]="pair.model_provider_id">{{ pair.provider_name }} · {{ pair.model_name }}</option>
-                  }
-                </select>
-              </label>
-              <div class="benchmark-sample-control">
-                <div class="benchmark-sample-control__heading">
-                  <label class="benchmark-sample-control__label" for="benchmark-sample-size">Sample size</label>
-                  <output class="benchmark-sample-control__value" for="benchmark-sample-size">
-                    {{ benchmarkSampleSize() }}
-                  </output>
-                </div>
-                <input
-                  #sampleSize
-                  id="benchmark-sample-size"
-                  type="range"
-                  min="1"
-                  max="100"
-                  step="1"
-                  [value]="benchmarkSampleSize()"
-                  [style.--sample-progress]="benchmarkSampleProgress()"
-                  (input)="setBenchmarkSampleSize(sampleSize.value)"
-                />
-                <div class="benchmark-sample-control__ticks" aria-hidden="true">
-                  @for (tick of benchmarkSampleTicks; track tick) {
-                    <span
-                      class="benchmark-sample-control__tick"
-                      [style.left.%]="((tick - 1) / 99) * 100"
-                    >
-                      <i></i>
-                      <small>{{ tick }}</small>
-                    </span>
-                  }
-                </div>
-              </div>
-
-              <details class="benchmark-settings-panel" [open]="!benchmarkSettingsValid()">
-                <summary>
-                  <strong>Dataset and settings</strong>
-                  <span>{{ benchmarkSettings().dataset }} · {{ benchmarkSettings().max_output_tokens }} max tokens · {{ benchmarkSettings().profile === 'synchronous' ? '1 request at a time' : benchmarkSettings().concurrency + ' concurrent requests' }}</span>
-                </summary>
-              <app-benchmark-settings-editor [pair]="selectedBenchmarkPair()"
-                [settings]="benchmarkSettings()" (settingsChange)="benchmarkSettings.set($event)"
-                (validChange)="benchmarkSettingsValid.set($event)" (limitsChange)="benchmarkWorkerLimits.set($event)" />
-              </details>
-
-              <app-benchmark-batch-editor [settings]="benchmarkSettings()" [samples]="benchmarkSampleSize()"
-                [worker]="selectedBenchmarkPair()?.provider_type === 'logosnode'" [limits]="benchmarkWorkerLimits()"
-                (planChange)="benchmarkBatch.set($event)" (validChange)="benchmarkBatchValid.set($event)" />
-
-              <div class="benchmark-runner__pairs">
-                @for (pair of benchmarkPairs(); track pair.model_provider_id) {
-                  @if (selectedBenchmarkPair()?.model_provider_id === pair.model_provider_id || providerHasActiveBenchmark(pair.provider_id)) {
-                  <div class="benchmark-pair">
-                    <div class="benchmark-pair__identity">
-                      <strong>{{ pair.provider_name }}</strong>
-                      <span>{{ pair.model_name }}</span>
-                      <div class="benchmark-order-summary" aria-label="Benchmark configuration">
-                        <small>{{ benchmarkSettings().dataset }}</small>
-                        <small>{{ benchmarkSampleLabel() }}</small>
-                        <small>{{ benchmarkSettings().max_output_tokens }} max tokens</small>
-                      </div>
-                    </div>
-
-                    <div class="benchmark-pair__state">
-                      @if (latestBenchmarkRun(pair.model_provider_id); as run) {
+          @for (pair of benchmarkPairs(); track pair.model_provider_id) {
+            @if (latestBenchmarkRun(pair.model_provider_id); as run) {
+              @if (isBenchmarkActive(run) || run.status === 'failed') {
+                <section class="benchmark-current-run" [attr.aria-label]="'Benchmark status on ' + pair.provider_name">
+                  <strong>{{ pair.provider_name }}</strong>
+                  <div class="benchmark-pair__state">
                         <span class="run-status" [ngClass]="'run-status--' + run.status">
                           @if (isBenchmarkActive(run)) {
                             <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
@@ -670,45 +561,93 @@
                             {{ benchmarkCancellingJobId() === run.id ? 'Cancelling…' : 'Stop benchmark' }}
                           </button>
                         }
-                      } @else if (!pair.endpoint_configured) {
-                        <span class="run-status run-status--failed">Endpoint missing</span>
-                        <small>Add it under Providers before running a benchmark.</small>
-                      } @else {
-                        <span class="run-status">Ready</span>
-                      }
-                    </div>
-
-                    @if (selectedBenchmarkPair()?.model_provider_id === pair.model_provider_id) {
-                    <div class="benchmark-start-action">
-                      <button
-                        class="benchmark-run-button"
-                        type="button"
-                        (click)="benchmarkConfirmPairId.set(pair.model_provider_id)"
-                        [disabled]="selectedBenchmarkPair()?.model_provider_id !== pair.model_provider_id || !benchmarkSettingsValid() || !benchmarkBatchValid() || (hasServingOverrides() && pair.provider_type !== 'logosnode') || benchmarkStartingPairId() !== null || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured"
-                      >
-                        @if (benchmarkStartingPairId() === pair.model_provider_id) {
-                          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Starting…
-                        } @else if (providerHasActiveBenchmark(pair.provider_id)) {
-                          Running…
-                        } @else {
-                          <i class="pi pi-play" aria-hidden="true"></i>
-                          {{ benchmarkBatch() ? 'Review & start batch' : 'Review & start benchmark' }}
-                          @if (benchmarkBatch()) { · {{ benchmarkTotalRuns() }} runs }
-                        }
-                      </button>
-                    </div>
-                    }
                   </div>
-                  }
-                }
-              </div>
-
-              @if (benchmarkStartError(); as error) {
-                <p class="benchmark-runner__error">{{ error }}</p>
+                </section>
               }
-            </section>
+            }
           }
 
+          @if (benchmarkStartError(); as error) {
+            <p class="benchmark-runner__error" role="alert">{{ error }}</p>
+          }
+
+          <div [hidden]="performanceView() !== 'run'">
+          @if (selectedBenchmarkPair(); as pair) {
+            <section class="benchmark-runner" id="benchmark-runner" aria-label="Benchmark setup">
+              <header class="benchmark-runner__header">
+                <div>
+                  <h3>Configure a benchmark</h3>
+                  <p>Choose where to run and how many requests to measure.</p>
+                </div>
+              </header>
+              <div class="benchmark-basics">
+                <label>Provider
+                  <select [value]="pair.model_provider_id" (change)="selectedBenchmarkPairId.set(+$any($event.target).value)">
+                    @for (option of benchmarkPairs(); track option.model_provider_id) {
+                      <option [value]="option.model_provider_id">{{ option.provider_name }}</option>
+                    }
+                  </select>
+                </label>
+                <label>Sample size
+                  <input #sampleSize aria-label="Sample size" aria-describedby="benchmark-sample-help" type="number" min="1" max="100" step="1"
+                    [value]="benchmarkSampleSize()" (input)="setBenchmarkSampleSize(sampleSize.value)"
+                    (change)="sampleSize.value = benchmarkSampleSize().toString()" />
+                  <small id="benchmark-sample-help">1–100 requests per run</small>
+                </label>
+              </div>
+
+              <details class="benchmark-settings-panel">
+                <summary>
+                  <strong>Dataset and settings</strong>
+                  <span>{{ benchmarkSettings().dataset }} · {{ benchmarkSettings().max_output_tokens }} max tokens · {{ benchmarkSettings().profile === 'synchronous' ? 'Sequential' : benchmarkSettings().concurrency + ' concurrent requests' }}</span>
+                </summary>
+                @if (pair.provider_type === 'logosnode') {
+                  <button type="button" class="benchmark-preset" (click)="useComparisonBaseline()"
+                    title="Prepare GSM8K main/test, 50 requests, 512 max output tokens, seed 42, TP 1, PP 1 and concurrency 4. Other worker settings stay unchanged.">
+                    Load comparison preset
+                  </button>
+                }
+                <app-benchmark-settings-editor [pair]="pair"
+                  [settings]="benchmarkSettings()" (settingsChange)="benchmarkSettings.set($event)"
+                  (validChange)="benchmarkSettingsValid.set($event)" (limitsChange)="benchmarkWorkerLimits.set($event)" />
+              </details>
+
+              <details class="benchmark-settings-panel">
+                <summary>
+                  <strong>Repeat or compare settings</strong>
+                  <span>{{ benchmarkBatch() ? benchmarkTotalRuns() + ' runs in this batch' : 'Optional · repeat runs or compare configurations' }}</span>
+                </summary>
+                <app-benchmark-batch-editor [settings]="benchmarkSettings()" [samples]="benchmarkSampleSize()"
+                  [worker]="pair.provider_type === 'logosnode'" [limits]="benchmarkWorkerLimits()"
+                  (planChange)="benchmarkBatch.set($event)" (validChange)="benchmarkBatchValid.set($event)" />
+              </details>
+
+              @if (!pair.endpoint_configured) {
+                <p class="benchmark-runner__error">Add an endpoint under Providers before running a benchmark.</p>
+              }
+              @if (!benchmarkSettingsValid()) {
+                <p class="benchmark-runner__error" role="status">Check Dataset and settings before starting.</p>
+              }
+              @if (!benchmarkBatchValid()) {
+                <p class="benchmark-runner__error" role="status">Check Repeat or compare settings before starting.</p>
+              }
+              <footer class="benchmark-setup-footer">
+                <p>{{ benchmarkSampleLabel() }} per run · {{ benchmarkTotalRuns() }} {{ benchmarkTotalRuns() === 1 ? 'run' : 'runs' }}</p>
+                <button class="benchmark-run-button" type="button"
+                  (click)="benchmarkConfirmPairId.set(pair.model_provider_id)"
+                  [disabled]="!benchmarkSettingsValid() || !benchmarkBatchValid() || (hasServingOverrides() && pair.provider_type !== 'logosnode') || benchmarkStartingPairId() !== null || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured">
+                  @if (benchmarkStartingPairId() !== null) { Starting… }
+                  @else if (providerHasActiveBenchmark(pair.provider_id)) { Running… }
+                  @else { {{ benchmarkBatch() ? 'Review batch' : 'Review benchmark' }} <i class="pi pi-arrow-right" aria-hidden="true"></i> }
+                </button>
+              </footer>
+            </section>
+          } @else {
+            <div class="empty-state"><h3>No provider available</h3><p>Add a provider for this model to run a benchmark.</p></div>
+          }
+          </div>
+
+          <div [hidden]="performanceView() !== 'results'">
           @if (performanceLoading()) {
 
             <div class="performance-message">Loading performance…</div>
@@ -724,7 +663,8 @@
 
             <div class="empty-state">
               <h2>No benchmark results available</h2>
-              <p>No provider configuration has performance data for this model yet.</p>
+              <p>Run a benchmark to measure throughput and response times.</p>
+              <button type="button" class="benchmark-run-button" (click)="performanceView.set('run')">Configure a benchmark</button>
             </div>
 
           } @else {
@@ -880,6 +820,47 @@
 
           }
 
+          </div>
+
+          <details class="performance-glossary">
+            <summary>
+              <span>
+                <i class="pi pi-info-circle" aria-hidden="true"></i>
+                Glossary &amp; abbreviations
+              </span>
+              <small>Metrics and vLLM parameters</small>
+            </summary>
+
+            <dl class="glossary-grid">
+              <div><dt>TTFT</dt><dd>Time To First Token</dd></div>
+              <div><dt>TPOT</dt><dd>Time Per Output Token</dd></div>
+              <div><dt>Latency</dt><dd>Full request duration</dd></div>
+              <div><dt>Throughput</dt><dd>Output tokens per second</dd></div>
+              <div><dt>p50 / p95 / p100</dt><dd>Median / 95% / slowest</dd></div>
+              <div><dt>Prefix hit</dt><dd>Reused prompt-prefix rate</dd></div>
+              <div><dt>MTP accept</dt><dd>Multi-Token Prediction acceptance</dd></div>
+              <div><dt>AWQ</dt><dd>Activation-aware Weight Quantization</dd></div>
+              <div><dt>KV cache</dt><dd>Cached attention keys and values</dd></div>
+              <div><dt>GSM8K</dt><dd>Grade School Math 8K dataset</dd></div>
+              <div><dt>CUDA</dt><dd>Compute Unified Device Architecture</dd></div>
+              <div><dt>vLLM</dt><dd>Model-serving engine</dd></div>
+              <div><dt><code>tensor_parallel_size</code></dt><dd>GPUs sharing tensor work</dd></div>
+              <div><dt><code>pipeline_parallel_size</code></dt><dd>Model-layer pipeline stages</dd></div>
+              <div><dt><code>kv_cache_dtype</code></dt><dd>KV-cache precision</dd></div>
+              <div><dt><code>kv_cache_memory</code></dt><dd>Memory reserved for KV cache</dd></div>
+              <div><dt><code>max_num_seqs</code></dt><dd>Concurrent sequences</dd></div>
+              <div><dt><code>max_num_batched_tokens</code></dt><dd>Tokens per batch</dd></div>
+              <div><dt><code>enable_prefix_caching</code></dt><dd>Reuse common prompt starts</dd></div>
+              <div><dt><code>max_model_len</code></dt><dd>Maximum context length</dd></div>
+              <div><dt><code>gpu_memory_utilization</code></dt><dd>vLLM GPU-memory fraction</dd></div>
+              <div><dt><code>quantization</code></dt><dd>Weight-compression format</dd></div>
+              <div><dt><code>dtype</code></dt><dd>Calculation precision</dd></div>
+              <div><dt><code>enforce_eager</code></dt><dd>Disable CUDA graph execution</dd></div>
+              <div><dt><code>disable_custom_all_reduce</code></dt><dd>Use standard GPU reduction</dd></div>
+              <div><dt><code>hf_overrides</code></dt><dd>Hugging Face config overrides</dd></div>
+            </dl>
+          </details>
+
         }
 
         <!-- Access -->
@@ -914,8 +895,21 @@
   [title]="benchmarkBatch() ? 'Start benchmark batch?' : 'Start benchmark?'"
   [message]="benchmarkConfirmationMessage()"
   icon="pi-play"
-  confirmLabel="Start benchmark"
+  [confirmLabel]="benchmarkBatch() ? 'Start batch' : 'Start benchmark'"
   [danger]="false"
   [loading]="benchmarkStartingPairId() !== null"
   (confirmed)="benchmarkConfirmPair() && startBenchmark(benchmarkConfirmPair()!)"
-/>
+>
+  <div modal-details class="benchmark-confirmation-details">
+    <dl>
+      <div><dt>Provider</dt><dd>{{ benchmarkConfirmPair()?.provider_name }}</dd></div>
+      <div><dt>Dataset</dt><dd>{{ benchmarkSettings().dataset }}</dd></div>
+      <div><dt>Samples per run</dt><dd>{{ benchmarkSampleSize() }}</dd></div>
+      <div><dt>Runs</dt><dd>{{ benchmarkTotalRuns() }}</dd></div>
+    </dl>
+    @if (hasServingOverrides()) {
+      <p>Changed vLLM settings may restart the model and remain active after the benchmark.</p>
+    }
+    @if (benchmarkBatch()) { <p>The batch runs automatically. You can stop it at any time.</p> }
+  </div>
+</app-modal-confirm>

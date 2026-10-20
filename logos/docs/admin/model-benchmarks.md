@@ -22,12 +22,12 @@ Only one benchmark job can run on a provider at a time.
 
 1. Open **Models → Model Management**.
 2. Select the model.
-3. Open **Performance**.
+3. Open **Performance → Run benchmark**.
 4. Select the worker or provider.
 5. Set the sample size.
 6. Open **Dataset and settings** to change the dataset, request profile or output limit.
 7. If necessary, change the vLLM settings for the selected Logos worker.
-8. Enable **Run a batch** to repeat runs or compare parameter values.
+8. Open **Repeat or compare settings** to configure a batch.
 
 The default dataset is `openai/gsm8k`, variant `main`, split `test`, with the `question` prompt column.
 The default run uses 50 samples, a sequential profile, seed 42 and at most 512 output tokens per request.
@@ -51,20 +51,25 @@ A small sample size does not necessarily limit the dataset download size.
 
 The screenshot shows the actual Performance component with synthetic example data.
 It omits the application shell and live services. It does not verify a GPU run.
-Dataset and request settings stay collapsed until needed. The charts show one completed measurement.
-The selected provider has one start action. Active runs on other providers remain visible.
+**Run benchmark** contains the provider, sample size and start action.
+Dataset settings and batch options stay collapsed until needed.
+**Results** contains the charts and run history.
+The settings remain unchanged when you switch between these views.
+Active runs on other providers remain visible in both views.
 
-![Desktop benchmark settings and single-run results](/img/benchmarks/performance-desktop.png)
+![Desktop benchmark setup](/img/benchmarks/performance-desktop.png)
 
 ## Confirm the start
 
-1. Select **Review & start benchmark**.
-2. Read the reservation and settings information.
+1. Select **Review benchmark**, or **Review batch** for a batch.
+2. Check the provider, dataset, sample size, run count and production traffic information.
 3. Select **Start benchmark** to submit the job, or **Cancel** to close the dialog.
 
 The dialog uses the same confirmation component as team deletion.
 Closing the dialog does not start a job.
 Closing the browser after confirmation does not stop a submitted job.
+After a successful start, **Results** opens and shows the job status.
+If the start fails, **Run benchmark** keeps your settings and shows the error.
 
 The screenshot shows the confirmation dialog with synthetic example data.
 The message explains when production requests can use the selected model lanes again.
@@ -92,12 +97,12 @@ Other traffic on that provider can affect the measurements.
 
 ## Run a batch
 
-1. Enable **Run a batch**.
+1. Open **Repeat or compare settings** and enable **Run a batch**.
 2. Set the repetitions per configuration.
 3. Add the parameters to vary.
 4. Enter each value list or numeric range.
 5. Check the configuration preview.
-6. Select **Review & start benchmark** and confirm the batch.
+6. Select **Review batch** and confirm the batch.
 
 One confirmation starts the complete batch.
 Each configuration repeats before the next configuration starts.
@@ -112,6 +117,7 @@ Worker disconnects and orchestrator restarts stop the job. Batches do not resume
 
 ## Read the comparison charts
 
+Open **Results**.
 Select a reference run and a metric in **Compare benchmark runs**.
 Each chart varies one parameter while the other recorded settings match the reference.
 The charts use separate vertical scales to show their measured ranges.
@@ -125,15 +131,27 @@ A result must be successful and complete, with the required configuration metada
 Logos does not infer missing controls in historical results.
 If a result is absent, check its completion state and recorded configuration.
 
+The desktop example shows one completed measurement and its recorded settings.
+It uses the same synthetic data as the setup example.
+
+![Desktop comparison charts and run history](/img/benchmarks/results-desktop.png)
+
 ### Mobile example
 
-At a 375px viewport, the settings and comparison charts stack vertically.
+At a 375px viewport, the setup fields and comparison charts stack vertically within their separate views.
 The single-run points remain visible. These screenshots use the same synthetic data as the desktop examples.
 
 <details>
-<summary>Show the mobile Performance page</summary>
+<summary>Show the mobile benchmark setup</summary>
 
-![Mobile benchmark settings and single-run charts](/img/benchmarks/performance-mobile.png)
+![Mobile benchmark setup](/img/benchmarks/performance-mobile.png)
+
+</details>
+
+<details>
+<summary>Show the mobile results</summary>
+
+![Mobile comparison charts and run history](/img/benchmarks/results-mobile.png)
 
 </details>
 
@@ -148,7 +166,7 @@ The mobile confirmation dialog contains the same reservation message and actions
 
 ## Change settings and retry a failed model
 
-**Use for next benchmark** copies a historical run's settings into an editable draft.
+**Use for next benchmark** copies a historical run's settings and opens **Run benchmark**.
 It does not change the stored result.
 Blank vLLM fields preserve the current worker values. Explicit `false` values remain overrides.
 
@@ -183,7 +201,8 @@ The CI forwarding-overhead benchmark uses a mock lane. It does not replace these
 
 ## Reload worker GPU limits
 
-Open **vLLM settings for the next run** and select **Reload GPU limits**.
+Open **Run benchmark → Dataset and settings → vLLM settings for the next run**.
+Select **Reload GPU limits**.
 The button stays available after a failed request or an unknown GPU count.
 
 ![Desktop view of the GPU limits reload button](/img/benchmarks/gpu-limits-desktop.png)

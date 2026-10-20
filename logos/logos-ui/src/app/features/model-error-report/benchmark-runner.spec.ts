@@ -77,17 +77,29 @@ describe('Benchmark runner', () => {
   });
   it('submits a full batch once and closes the confirmation dialog', async () => {
     const batch = { repetitions: 20, configurations: [{ ...component.benchmarkSettings(), samples: 50 }] };
+    component.performanceView.set('run');
     component.benchmarkBatch.set(batch);
     component.benchmarkConfirmPairId.set(1);
     await component.startBenchmark(pair);
     expect(service.startBenchmark).toHaveBeenCalledWith(1, 50, component.benchmarkSettings(), batch);
     expect(component.benchmarkConfirmPairId()).toBeNull();
     expect(component.benchmarkTotalRuns()).toBe(20);
+    expect(component.performanceView()).toBe('results');
   });
   it('does not submit an invalid batch', async () => {
     component.benchmarkBatchValid.set(false);
     await component.startBenchmark(pair);
     expect(service.startBenchmark).not.toHaveBeenCalled();
+  });
+
+  it('keeps the setup and error visible when starting fails', async () => {
+    component.performanceView.set('run');
+    component.benchmarkSampleSize.set(1);
+    service.startBenchmark.mockRejectedValue(new Error('unavailable'));
+    await component.startBenchmark(pair);
+    expect(component.performanceView()).toBe('run');
+    expect(component.benchmarkSampleSize()).toBe(1);
+    expect(component.benchmarkStartError()).toBe('Could not start the benchmark.');
   });
 
 });
