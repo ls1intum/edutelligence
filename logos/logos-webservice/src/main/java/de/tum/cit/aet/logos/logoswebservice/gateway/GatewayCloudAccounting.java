@@ -1,5 +1,9 @@
 package de.tum.cit.aet.logos.logoswebservice.gateway;
 
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -90,6 +94,17 @@ public class GatewayCloudAccounting {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayCloudAccounting.class);
 
+    /**
+     * The provider-window columns a settle writes. A timing the forward did
+     * not reach stays as it was (NULL on a fresh reservation), and the
+     * statistics fall back to the forwarding/response split for it.
+     */
+    private static final String TIMINGS_SET = """
+        timestamp_provider_call = COALESCE(CAST(:providerCall AS timestamptz), timestamp_provider_call),
+                   time_at_first_token = COALESCE(CAST(:firstToken AS timestamptz), time_at_first_token),
+                   timestamp_provider_response = COALESCE(CAST(:providerResponse AS timestamptz),
+                                                          timestamp_provider_response)""";
+
     /** The only levels {@code logging_enum} has; anything else is not a level we may store. */
     private static final String LEVEL_FULL = GatewayLoggingLevel.LEVEL_FULL;
     private static final String LEVEL_BILLING = GatewayLoggingLevel.LEVEL_BILLING;
@@ -149,6 +164,40 @@ public class GatewayCloudAccounting {
     @Transactional
     public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
                                    byte[] requestBody, String logLevel) {
+        return admitAndReserve(key, deployment, requestBody, logLevel, null);
+    }
+
+    /**
+     * Check budget then insert an in-flight reservation, dated from when the
+     * request arrived.
+     *
+     * <p>The row's {@code timestamp_request} is the arrival instant, its
+     * {@code timestamp_forwarding} the moment admission ended. Everything the
+     * request waited for in between — the key lookup, the rate limit, the
+     * budget check, a free database connection — then shows up in the queue
+     * figure the statistics page reads, instead of vanishing before the row
+     * exists.
+     *
+     * @param logLevel  the effective request logging level ({@code FULL} or {@code BILLING})
+     * @param arrivedAt when the request reached the gateway; null dates it at admission
+     * @return log_entry id, or {@code null} when reservation amount is 0
+     */
+    @Transactional
+    public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
+                                   byte[] requestBody, String logLevel, Instant arrivedAt) {
+        return admitAndReserve(key, deployment, requestBody, logLevel, arrivedAt, null);
+    }
+
+    /**
+     * As {@link #admitAndReserve(GatewayKey, GatewayDeployment, byte[], String, Instant)},
+     * also storing the reasoning effort the request is forwarded with.
+     *
+     * @param reasoningEffort the effort in the forwarded body, lower-cased; null when it carries none
+     */
+    @Transactional
+    public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
+                                   byte[] requestBody, String logLevel, Instant arrivedAt,
+                                   String reasoningEffort) {
         budgetService.enforceCloudBudget(key, deployment.providerId());
 
         if (reservationMicroCents <= 0) {
@@ -156,7 +205,10 @@ public class GatewayCloudAccounting {
         }
         String privacy = privacyLevel(logLevel);
         String requestId = "gw-" + UUID.randomUUID();
+        Instant admittedAt = Instant.now();
         MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("arrived", utc(arrivedAt != null && arrivedAt.isBefore(admittedAt) ? arrivedAt : admittedAt))
+            .addValue("admitted", utc(admittedAt))
             .addValue("request_id", requestId)
             .addValue("api_key_id", key.id())
             .addValue("team_id", key.teamId())
@@ -166,6 +218,7 @@ public class GatewayCloudAccounting {
             .addValue("provider_id", deployment.providerId())
             .addValue("settled", reservationMicroCents)
             .addValue("privacy_level", privacy)
+            .addValue("reasoning_effort", reasoningEffort)
             .addValue("input_payload",
                 GatewayLoggingLevel.storesPayloads(privacy) ? asJsonb(requestBody) : null);
         KeyHolder keys = new GeneratedKeyHolder();
@@ -175,13 +228,14 @@ public class GatewayCloudAccounting {
                 api_key_id, team_id, user_id, environment,
                 model_id, provider_id, request_id,
                 result_status, cost_finalized, settled_cost_micro_cents,
-                privacy_level, input_payload
+                privacy_level, input_payload, reasoning_effort
             ) VALUES (
-                NOW(), NOW(),
+                :arrived, :admitted,
                 :api_key_id, :team_id, :user_id, :environment,
                 :model_id, :provider_id, :request_id,
                 NULL, TRUE, :settled,
-                CAST(:privacy_level AS logging_enum), CAST(:input_payload AS jsonb)
+                CAST(:privacy_level AS logging_enum), CAST(:input_payload AS jsonb),
+                CAST(:reasoning_effort AS TEXT)
             )
             """, params, keys, new String[] {"id"});
         Number id = keys.getKey();
@@ -224,6 +278,23 @@ public class GatewayCloudAccounting {
     @Transactional
     public void settleSuccess(Integer logEntryId, Map<String, Long> usage,
                               byte[] responseBody, String serviceTier) {
+        settleSuccess(logEntryId, usage, responseBody, serviceTier, GatewayForwardTimings.NONE);
+    }
+
+    /**
+     * Settle the in-flight reservation as a success, with the instants the
+     * forward passed through.
+     *
+     * <p>The timings fill {@code timestamp_provider_call},
+     * {@code time_at_first_token} and {@code timestamp_provider_response}, so a
+     * cloud row splits into Logos-side wait and provider time like an
+     * orchestrator row, and carries a time to first token.
+     *
+     * @param timings when the upstream was called, answered first and finished
+     */
+    @Transactional
+    public void settleSuccess(Integer logEntryId, Map<String, Long> usage,
+                              byte[] responseBody, String serviceTier, GatewayForwardTimings timings) {
         if (logEntryId == null) {
             return;
         }
@@ -235,22 +306,25 @@ public class GatewayCloudAccounting {
         // response reported.
         int claimed = jdbc.update(priced ? """
             UPDATE log_entry
-               SET timestamp_response = NOW(),
+               SET timestamp_response = :responded,
+                   %s,
                    result_status = 'success',
                    service_tier = :serviceTier,
                    settled_cost_micro_cents = NULL,
                    cost_finalized = FALSE
              WHERE id = :id
                AND result_status IS NULL
-            """ : """
+            """.formatted(TIMINGS_SET) : """
             UPDATE log_entry
-               SET timestamp_response = NOW(),
+               SET timestamp_response = :responded,
+                   %s,
                    result_status = 'success',
                    service_tier = :serviceTier,
                    cost_finalized = TRUE
              WHERE id = :id
                AND result_status IS NULL
-            """, new MapSqlParameterSource("id", logEntryId).addValue("serviceTier", serviceTier));
+            """.formatted(TIMINGS_SET),
+            timingParams(timings).addValue("id", logEntryId).addValue("serviceTier", serviceTier));
         if (claimed == 0) {
             return;
         }
@@ -334,6 +408,30 @@ public class GatewayCloudAccounting {
             """, new MapSqlParameterSource()
             .addValue("id", logEntryId)
             .addValue("payload", payload));
+    }
+
+    /**
+     * Bind the forward's instants. Every stamp on a gateway row comes from this
+     * process's clock — arrival, admission, the provider window and the end —
+     * so the intervals between them never mix two clocks.
+     */
+    private static MapSqlParameterSource timingParams(GatewayForwardTimings timings) {
+        GatewayForwardTimings t = timings == null ? GatewayForwardTimings.NONE : timings;
+        return new MapSqlParameterSource()
+            .addValue("responded", utc(Instant.now()))
+            .addValue("providerCall", utc(t.providerCall()))
+            .addValue("firstToken", utc(t.firstToken()))
+            .addValue("providerResponse", utc(t.providerResponse()));
+    }
+
+    /**
+     * The instant as a UTC timestamp at the column's precision. The JVM clock
+     * can carry nanoseconds, which the JDBC driver would round to microseconds;
+     * truncating here keeps every stored timestamp at or before the instant it
+     * stands for, so the intervals between them never come out negative.
+     */
+    private static OffsetDateTime utc(Instant instant) {
+        return instant == null ? null : instant.truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC);
     }
 
     /** Normalise a resolved level to a value {@code logging_enum} accepts. */
@@ -486,6 +584,15 @@ public class GatewayCloudAccounting {
 
     /** Drop the reservation so a failed upstream does not consume budget. */
     public void settleFailure(Integer logEntryId, String errorMessage) {
+        settleFailure(logEntryId, errorMessage, GatewayForwardTimings.NONE);
+    }
+
+    /**
+     * Drop the reservation so a failed upstream does not consume budget, and
+     * keep the instants the forward reached so the failure's provider time is
+     * not read as Logos-side wait.
+     */
+    public void settleFailure(Integer logEntryId, String errorMessage, GatewayForwardTimings timings) {
         if (logEntryId == null) {
             return;
         }
@@ -493,13 +600,14 @@ public class GatewayCloudAccounting {
             : (errorMessage.length() > 500 ? errorMessage.substring(0, 500) : errorMessage);
         jdbc.update("""
             UPDATE log_entry
-               SET timestamp_response = NOW(),
+               SET timestamp_response = :responded,
+                   %s,
                    result_status = 'error',
                    settled_cost_micro_cents = 0,
                    cost_finalized = TRUE,
                    error_message = :err
              WHERE id = :id
-            """, new MapSqlParameterSource()
+            """.formatted(TIMINGS_SET), timingParams(timings)
             .addValue("id", logEntryId)
             .addValue("err", msg));
     }

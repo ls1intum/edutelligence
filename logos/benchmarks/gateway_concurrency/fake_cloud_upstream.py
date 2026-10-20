@@ -251,6 +251,6 @@ if __name__ == "__main__":  # pragma: no cover
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.environ.get("LOGOS_BENCH_GW_UPSTREAM_PORT", "9100")),
+        port=int(os.environ.get("LOGOS_BENCH_GW_UPSTREAM_PORT", "19100")),
         log_level="warning",
     )

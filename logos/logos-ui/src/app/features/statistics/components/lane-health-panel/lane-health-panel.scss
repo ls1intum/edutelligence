@@ -104,6 +104,46 @@
 
 // Wake/Sleep: unlike Unload they are not destructive, so they share one
 // neutral treatment — the labels (and tooltips) carry the semantics.
+.btn-lane-lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  color: rgb(var(--color-typography-500));
+  background: transparent;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+
+  &--locked {
+    color: rgb(var(--color-primary-400));
+    border-color: rgb(var(--color-primary-400));
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+  }
+
+  .lock-icon {
+    width: 13px;
+    height: 13px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+}
+
 .btn-lane-action {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);

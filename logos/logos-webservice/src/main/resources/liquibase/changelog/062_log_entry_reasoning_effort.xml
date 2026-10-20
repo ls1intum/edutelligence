@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- The reasoning effort a request was served with.
+
+         The value actually sent to the provider, lower-cased: for a local
+         model the orchestrator maps a client's effort onto the scale the
+         model's chat template accepts before forwarding, so this is the
+         effort after that mapping, not the one the client asked for. The
+         gateway forwards a direct-cloud body unchanged and stores the effort
+         as the client sent it. NULL when the request carried no effort.
+
+         The request delay table on the model details page groups by it, so
+         a model's delays can be read per effort. -->
+    <changeSet id="062-log-entry-reasoning-effort" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="log_entry" columnName="reasoning_effort"/></not>
+        </preConditions>
+        <sql>
+            ALTER TABLE log_entry ADD COLUMN reasoning_effort TEXT;
+        </sql>
+    </changeSet>
+</databaseChangeLog>
