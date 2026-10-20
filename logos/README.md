@@ -15,7 +15,7 @@ See the [agent runner](logos-agent/README.md) for how Logos runs coding agents i
 
 ## Nightly model benchmarks
 
-Automatic calibration runs first (03:00–05:00 Europe/Berlin by default).
+Automatic calibration runs first (05:00–08:00 Europe/Berlin by default).
 Benchmarks use the remaining time. Only one calibration or benchmark runs
 across the cluster, including manual starts.
 
@@ -25,10 +25,10 @@ confirmation. Schedules start disabled.
 
 - Test at most **2 enabled pairs per night**, one worker at a time. Untested
   pairs come first, then the oldest previous attempt. Unavailable pairs are skipped.
-- Start configurations between **03:00 and 04:50 Europe/Berlin**. At 05:00,
+- Start configurations between **05:00 and 07:50 Europe/Berlin**. At 08:00,
   continue only if at least 50% of measured requests completed successfully.
 - Stop after **5 minutes without output or completed requests**. Retry a stalled
-  configuration once before 04:50, then skip it if it stalls again.
+  configuration once before 07:50, then skip it if it stalls again.
 - Compare the current settings with selected batching-parameter variants on a
   fixed dataset. Show the model and planned values above the dataset previews.
 - Restore the original worker configuration after the plan. Store results for

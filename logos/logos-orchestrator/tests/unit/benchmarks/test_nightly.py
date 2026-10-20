@@ -12,15 +12,15 @@ from logos.benchmarks.progress import observe_response
 @pytest.mark.parametrize(
     "timestamp, expected",
     [
-        ("2026-10-13T02:59:59+02:00", False),
-        ("2026-10-13T03:00:00+02:00", True),
-        ("2026-10-13T04:49:59+02:00", True),
-        ("2026-10-13T04:50:00+02:00", False),
-        ("2026-10-13T05:00:00+02:00", False),
-        ("2026-10-13T01:00:00+00:00", True),
-        ("2026-12-13T02:00:00+00:00", True),
-        ("2026-03-29T01:00:00+00:00", True),
-        ("2026-10-25T02:00:00+00:00", True),
+        ("2026-10-20T04:59:59+02:00", False),
+        ("2026-10-20T05:00:00+02:00", True),
+        ("2026-10-20T07:49:59+02:00", True),
+        ("2026-10-20T07:50:00+02:00", False),
+        ("2026-10-20T08:00:00+02:00", False),
+        ("2026-10-20T03:00:00+00:00", True),
+        ("2026-12-20T04:00:00+00:00", True),
+        ("2026-03-29T03:00:00+00:00", True),
+        ("2026-10-25T04:00:00+00:00", True),
         ("2026-10-25T01:30:00+00:00", False),
     ],
 )
@@ -36,7 +36,7 @@ def test_naive_clock_rejected():
 @pytest.fixture
 def policy_clock(monkeypatch):
     monkeypatch.setattr(nightly, "POLL_SECONDS", 0)
-    monkeypatch.setattr(nightly, "local_now", lambda: datetime.fromisoformat("2026-10-13T05:00:00+02:00"))
+    monkeypatch.setattr(nightly, "local_now", lambda: datetime.fromisoformat("2026-10-13T08:00:00+02:00"))
 
 
 @pytest.mark.parametrize("completed", [0, 24])
@@ -57,7 +57,7 @@ async def test_cutoff_cancels_below_half_and_awaits_cleanup(policy_clock, comple
 
 
 @pytest.mark.parametrize("completed", [25, 49])
-async def test_half_complete_run_finishes_after_five(policy_clock, completed):
+async def test_half_complete_run_finishes_after_eight(policy_clock, completed):
     async def execute():
         for _ in range(5):
             await asyncio.sleep(0)
@@ -143,3 +143,25 @@ def test_parameter_plan_changes_only_one_known_parameter_and_fixes_workload():
 
 def test_unknown_batching_settings_only_run_baseline():
     assert len(nightly.parameter_plan({})) == 1
+
+
+async def test_unfinished_run_is_not_stopped_before_shared_cutoff(monkeypatch):
+    monkeypatch.setattr(nightly, "POLL_SECONDS", 0)
+    monkeypatch.setattr(nightly, "local_now", lambda: datetime.fromisoformat("2026-10-20T07:59:59+02:00"))
+
+    async def execute():
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return 17
+
+    assert await nightly.supervise(execute, nightly.RunProgress(50, measuring=True), lambda: True) == 17
+
+
+async def test_supervision_uses_configured_window_end(monkeypatch):
+    monkeypatch.setenv("LOGOS_MAINTENANCE_WINDOW_END", "09:00")
+    monkeypatch.setattr(nightly, "POLL_SECONDS", 0)
+    monkeypatch.setattr(nightly, "local_now", lambda: datetime.fromisoformat("2026-10-20T09:00:00+02:00"))
+    with pytest.raises(nightly.NightlyStopped, match="window_closed_below_half"):
+        await nightly.supervise(
+            lambda: asyncio.Event().wait(), nightly.RunProgress(50, completed=24, measuring=True), lambda: True
+        )

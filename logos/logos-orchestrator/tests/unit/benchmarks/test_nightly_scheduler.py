@@ -48,7 +48,7 @@ def scheduler(monkeypatch):
         "model_name": "model",
     }
     monkeypatch.setattr(module, "DBManager", lambda: db)
-    monkeypatch.setattr(module, "local_now", lambda: datetime.fromisoformat("2026-10-13T03:00:00+02:00"))
+    monkeypatch.setattr(module, "local_now", lambda: datetime.fromisoformat("2026-10-13T05:00:00+02:00"))
     monkeypatch.setattr(module.store, "status", lambda _: {"enabled": True})
     monkeypatch.setattr(module.store, "lock_held", lambda _: True)
     service.saved = []
@@ -119,7 +119,7 @@ async def test_single_worker_never_taken_out_of_production(scheduler):
 
 
 async def test_no_configuration_or_retry_starts_at_0450(scheduler, monkeypatch):
-    monkeypatch.setattr(module, "local_now", lambda: datetime.fromisoformat("2026-10-13T04:50:00+02:00"))
+    monkeypatch.setattr(module, "local_now", lambda: datetime.fromisoformat("2026-10-13T07:50:00+02:00"))
     scheduler.submit = AsyncMock()
     assert await scheduler.run_schedule(31, MagicMock())
     scheduler.submit.assert_not_awaited()

@@ -8,6 +8,7 @@ from logos.benchmarks.guidellm_runner import extract_serving_configuration
 from logos.benchmarks.nightly import parameter_plan
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import NightlyStatusRequest, NightlyUpdateRequest
+from logos.maintenance_window import MaintenanceWindow
 from logos.routers.internal import _require_internal_secret
 
 router = APIRouter(prefix="/internal/model_benchmarks/nightly", tags=["admin"])
@@ -30,7 +31,8 @@ async def nightly_status(data: NightlyStatusRequest, request: Request):
     result["plan"] = [
         run.model_dump() for run in parameter_plan(extract_serving_configuration(snapshot, target["model_name"]))
     ]
-    result["timezone"] = "Europe/Berlin"
+    result["window"] = MaintenanceWindow.from_env().describe()
+    result["timezone"] = result["window"]["timezone"]
     return result
 
 
@@ -43,6 +45,8 @@ async def configure_nightly(data: NightlyUpdateRequest, request: Request):
         if not (snapshot.get("runtime") or {}).get("supports_benchmark_restart"):
             raise HTTPException(status_code=409, detail="Update and connect this worker before enabling nightly runs")
     try:
-        return store.set_enabled(data.model_provider_id, data.enabled, data.expected_enabled)
+        result = store.set_enabled(data.model_provider_id, data.enabled, data.expected_enabled)
+        result["window"] = MaintenanceWindow.from_env().describe()
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

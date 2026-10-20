@@ -60,6 +60,10 @@ class LiquibaseBaselineTest {
             "SELECT filename FROM databasechangelog WHERE id = ? AND author = ?",
             String.class, "057-nightly-benchmarks", "logos"))
             .containsExactly("liquibase/changelog/057_nightly_benchmarks.xml");
+        assertThat(jdbc.queryForList(
+            "SELECT filename FROM databasechangelog WHERE id = ? AND author = ?",
+            String.class, "061-maintenance-calibration", "logos"))
+            .containsExactly("liquibase/changelog/061_maintenance_calibration.xml");
     }
 
     @Test

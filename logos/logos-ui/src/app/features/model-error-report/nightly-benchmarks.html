@@ -4,7 +4,7 @@
       <strong><i class="pi pi-moon" aria-hidden="true"></i> Nightly benchmarks · {{ providerName }}</strong>
       <p role="status">{{ state() ? (state()!.enabled ? 'Nightly runs activated' : 'Nightly runs deactivated') : 'Loading nightly status…' }}</p>
     </div>
-    <button type="button" (click)="review()" [disabled]="!state() || saving() || (!state()!.enabled && state()!.recovery_required)">
+    <button type="button" (click)="review()" [disabled]="!state() || saving() || (!state()!.enabled && (!window || state()!.recovery_required))">
       {{ state()?.enabled ? 'Disable nightly runs…' : 'Enable nightly runs…' }}
     </button>
   </div>
@@ -23,8 +23,12 @@
     </div>
   </dl>
   <p>Up to 2 enabled model/worker pairs per night · never tested or oldest run first</p>
-  <p>03:00–04:50 starts · Europe/Berlin · one worker at a time</p>
-  <p>At 05:00: finish the current run at ≥50% complete; otherwise stop. Five minutes without progress stops the run.</p>
+  @if (window; as timing) {
+    <p>{{ timing.start }}–{{ timing.end }} · {{ timing.timezone }} · calibration first, then benchmarks</p>
+    <p>No new benchmark configuration after {{ timing.benchmark_start_cutoff }}. At {{ timing.end }}: finish the current run at ≥50% complete; otherwise stop. Five minutes without progress stops the run.</p>
+  } @else {
+    <p>Waiting for the shared maintenance window…</p>
+  }
   @if (state(); as status) {
     <small>Latest state: {{ statusLabel(status.status) }} @if (status.last_run_date) { · {{ status.last_run_date }} }</small>
     @if (status.recovery_required) { <p role="alert">Worker recovery is pending. Further nightly benchmarks are paused.</p> }

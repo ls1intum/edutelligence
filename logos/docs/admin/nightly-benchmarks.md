@@ -58,7 +58,7 @@ parameter configurations and the bounded retry belong to the same pair's slot.
 The count persists across application restarts and disabling/re-enabling a
 schedule cannot reset it. The next Berlin calendar date has a fresh quota.
 
-The 04:50 admission cutoff can leave fewer than 2 pairs tested. Remaining
+The 07:50 admission cutoff can leave fewer than 2 pairs tested. Remaining
 pairs keep their priority for the next night. Recovery of an interrupted worker
 always happens before selection, even when tonight's quota is already full.
 
@@ -66,8 +66,8 @@ always happens before selection, even when tonight's quota is already full.
 
 All times use `Europe/Berlin`, including daylight-saving changes.
 
-- Start configurations and retries from 03:00 inclusive to 04:50 exclusive.
-- At 05:00, stop an active run with fewer than 50% of its measured requests
+- Start configurations and retries from 05:00 inclusive to 07:50 exclusive.
+- At 08:00, stop an active run with fewer than 50% of its measured requests
   successfully completed. Started requests and output tokens do not count
   toward this percentage. With 50 samples, at least 25 must have completed.
 - At or above 50%, let the current configuration finish. Do not start another
@@ -75,9 +75,9 @@ All times use `Europe/Berlin`, including daylight-saving changes.
   an outer limit; the preparation budget is separate.
 - During measurement, 5 minutes without output content or a successful
   request completion stops the run. Transport and lease heartbeats do not
-  count. This watchdog also applies after 05:00.
+  count. This watchdog also applies after 08:00.
 - A stalled run gets at most 1 retry with the same configuration, after a
-  worker-lane restart, and only before 04:50. A second stall skips that
+  worker-lane restart, and only before 07:50. A second stall skips that
   configuration. Configuration errors are recorded and skipped without retry.
 - Preparation and warm-up have a separate 15-minute budget. Worker draining
   also has a 15-minute budget. Cleanup can finish after the nominal window.
@@ -162,14 +162,19 @@ enabled by the migration or by application startup.
 
 ## Calibration priority and shared execution
 
-Automatic calibration remains enabled by default, from 03:00 to 05:00 in `Europe/Berlin`.
-The `LOGOS_CALIB_WINDOW_START`, `LOGOS_CALIB_WINDOW_END` and `LOGOS_CALIB_TIMEZONE` variables control calibration.
+Automatic calibration remains enabled by default, from 05:00 to 08:00 in `Europe/Berlin`.
+The `LOGOS_MAINTENANCE_WINDOW_START`, `LOGOS_MAINTENANCE_WINDOW_END` and `LOGOS_MAINTENANCE_TIMEZONE` variables define the shared window.
+The old `LOGOS_CALIB_WINDOW_*` and `LOGOS_CALIB_TIMEZONE` variables no longer control the window.
+Replace those deployment settings before the update.
+The Performance tab reads the effective times from the status API.
 `LOGOS_CALIB_ENABLED=false` disables automatic calibration. It does not disable manual calibration.
-These variables do not change the benchmark time limits.
+These shared variables control calibration and benchmarks.
+The window must end on the same day, more than 10 minutes after its start.
+New benchmark configurations stop 10 minutes before the window ends.
 
 Calibration has priority. A healthy worker with pending calibration blocks new benchmarks during the calibration window.
 Each worker gets at most 1 automatic calibration attempt per window.
-Benchmarks start only after these attempts finish and before 04:50.
+Benchmarks start only after these attempts finish and before 07:50.
 If new calibration work appears during a benchmark, the current run finishes first.
 The scheduler restores the worker and stops the remaining benchmark plan with `calibration_pending`.
 
@@ -234,8 +239,8 @@ last successful measurement. The current pair limit is the code constant
 | `unavailable` | Admission skipped the pair. Read the report for worker, lane or capacity requirements. No nightly slot was consumed. |
 | `preparing` / `running` | The pair has a nightly slot. The scheduler reserves the worker and executes its plan. |
 | `completed` | The plan finished. Inspect individual outcomes; this does not mean every configuration succeeded. |
-| `window_closed` | No further configuration can start after 04:50. |
-| `window_closed_below_half` | The 05:00 check found fewer than 25 of 50 successful completions. |
+| `window_closed` | No further configuration can start after 07:50. |
+| `window_closed_below_half` | The 08:00 check found fewer than 25 of 50 successful completions. |
 | `preparation_timeout` / `stalled` | Preparation exceeded its budget, or measurement stopped making progress. Inspect the attempt report. |
 | `recovery_required` | The original configuration is not ready. Resolve the worker error; keep the reservation and journal intact. |
 | `interrupted_recovered` | The scheduler restored a worker from its persisted recovery journal. |
@@ -243,7 +248,7 @@ last successful measurement. The current pair limit is the code constant
 
 A restart, a failed run or an opt-in change does not clear the nightly quota.
 If fewer than 2 pairs run, check eligibility, existing manual jobs, recovery
-and the 04:50 cutoff. One long pair can use the available admission window.
+and the 07:50 cutoff. One long pair can use the available admission window.
 
 ## Validation
 
@@ -266,6 +271,6 @@ NIGHTLY_TEST_DB_URL="$TEST_DATABASE_URL" \
 Before the first production activation, deploy the complete change to a test
 environment with supported workers. Validate an actual benchmark and stored
 result, the confirmation controls, quota rotation, cancellation, retry and
-restoration. Exercise 04:50 and both sides of the 05:00 threshold with a
+restoration. Exercise 07:50 and both sides of the 08:00 threshold with a
 controlled test clock. Verify that other workers still accept production traffic.
 A UI or database test alone does not verify an overnight run on real GPU hardware.

@@ -5,14 +5,14 @@ import time as clock
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime, time, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from logos.benchmarks.configuration import BenchmarkRunSettings, ServingOverrides
+from logos.maintenance_window import MaintenanceWindow
 
 NIGHTLY_CONTEXT: ContextVar[bool] = ContextVar("nightly_benchmark", default=False)
 LEASE_CHECK: ContextVar[Callable[[], bool]] = ContextVar("nightly_lease_check", default=lambda: True)
-BERLIN = ZoneInfo("Europe/Berlin")
 STALL_SECONDS = 300
 PREPARATION_SECONDS = 900
 POLL_SECONDS = 1
@@ -20,14 +20,12 @@ MAX_PAIRS_PER_NIGHT = 2
 
 
 def local_now() -> datetime:
-    return datetime.now(timezone.utc).astimezone(BERLIN)
+    return datetime.now(timezone.utc).astimezone(ZoneInfo(MaintenanceWindow.from_env().timezone))
 
 
 def can_start(now: datetime) -> bool:
-    """Admit configurations and retries only from 03:00 until 04:50 Berlin."""
-    if now.utcoffset() is None:
-        raise ValueError("The benchmark clock must include a timezone")
-    return time(3) <= now.astimezone(BERLIN).time() < time(4, 50)
+    """Admit configurations until 10 minutes before the shared window ends."""
+    return MaintenanceWindow.from_env().can_start_benchmark(now)
 
 
 @dataclass
@@ -69,12 +67,13 @@ async def supervise(
     progress: RunProgress,
     enabled: Callable[[], bool],
 ) -> int | None:
-    """Cancel on inactivity, disable or a less-than-half-complete 05:00 cutoff.
+    """Cancel on inactivity, disable or a less-than-half-complete maintenance cutoff.
 
     The cutoff decision is made once for the current run. A permitted overrun
     still has the inactivity watchdog and the runner's existing total timeout.
     Cancellation is awaited before returning control to node cleanup.
     """
+    cutoff = MaintenanceWindow.from_env().bounds(local_now())[1]
     task = asyncio.create_task(execute())
     cutoff_checked = False
     try:
@@ -92,7 +91,7 @@ async def supervise(
                 reason = "preparation_timeout"
             elif progress.measuring and clock.monotonic() - progress.last_progress >= STALL_SECONDS:
                 reason = "stalled"
-            elif not cutoff_checked and now.time() >= time(5):
+            elif not cutoff_checked and now >= cutoff:
                 cutoff_checked = True
                 if not progress.measuring or progress.completed * 2 < progress.total:
                     reason = "window_closed_below_half"

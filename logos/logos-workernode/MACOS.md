@@ -463,7 +463,7 @@ whole-process `VLLM_METAL_MEMORY_FRACTION`), no TP (single GPU), no sleep
 (see above). The result is stored in Logos like every other profile, with
 `residency_source="calibrated"`. The "Calibrate uncalibrated" admin action
 remains available on Metal nodes. Automatic calibration runs first in the
-03:00–05:00 Berlin maintenance window. The opt-in
+05:00–08:00 Berlin maintenance window. The opt-in
 [nightly benchmark rotation](../docs/admin/nightly-benchmarks.md) uses the remaining
 time on supported vLLM workers. Calibration and benchmarks never overlap across
 the cluster, including manual starts.

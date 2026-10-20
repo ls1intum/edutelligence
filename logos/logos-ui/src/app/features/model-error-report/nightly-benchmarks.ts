@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 
 export interface NightlyStatus {
+  window?: { start: string; end: string; benchmark_start_cutoff: string; timezone: string };
   enabled: boolean;
   status: string;
   recovery_required: boolean;
@@ -77,12 +78,17 @@ export class NightlyBenchmarks implements OnChanges, OnDestroy {
     });
   }
 
+  get window() {
+    return this.state()?.window;
+  }
+
   statusLabel(value: string): string {
     const labels: Record<string, string> = {
       scheduled: 'Waiting in nightly rotation', unavailable: 'Waiting for an available worker', preparing: 'Preparing worker', running: 'Benchmark in progress',
       completed: 'Finished — see results', disabled: 'Deactivated', success: 'Successful', failed: 'Failed',
       stalled: 'Stopped after five minutes without progress', preparation_timeout: 'Preparation timed out',
-      window_closed: 'No new runs after 04:50', window_closed_below_half: 'Stopped at 05:00 below 50% complete',
+      window_closed: this.window ? `No new runs after ${this.window.benchmark_start_cutoff}` : 'Benchmark start window closed', window_closed_below_half: this.window ? `Stopped at ${this.window.end} below 50% complete` : 'Stopped below 50% at the maintenance cutoff',
+      calibration_pending: 'Waiting for calibration',
       recovery_required: 'Worker recovery required', interrupted_recovered: 'Interrupted; worker restored',
       interrupted: 'Interrupted', cancelled: 'Cancelled', lease_lost: 'Maintenance ownership lost',
     };
@@ -90,7 +96,7 @@ export class NightlyBenchmarks implements OnChanges, OnDestroy {
   }
 
   review(): void {
-    if (!this.state() || this.saving()) return;
+    if (!this.state() || this.saving() || (!this.state()!.enabled && !this.window)) return;
     this.expected = this.state()!.enabled;
     this.error.set(null);
     this.confirming.set(true);
@@ -99,8 +105,10 @@ export class NightlyBenchmarks implements OnChanges, OnDestroy {
   get enabling(): boolean { return !this.expected; }
 
   get confirmationMessage(): string {
+    const window = this.window;
+    if (this.enabling && !window) return 'The maintenance window is unavailable. Refresh before enabling nightly runs.';
     return this.enabling
-      ? `Add this model on ${this.providerName} to the nightly rotation? Each night selects up to two enabled model/worker pairs, never-tested pairs first, then the oldest previous run. Unavailable pairs are skipped. Starts are allowed 03:00–04:50 Europe/Berlin. At 05:00, the current run continues only if at least 50% of requests have completed. Five minutes without output or completed requests stops it, with at most one retry before 04:50. One worker is reserved at a time; another healthy worker must remain available. The fixed workload is GSM8K, 50 requests, 512 max output tokens and concurrency 4. Current settings are the baseline; only known sequence and batch-token limits vary by ±25%. Original settings are restored afterwards. These runs use their own fixed plan, independent of the manual editor.`
+      ? `Add this model on ${this.providerName} to the nightly rotation? Each night selects up to two enabled model/worker pairs, never-tested pairs first, then the oldest previous run. Unavailable pairs are skipped. The shared maintenance window is ${window!.start}–${window!.end} ${window!.timezone}. Calibration runs first; benchmarks use the remaining time. Benchmark starts are allowed until ${window!.benchmark_start_cutoff}. At ${window!.end}, the current run continues only if at least 50% of requests have completed. Five minutes without output or completed requests stops it, with at most one retry before ${window!.benchmark_start_cutoff}. Only one calibration or benchmark runs across the cluster, including manual starts. One worker is reserved at a time; another healthy worker must remain available. The fixed workload is GSM8K, 50 requests, 512 max output tokens and concurrency 4. Current settings are the baseline; only known sequence and batch-token limits vary by ±25%. Original settings are restored afterwards. These runs use their own fixed plan, independent of the manual editor.`
       : `Disable nightly benchmarks for this model on ${this.providerName}? Future runs will stop. An active nightly run will be cancelled and its original settings restored before the worker returns to production.`;
   }
 
@@ -115,7 +123,7 @@ export class NightlyBenchmarks implements OnChanges, OnDestroy {
           model_provider_id: this.pairId, enabled: !this.expected, expected_enabled: this.expected,
         }));
       if (version !== this.version || this.destroyed) return;
-      this.state.set({ ...state, plan: state.plan ?? this.state()?.plan });
+      this.state.set({ ...state, plan: state.plan ?? this.state()?.plan, window: state.window ?? this.state()?.window });
       this.confirming.set(false);
       this.error.set(null);
     } catch (error) {

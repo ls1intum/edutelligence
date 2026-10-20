@@ -12,9 +12,17 @@ describe('Nightly benchmark confirmation', () => {
     control = TestBed.runInInjectionContext(() => new NightlyBenchmarks());
     control.pairId = 31;
     control.providerName = 'Worker A';
-    control.state.set({ enabled: false, status: 'disabled', report: [], recovery_required: false });
+    control.state.set({ enabled: false, status: 'disabled', report: [], recovery_required: false,
+      window: { start: '05:00', end: '08:00', benchmark_start_cutoff: '07:50', timezone: 'Europe/Berlin' } });
   });
   afterEach(() => { control.ngOnDestroy(); http.verify(); });
+
+  it('does not activate with missing server window settings', () => {
+    control.state.set({ enabled: false, status: 'disabled', report: [], recovery_required: false });
+    control.review();
+    expect(control.confirming()).toBe(false);
+    http.expectNone('/api/logosdb/model_benchmarks/nightly/configure');
+  });
 
   it('requires confirmation to enable and disable', async () => {
     await control.confirm();
@@ -64,5 +72,20 @@ describe('Nightly benchmark confirmation', () => {
     poll.flush({ enabled: false, status: 'disabled', report: [], recovery_required: false });
     await refresh;
     expect(control.state()!.enabled).toBe(true);
+  });
+});
+
+describe('Shared maintenance window display', () => {
+  it('uses the server window in confirmations and cutoff labels', () => {
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    const control = TestBed.runInInjectionContext(() => new NightlyBenchmarks());
+    control.state.set({ enabled: false, status: 'disabled', report: [], recovery_required: false,
+      window: { start: '06:00', end: '09:00', benchmark_start_cutoff: '08:50', timezone: 'UTC' } });
+    control.review();
+    expect(control.confirmationMessage).toContain('06:00–09:00 UTC');
+    expect(control.confirmationMessage).toContain('Calibration runs first');
+    expect(control.confirmationMessage).toContain('until 08:50');
+    expect(control.statusLabel('window_closed_below_half')).toContain('09:00');
+    control.ngOnDestroy();
   });
 });

@@ -13,7 +13,7 @@ same Performance tab.
 | Selection | Admin selects a pair and starts a run or batch | Up to 2 enabled, available pairs per night; oldest attempts first |
 | Workload | Editable dataset, sample count and request settings | GSM8K main/test, 50 requests, 512 max output tokens, concurrency 4, seed 42 |
 | Parameter search | Admin's overrides or batch sweep | Baseline and ±25% variants of known sequence/batch-token limits |
-| Admission window | Explicit admin start | 03:00–04:50 Europe/Berlin, including retries |
+| Admission window | Explicit admin start | 05:00–07:50 Europe/Berlin, including retries |
 | Failure handling | Failed batch stops its remaining runs | One retry after a stall; skip the configuration after another stall |
 | After the run | Applied serving overrides remain active | Restore the original production configuration |
 
@@ -97,9 +97,9 @@ restore settings already applied to a worker.
 
 ## Shared maintenance admission
 
-Calibration runs first during its configured window (03:00–05:00 Europe/Berlin
+Calibration runs first during its configured window (05:00–08:00 Europe/Berlin
 by default). Benchmarks use the remaining time; new nightly configurations stop
-at 04:50. Manual starts share the same PostgreSQL admission lock and durable
+at 07:50. Manual starts share the same PostgreSQL admission lock and durable
 claims. At most one calibration or benchmark runs across all providers.
 Conflicting manual starts return HTTP 409 rather than queueing.
 Migration `062_maintenance_calibration.xml` and workers with

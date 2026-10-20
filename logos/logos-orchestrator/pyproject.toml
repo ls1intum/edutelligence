@@ -105,6 +105,7 @@ testpaths = ["tests/unit"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers --strict-config"
 markers = [
+    "integration: tests against an explicitly supplied disposable PostgreSQL database",
     "slow: tests that take more than a few seconds",
 ]
 filterwarnings = []

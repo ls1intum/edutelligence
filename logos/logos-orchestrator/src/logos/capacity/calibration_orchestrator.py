@@ -5,7 +5,7 @@ calibration loop: it picks which uncalibrated model runs next, walks its own
 model list, and emits ``calibration_*`` events back to the server when each
 model completes. The orchestrator only:
 
-  * Watches the maintenance window (default 03:00–05:00 Europe/Berlin).
+  * Watches the maintenance window (default 05:00–08:00 Europe/Berlin).
   * When inside the window and no other worker has a session in progress,
     picks one idle, healthy worker that still has uncalibrated models and
     sends ``start_calibration_session``.
@@ -28,13 +28,15 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import time
+from datetime import datetime, time
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 # Terminal session events that free the active-provider slot. Shared with the
 # registry, which uses the same names to track ProviderSession.calibrating —
 # one definition keeps the two from drifting apart.
 from logos.logosnode_registry import TERMINAL_CALIBRATION_SESSION_EVENTS as _TERMINAL_SESSION_EVENTS
+from logos.maintenance_window import MaintenanceWindow
 
 logger = logging.getLogger("logos.capacity.calibration_orchestrator")
 
@@ -55,18 +57,18 @@ class CalibrationConfig:
     All values can be overridden via environment variables so that
     operators can tune them without touching YAML.
 
-    LOGOS_CALIB_WINDOW_START  e.g. "03:00" (HH:MM, default 03:00)
-    LOGOS_CALIB_WINDOW_END    e.g. "05:00" (HH:MM, default 05:00)
-    LOGOS_CALIB_TIMEZONE      e.g. "Europe/Berlin" (default Europe/Berlin)
+    LOGOS_MAINTENANCE_WINDOW_START  HH:MM, default 05:00
+    LOGOS_MAINTENANCE_WINDOW_END    HH:MM, default 08:00
+    LOGOS_MAINTENANCE_TIMEZONE      default Europe/Berlin
     LOGOS_CALIB_ENABLED       "true" / "false" (default true)
     LOGOS_CALIB_SLEEP_LEVEL   "1" or "2" (default 1)
     LOGOS_CALIB_TICK_SECONDS  standalone trigger-loop interval (default 60);
                              the application uses the shared 15-second loop
     """
 
-    window_start: time = field(default_factory=lambda: time(3, 0))
-    window_end: time = field(default_factory=lambda: time(5, 0))
-    timezone: str = "Europe/Berlin"
+    window_start: time = field(default_factory=lambda: MaintenanceWindow().start)
+    window_end: time = field(default_factory=lambda: MaintenanceWindow().end)
+    timezone: str = MaintenanceWindow().timezone
     enabled: bool = True
     sleep_level: int = 1
     tick_seconds: float = 60.0
@@ -74,21 +76,6 @@ class CalibrationConfig:
     @classmethod
     def from_env(cls) -> "CalibrationConfig":
         """Build a CalibrationConfig from environment variables (with defaults)."""
-
-        def _parse_time(raw: str, default: time) -> time:
-            raw = raw.strip()
-            if not raw:
-                return default
-            try:
-                h, m = raw.split(":", 1)
-                return time(int(h), int(m))
-            except (ValueError, TypeError):
-                logger.warning(
-                    "CalibrationConfig: invalid time %r — using default %s",
-                    raw,
-                    default,
-                )
-                return default
 
         def _parse_bool(raw: str, default: bool) -> bool:
             return raw.strip().lower() in {"1", "true", "yes"} if raw.strip() else default
@@ -105,14 +92,12 @@ class CalibrationConfig:
             except ValueError:
                 return default
 
-        # Single source of truth for defaults: the field declarations above.
-        # Falling back to literals here let them drift from those fields
-        # unnoticed (see the 02:00-05:00 vs 03:00-08:00 window mismatch).
         defaults = cls()
+        window = MaintenanceWindow.from_env()
         return cls(
-            window_start=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_START", ""), defaults.window_start),
-            window_end=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_END", ""), defaults.window_end),
-            timezone=os.getenv("LOGOS_CALIB_TIMEZONE", "").strip() or defaults.timezone,
+            window_start=window.start,
+            window_end=window.end,
+            timezone=window.timezone,
             enabled=_parse_bool(os.getenv("LOGOS_CALIB_ENABLED", ""), defaults.enabled),
             sleep_level=_parse_int(os.getenv("LOGOS_CALIB_SLEEP_LEVEL", ""), defaults.sleep_level),
             tick_seconds=_parse_float(os.getenv("LOGOS_CALIB_TICK_SECONDS", ""), defaults.tick_seconds),
@@ -251,25 +236,8 @@ class CalibrationOrchestrator:
         )
 
     def _is_in_window(self) -> bool:
-        try:
-            from zoneinfo import ZoneInfo  # Python 3.9+
-        except ImportError:
-            try:
-                from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
-            except ImportError:
-                logger.warning("CalibrationOrchestrator: zoneinfo not available — assuming inside window")
-                return True
-        from datetime import datetime
-
-        tz = ZoneInfo(self._config.timezone)
-        now = datetime.now(tz=tz).time().replace(tzinfo=None)
-        start = self._config.window_start
-        end = self._config.window_end
-
-        if start <= end:
-            return start <= now < end
-        # Overnight window (e.g. 23:00–02:00)
-        return now >= start or now < end
+        window = MaintenanceWindow(self._config.window_start, self._config.window_end, self._config.timezone)
+        return window.contains(datetime.now(ZoneInfo(window.timezone)))
 
     # ------------------------------------------------------------------
     # Provider selection

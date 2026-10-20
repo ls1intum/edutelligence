@@ -170,10 +170,10 @@ Unavailable pairs do not consume a place in that night's limit.
 Failed or cancelled plans consume a place after admission.
 The limit persists across restarts and changes to activation.
 
-New configurations and retries start between 03:00 and 04:50 in `Europe/Berlin`.
-At 05:00, a run continues only if at least 50% of its requests completed successfully.
+New configurations and retries start between 05:00 and 07:50 in `Europe/Berlin`.
+At 08:00, a run continues only if at least 50% of its requests completed successfully.
 A run stops after 5 minutes without output content or a successful request completion.
-A stalled configuration gets at most 1 retry before 04:50.
+A stalled configuration gets at most 1 retry before 07:50.
 The existing 2-hour measurement timeout also applies.
 
 The scheduler restores the original worker configuration after the plan.
@@ -189,12 +189,13 @@ Before activation:
 4. Test the time limits and rotation with a controlled test clock.
 5. Check that another worker still accepts production requests.
 
-Automatic calibration runs first, from 03:00 to 05:00 in `Europe/Berlin` by default.
-Benchmarks use the remaining time and start no new configuration after 04:50.
+Automatic calibration runs first, from 05:00 to 08:00 in `Europe/Berlin` by default.
+Benchmarks use the remaining time and start no new configuration after 07:50.
 At most 1 calibration or benchmark runs across the cluster, including manual starts.
 Apply `062_maintenance_calibration.xml` and update workers for the `get_calibration_status` command.
 The coordinator releases calibration claims only after worker confirmation.
-The `LOGOS_CALIB_WINDOW_*` variables control calibration. They do not change benchmark time limits.
+The `LOGOS_MAINTENANCE_WINDOW_*` variables control both calibration and benchmarks.
+`LOGOS_MAINTENANCE_TIMEZONE` controls their shared timezone.
 
 See the [nightly benchmark guide](admin/nightly-benchmarks.md)
 for activation, the fixed workload, parameter values, API requests and diagnostic states.
