@@ -415,6 +415,34 @@ def test_the_executor_reads_the_locks_again_before_an_automatic_sleep():
     assert ran == []
 
 
+def test_a_lane_locked_while_it_drains_is_not_slept():
+    locks = []
+    planner = _planner(_Facade(), lock_reader=lambda: list(locks))
+    planner._refresh_lane_locks()
+    planner._safe_get_profiles = lambda *a: {}
+    planner._safe_get_capacity = lambda *a: None
+    planner._lane_gpu_devices_str = lambda *a: None
+    planner._get_per_gpu_free = lambda *a: {}
+    planner._check_host_ram_headroom_for_sleep = lambda *a, **k: (True, 0.0, 0.0)
+    planner._mark_lane_cold = lambda *a: None
+    sent = []
+
+    async def drain(provider_id, lane_id, timeout_seconds=60.0):  # noqa: ARG001
+        # The operator locks the lane while its requests drain.
+        locks.append((PROVIDER, LANE))
+        return True
+
+    async def send_command(*args, **kwargs):  # noqa: ARG001
+        sent.append(args)
+
+    planner._drain_lane = drain
+    planner._registry.send_command = send_command
+    action = CapacityPlanAction(action="sleep_l1", provider_id=PROVIDER, lane_id=LANE, model_name=MODEL)
+
+    assert asyncio.run(planner._execute_action_core(action)) is False
+    assert sent == []
+
+
 def test_a_locked_lane_on_one_worker_does_not_suppress_another_workers_lock_wake():
     # The model was already planned this cycle — by the lock wake of a copy on
     # another worker whose wake may still fail VRAM validation. This worker's

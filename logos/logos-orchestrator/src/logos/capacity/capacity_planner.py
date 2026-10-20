@@ -749,9 +749,28 @@ class CapacityPlanner:
             if profiles is None:
                 profiles = self._safe_get_profiles(provider_id)
                 capacity = self._safe_get_capacity(provider_id)
-            if self._lock_wake_fits(lane.model_name, profiles, capacity):
+            if self._lock_wake_fits(provider_id, lane, profiles, capacity):
                 cycle_planned_models.add(lane.model_name)
         return actions
+
+    async def _locked_since_planning(self, action: CapacityPlanAction) -> bool:
+        """Whether an operator locked the lane of this automatic sleep or stop.
+
+        Read right before the command goes out: the drain ahead of it can wait
+        up to a minute, long enough for an operator to lock the lane.
+        """
+        if action.operator_initiated:
+            return False
+        await asyncio.to_thread(self._refresh_lane_locks)
+        if not self.is_lane_locked(action.provider_id, action.lane_id):
+            return False
+        logger.info(
+            "Aborting %s of lane %s on worker=%s: the lane was locked warm while it drained",
+            action.action,
+            action.lane_id,
+            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+        )
+        return True
 
     @staticmethod
     def _merge_lock_wakes(
@@ -766,19 +785,31 @@ class CapacityPlanner:
         demand_wakes = {a.lane_id for a in demand_actions if a.action == "wake"}
         return [a for a in lock_wakes if a.lane_id not in demand_wakes] + list(demand_actions)
 
-    def _lock_wake_fits(self, model_name: str, profiles: dict, capacity) -> bool:
-        """Whether waking a sleeping lane of ``model_name`` fits the free VRAM now.
+    def _lock_wake_fits(self, provider_id: int, lane: LaneSchedulerSignals, profiles: dict, capacity) -> bool:
+        """Whether waking this sleeping lane fits the free VRAM now.
 
-        Rough like the ranking: without a profile or a capacity reading the
-        wake is assumed to fit, as before.
+        Checked on the lane's own GPUs when the snapshot reports them, since
+        the wake reserves memory per GPU: free memory on another GPU does not
+        help. Rough like the ranking otherwise: without a profile or a
+        capacity reading the wake is assumed to fit, as before.
         """
-        profile = profiles.get(model_name) if profiles else None
+        profile = profiles.get(lane.model_name) if profiles else None
         if profile is None or capacity is None:
             return True
         needed_mb = max(
             self._estimate_model_loaded_vram(profile) - float(profile.sleeping_residual_mb or 0.0),
             0.0,
         )
+        gpu_ids = []
+        for part in str(lane.gpu_devices or "").split(","):
+            try:
+                gpu_ids.append(int(part.strip()))
+            except ValueError:
+                continue
+        per_gpu_free = self._get_per_gpu_free(provider_id) if gpu_ids else None
+        if gpu_ids and per_gpu_free:
+            per_gpu_needed = needed_mb / len(gpu_ids)
+            return all(per_gpu_free.get(gpu, 0.0) >= per_gpu_needed for gpu in gpu_ids)
         return needed_mb <= float(getattr(capacity, "available_vram_mb", 0) or 0)
 
     def _model_inflight_without_other_lane(self, provider_id: int, model_name: str, lane_id: str) -> bool:
@@ -9157,6 +9188,8 @@ class CapacityPlanner:
                             action.lane_id,
                         )
                         return False
+                    if await self._locked_since_planning(action):
+                        return False
                     # The lane is out of the rotation now, but a request the
                     # scheduler reserved for the model before the cold mark
                     # landed may still be on its way to this lane. If no other
@@ -9532,6 +9565,8 @@ class CapacityPlanner:
                         "Cannot stop lane %s: active requests did not drain within timeout",
                         action.lane_id,
                     )
+                    return False
+                if await self._locked_since_planning(action):
                     return False
 
                 if self._use_additive_loads:

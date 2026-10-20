@@ -417,6 +417,30 @@ class TestLockedLaneThatNeedsRoom:
     def test_a_lock_wake_that_fits_still_claims_the_model_for_this_cycle(self):
         planner, provider = self._scenario()
         provider.available_vram_mb = 90_000.0
+        planner._get_per_gpu_free = lambda pid: {0: 90_000.0}
+        planned: set[str] = set()
+
+        planner._compute_lock_wake_actions(1, provider.lanes, planned)
+
+        assert "model-b" in planned
+
+    def test_free_memory_on_another_gpu_does_not_make_the_lock_wake_fit(self):
+        """B's lane sits on GPU 0 with 2 GB free; GPU 1 has 70 GB free. The
+        aggregate fits, but the wake reserves on GPU 0, so the model must be
+        left to the demand pass."""
+        planner, provider = self._scenario()
+        provider.available_vram_mb = 72_000.0
+        planner._get_per_gpu_free = lambda pid: {0: 2_000.0, 1: 70_000.0}
+        planned: set[str] = set()
+
+        planner._compute_lock_wake_actions(1, provider.lanes, planned)
+
+        assert "model-b" not in planned
+
+    def test_free_memory_on_the_lanes_own_gpu_makes_the_lock_wake_fit(self):
+        planner, provider = self._scenario()
+        provider.available_vram_mb = 72_000.0
+        planner._get_per_gpu_free = lambda pid: {0: 70_000.0, 1: 2_000.0}
         planned: set[str] = set()
 
         planner._compute_lock_wake_actions(1, provider.lanes, planned)
