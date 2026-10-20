@@ -9,3 +9,4 @@ letsencrypt/
 
 # Output of the worker-node benchmark tools
 logos-workernode/**/bench_results/
+logos-workernode/data/
