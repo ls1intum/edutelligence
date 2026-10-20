@@ -92,6 +92,26 @@ describe('Benchmark runner', () => {
     expect(service.startBenchmark).not.toHaveBeenCalled();
   });
 
+  it('closes a stale confirmation when polling finds a competing run', async () => {
+    component.benchmarkPairs.set([pair]);
+    component.benchmarkConfirmPairId.set(pair.model_provider_id);
+    component.benchmarkRuns.set([run]);
+    await component.startBenchmark(pair);
+    expect(service.startBenchmark).not.toHaveBeenCalled();
+    expect(component.benchmarkConfirmPairId()).toBeNull();
+    expect(component.benchmarkStartError()).toContain('already running on this provider');
+  });
+
+  it('closes a stale confirmation when the provider endpoint becomes unavailable', async () => {
+    const unavailable = { ...pair, endpoint_configured: false };
+    component.benchmarkPairs.set([unavailable]);
+    component.benchmarkConfirmPairId.set(pair.model_provider_id);
+    await component.startBenchmark(unavailable);
+    expect(service.startBenchmark).not.toHaveBeenCalled();
+    expect(component.benchmarkConfirmPairId()).toBeNull();
+    expect(component.benchmarkStartError()).toContain('provider or settings changed');
+  });
+
   it('keeps the setup and error visible when starting fails', async () => {
     component.performanceView.set('run');
     component.benchmarkSampleSize.set(1);

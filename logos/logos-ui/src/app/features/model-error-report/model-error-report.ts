@@ -1241,6 +1241,12 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   async startBenchmark(pair: ModelBenchmarkPair): Promise<void> {
     if ((this.selectedBenchmarkPair() && this.selectedBenchmarkPair()!.model_provider_id !== pair.model_provider_id) || !this.benchmarkSettingsValid() || !this.benchmarkBatchValid() || (this.hasServingOverrides() && pair.provider_type !== 'logosnode') || this.benchmarkStartingPairId() !== null || this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
+      if (this.benchmarkConfirmPairId() === pair.model_provider_id) {
+        this.benchmarkConfirmPairId.set(null);
+        this.benchmarkStartError.set(this.providerHasActiveBenchmark(pair.provider_id)
+          ? 'A benchmark is already running on this provider. Wait for it to finish or choose another provider.'
+          : 'The provider or settings changed. Review the benchmark setup and try again.');
+      }
       return;
     }
     const settings = structuredClone(this.benchmarkSettings());
