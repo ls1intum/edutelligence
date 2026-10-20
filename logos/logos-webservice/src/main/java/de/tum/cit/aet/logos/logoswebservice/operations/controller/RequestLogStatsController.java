@@ -63,15 +63,16 @@ public class RequestLogStatsController {
     }
 
     /**
-     * Delay percentiles of finished cloud requests per model and provider:
-     * time spent inside Logos before the provider call, the provider's own
-     * time, and the time to first token. Takes the same range and scope as
+     * Delay percentiles of finished requests per model, provider and reasoning
+     * effort, on local workers and cloud providers: time spent inside Logos
+     * before the provider call, the provider's own time, and the time to first
+     * token. Takes the same range and scope as
      * {@code /logosdb/request_log_stats}.
      */
-    @PostMapping("/logosdb/cloud_latency_stats")
+    @PostMapping("/logosdb/request_latency_stats")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
-    public ResponseEntity<?> cloudLatencyStats(@RequestAttribute("authContext") AuthContext auth,
-                                               @RequestBody(required = false) Map<String, Object> body) {
+    public ResponseEntity<?> requestLatencyStats(@RequestAttribute("authContext") AuthContext auth,
+                                                 @RequestBody(required = false) Map<String, Object> body) {
         if (body == null) body = Map.of();
         String startDate = (String) body.get("start_date");
         String endDate   = (String) body.get("end_date");
@@ -81,7 +82,7 @@ public class RequestLogStatsController {
         Integer apiKeyId = body.get("api_key_id") instanceof Number n ? n.intValue() : null;
         boolean errorsOnly = Boolean.TRUE.equals(body.get("errors_only"));
         try {
-            return ResponseEntity.ok(requestLogStatsService.getCloudLatencyStats(
+            return ResponseEntity.ok(requestLogStatsService.getRequestLatencyStats(
                 startDate, endDate, userId, teamId, providerId, apiKeyId, errorsOnly,
                 RequestLogService.readFeedIds(body, "model_ids")));
         } catch (IllegalArgumentException | java.time.format.DateTimeParseException e) {

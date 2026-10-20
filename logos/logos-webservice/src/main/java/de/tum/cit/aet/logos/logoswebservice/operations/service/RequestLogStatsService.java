@@ -10,7 +10,7 @@ import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
-import de.tum.cit.aet.logos.logoswebservice.operations.repository.CloudLatencyProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.RequestLatencyProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelBreakdownProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelTimeSeriesProjection;
@@ -121,8 +121,10 @@ public class RequestLogStatsService {
     }
 
     /**
-     * Delay percentiles of finished cloud requests in a range, per model and
-     * provider, under the same scope as {@link #getRequestLogStats}.
+     * Delay percentiles of finished requests in a range, per model, provider
+     * and reasoning effort, under the same scope as {@link #getRequestLogStats}.
+     * Local workers and cloud providers are both covered; {@code local} on a
+     * row tells them apart.
      *
      * <p>The queue figure is the time a request spent inside Logos before the
      * provider was called (key lookup, rate limit, budget check, waiting for a
@@ -130,10 +132,10 @@ public class RequestLogStatsService {
      * the time to first token runs from arrival. A default range is the last
      * 24 hours: percentiles read single rows, so the default stays short.
      */
-    public Map<String, Object> getCloudLatencyStats(String startDate, String endDate,
-                                                    Integer userId, Integer teamId, Integer providerId,
-                                                    Integer apiKeyId, boolean errorsOnly,
-                                                    List<Integer> modelIds) {
+    public Map<String, Object> getRequestLatencyStats(String startDate, String endDate,
+                                                      Integer userId, Integer teamId, Integer providerId,
+                                                      Integer apiKeyId, boolean errorsOnly,
+                                                      List<Integer> modelIds) {
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         ZonedDateTime endDt = endDate != null ? ZonedDateTime.parse(endDate).withZoneSameInstant(ZoneOffset.UTC) : now;
         ZonedDateTime startDt = startDate != null
@@ -145,7 +147,7 @@ public class RequestLogStatsService {
         List<Integer> ids = modelIds == null ? List.of() : modelIds;
 
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (CloudLatencyProjection p : logEntryRepository.findCloudLatency(
+        for (RequestLatencyProjection p : logEntryRepository.findRequestLatency(
                 Timestamp.from(startDt.toInstant()), Timestamp.from(endDt.toInstant()),
                 userId, teamId, providerId, apiKeyId, ids.isEmpty(), queryIds(ids), errorsOnly)) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -153,6 +155,8 @@ public class RequestLogStatsService {
             m.put("modelName", p.getModelName());
             m.put("providerId", p.getProviderId());
             m.put("providerName", p.getProviderName());
+            m.put("local", Boolean.TRUE.equals(p.getLocal()));
+            m.put("reasoningEffort", p.getReasoningEffort());
             m.put("requestCount", p.getRequestCount());
             m.put("errorCount", p.getErrorCount());
             m.put("queueP50Ms", p.getQueueP50Ms());

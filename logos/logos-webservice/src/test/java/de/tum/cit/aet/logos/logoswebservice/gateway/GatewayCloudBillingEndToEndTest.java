@@ -136,6 +136,20 @@ class GatewayCloudBillingEndToEndTest {
     // ------------------------------------------------------------ timings
 
     @Test
+    void reasoningEffort_isStoredOnTheRow() throws Exception {
+        Fixture f = seedPricedDeployment();
+        Integer withEffort = accounting.admitAndReserve(
+            f.key(), f.deployment(), requestBody(false), "BILLING", Instant.now(), "high");
+        Integer withoutEffort = accounting.admitAndReserve(
+            f.key(), f.deployment(), requestBody(false), "BILLING", Instant.now(), null);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT reasoning_effort FROM log_entry WHERE id = ?", String.class, withEffort)).isEqualTo("high");
+        assertThat(jdbc.queryForObject(
+            "SELECT reasoning_effort FROM log_entry WHERE id = ?", String.class, withoutEffort)).isNull();
+    }
+
+    @Test
     void admissionWait_isDatedFromArrivalSoTheQueueFigureShowsIt() throws Exception {
         // A request that waited for its key lookup and budget check before the
         // row existed must not read as admitted instantly.

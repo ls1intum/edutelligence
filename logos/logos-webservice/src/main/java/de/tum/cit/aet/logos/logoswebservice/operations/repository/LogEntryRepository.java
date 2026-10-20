@@ -1132,27 +1132,34 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("errorsOnly") Boolean errorsOnly);
 
     /**
-     * How long finished cloud requests waited and ran, per model and provider:
-     * the 50th and 95th percentile of the Logos-side wait (arrival to the
-     * provider call), of the provider's own time (provider call to provider
-     * response) and of the time to first token (arrival to first token).
+     * How long finished requests waited and ran, per model, provider and
+     * reasoning effort: the 50th and 95th percentile of the Logos-side wait
+     * (arrival to the provider call), of the provider's own time (provider
+     * call to provider response) and of the time to first token (arrival to
+     * first token). Covers local workers and cloud providers alike; each row
+     * says which it is, classified as {@link #findTimeSeries} does (a provider
+     * whose privacy level is LOCAL, or none, is local; a request without a
+     * provider counts as local too).
      *
      * The window predicate, the scope and the provider-call split are the ones
      * {@link #findModelBreakdown} uses, so a model's averages there and its
-     * percentiles here describe the same requests. "Cloud" means what
-     * {@link #findTotals} counts as cloud: a provider whose privacy level is
-     * not LOCAL. Percentiles need the single rows, so this reads log_entry
-     * directly instead of the hourly rollup; it runs when the range or the
-     * scope changes, not on the push cadence.
+     * percentiles here describe the same requests. Percentiles need the single
+     * rows, so this reads log_entry directly instead of the hourly rollup; it
+     * runs when the range or the scope changes, not on the push cadence.
      *
-     * A model that still exists is one row per provider under its current
-     * name, however its rows captured the name at request time. Only rows of a
-     * deleted model fall back to the captured name.
+     * The effort is the one the provider was sent (log_entry.reasoning_effort,
+     * after the orchestrator mapped it onto the model's scale), so a local
+     * model shows the efforts it actually served, not the ones clients asked
+     * for. Requests without an effort form their own row (effort null).
+     *
+     * A model that still exists is one row per provider and effort under its
+     * current name, however its rows captured the name at request time. Only
+     * rows of a deleted model fall back to the captured name.
      */
     @Transactional(readOnly = true)
     @Query(value = """
         WITH finished AS (
-            SELECT le.model_id, le.model_name, le.provider_id,
+            SELECT le.model_id, le.model_name, le.provider_id, le.reasoning_effort,
                    (le.result_status IS DISTINCT FROM 'success'
                     OR (le.error_message IS NOT NULL AND le.error_message <> '')) AS failed,
                    CASE WHEN le.timestamp_request IS NOT NULL
@@ -1167,10 +1174,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                    CASE WHEN le.timestamp_request IS NOT NULL AND le.time_at_first_token IS NOT NULL
                         THEN EXTRACT(EPOCH FROM (le.time_at_first_token - le.timestamp_request)) * 1000 END AS ttft_ms
             FROM log_entry le
-            JOIN providers pv ON pv.id = le.provider_id
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
               AND le.timestamp_response IS NOT NULL
-              AND pv.privacy_level IS NOT NULL AND pv.privacy_level != 'LOCAL'
               AND (le.model_id IS NOT NULL OR le.model_name IS NOT NULL)
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
@@ -1190,6 +1195,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                COALESCE(f.live_model_name, f.deleted_model_name, 'Model ' || MIN(f.model_id)) AS modelName,
                f.provider_id AS providerId,
                COALESCE(p.name, 'Provider ' || f.provider_id) AS providerName,
+               (p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AS local,
+               f.reasoning_effort AS reasoningEffort,
                COUNT(*)::bigint AS requestCount,
                COUNT(*) FILTER (WHERE f.failed)::bigint AS errorCount,
                (percentile_cont(0.5)  WITHIN GROUP (ORDER BY f.queue_ms))::double precision    AS queueP50Ms,
@@ -1201,10 +1208,11 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                (percentile_cont(0.95) WITHIN GROUP (ORDER BY f.ttft_ms))::double precision     AS ttftP95Ms
         FROM named f
         LEFT JOIN providers p ON p.id = f.provider_id
-        GROUP BY f.live_model_id, f.live_model_name, f.deleted_model_name, f.unnamed_model_id, f.provider_id, p.name
-        ORDER BY requestCount DESC, modelName, providerName
+        GROUP BY f.live_model_id, f.live_model_name, f.deleted_model_name, f.unnamed_model_id, f.provider_id, p.name,
+                 p.privacy_level, f.reasoning_effort
+        ORDER BY requestCount DESC, modelName, providerName, reasoningEffort NULLS FIRST
         """, nativeQuery = true)
-    List<CloudLatencyProjection> findCloudLatency(
+    List<RequestLatencyProjection> findRequestLatency(
         @Param("start") Timestamp start,
         @Param("end") Timestamp end,
         @Param("userId") Integer userId,

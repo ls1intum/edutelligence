@@ -65,5 +65,6 @@
     <include file="liquibase/changelog/059_notifications.xml"/>
     <include file="liquibase/changelog/060_log_entry_gateway_unfinalized_index.xml"/>
     <include file="liquibase/changelog/061_lane_locks.xml"/>
+    <include file="liquibase/changelog/062_log_entry_reasoning_effort.xml"/>
 
 </databaseChangeLog>

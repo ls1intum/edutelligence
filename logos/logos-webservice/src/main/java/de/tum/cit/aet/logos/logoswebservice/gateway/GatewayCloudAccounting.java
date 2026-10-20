@@ -181,6 +181,19 @@ public class GatewayCloudAccounting {
     @Transactional
     public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
                                    byte[] requestBody, String logLevel, Instant arrivedAt) {
+        return admitAndReserve(key, deployment, requestBody, logLevel, arrivedAt, null);
+    }
+
+    /**
+     * As {@link #admitAndReserve(GatewayKey, GatewayDeployment, byte[], String, Instant)},
+     * also storing the reasoning effort the request is forwarded with.
+     *
+     * @param reasoningEffort the effort in the forwarded body, lower-cased; null when it carries none
+     */
+    @Transactional
+    public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
+                                   byte[] requestBody, String logLevel, Instant arrivedAt,
+                                   String reasoningEffort) {
         budgetService.enforceCloudBudget(key, deployment.providerId());
 
         if (reservationMicroCents <= 0) {
@@ -201,6 +214,7 @@ public class GatewayCloudAccounting {
             .addValue("provider_id", deployment.providerId())
             .addValue("settled", reservationMicroCents)
             .addValue("privacy_level", privacy)
+            .addValue("reasoning_effort", reasoningEffort)
             .addValue("input_payload",
                 GatewayLoggingLevel.storesPayloads(privacy) ? asJsonb(requestBody) : null);
         KeyHolder keys = new GeneratedKeyHolder();
@@ -210,13 +224,14 @@ public class GatewayCloudAccounting {
                 api_key_id, team_id, user_id, environment,
                 model_id, provider_id, request_id,
                 result_status, cost_finalized, settled_cost_micro_cents,
-                privacy_level, input_payload
+                privacy_level, input_payload, reasoning_effort
             ) VALUES (
                 :arrived, :admitted,
                 :api_key_id, :team_id, :user_id, :environment,
                 :model_id, :provider_id, :request_id,
                 NULL, TRUE, :settled,
-                CAST(:privacy_level AS logging_enum), CAST(:input_payload AS jsonb)
+                CAST(:privacy_level AS logging_enum), CAST(:input_payload AS jsonb),
+                CAST(:reasoning_effort AS TEXT)
             )
             """, params, keys, new String[] {"id"});
         Number id = keys.getKey();

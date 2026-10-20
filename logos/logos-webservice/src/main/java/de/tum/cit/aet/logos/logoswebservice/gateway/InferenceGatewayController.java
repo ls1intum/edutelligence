@@ -107,7 +107,8 @@ public class InferenceGatewayController {
         // Named-model path: key-only auth first, then body, then deployments.
         GatewayKey key = authService.requireActiveKey(apiKeyValue);
         byte[] body = GatewayBodyReader.read(request.getInputStream());
-        String modelName = extractModelName(body, contentType);
+        JsonNode root = parseJsonBody(body, contentType);
+        String modelName = extractModelName(root);
 
         if (modelName != null
                 && GatewayRouteResolver.isDirectCloudEligible(path, request.getMethod())
@@ -122,7 +123,8 @@ public class InferenceGatewayController {
                 cloudRateLimiter.enforce(ctx.key(), body);
                 String logLevel = GatewayLoggingLevel.resolve(request, ctx.key().logLevel());
                 Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(), decision.deployment(), body, logLevel, arrivedAt);
+                    ctx.key(), decision.deployment(), body, logLevel, arrivedAt,
+                    GatewayReasoningEffort.from(root));
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());
@@ -189,7 +191,8 @@ public class InferenceGatewayController {
                 before, modelName, threshold);
     }
 
-    private String extractModelName(byte[] body, String contentType) {
+    /** The JSON body, parsed once for the model name and the reasoning effort; null when it is none. */
+    private JsonNode parseJsonBody(byte[] body, String contentType) {
         if (body == null || body.length == 0) {
             return null;
         }
@@ -197,16 +200,22 @@ public class InferenceGatewayController {
             return null;
         }
         try {
-            JsonNode root = objectMapper.readTree(body);
-            JsonNode model = root.get("model");
-            if (model == null || model.isNull()) {
-                return null;
-            }
-            String value = model.asText(null);
-            return value == null || value.isBlank() ? null : value.strip();
+            return objectMapper.readTree(body);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static String extractModelName(JsonNode root) {
+        if (root == null) {
+            return null;
+        }
+        JsonNode model = root.get("model");
+        if (model == null || model.isNull()) {
+            return null;
+        }
+        String value = model.asText(null);
+        return value == null || value.isBlank() ? null : value.strip();
     }
 
     private static String pathWithinApp(HttpServletRequest request) {
