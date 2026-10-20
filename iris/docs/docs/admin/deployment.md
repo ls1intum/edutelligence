@@ -209,13 +209,14 @@ docker compose --env-file docker.env -f iris/docker/pyris-production.yml down
 
 The following environment variables are used for monitoring (see [Monitoring](./monitoring.md)):
 
-| Variable                   | Default       | Description                       |
-| -------------------------- | ------------- | --------------------------------- |
-| `SENTRY_ENVIRONMENT`       | `development` | Sentry environment tag            |
-| `SENTRY_ENABLE_TRACING`    | `False`       | Enable Sentry performance tracing |
-| `SENTRY_SERVER_NAME`       | `localhost`   | Server name reported to Sentry    |
-| `SENTRY_RELEASE`           | `None`        | Release tag for Sentry            |
-| `SENTRY_ATTACH_STACKTRACE` | `False`       | Attach stack traces to all events |
+| Variable                   | Default       | Description                        |
+| -------------------------- | ------------- | ---------------------------------- |
+| `SENTRY_DSN`               | _unset_       | Sentry DSN; unset turns Sentry off |
+| `SENTRY_ENVIRONMENT`       | `development` | Sentry environment tag             |
+| `SENTRY_ENABLE_TRACING`    | `False`       | Enable Sentry performance tracing  |
+| `SENTRY_SERVER_NAME`       | `localhost`   | Server name reported to Sentry     |
+| `SENTRY_RELEASE`           | `None`        | Release tag for Sentry             |
+| `SENTRY_ATTACH_STACKTRACE` | `False`       | Attach stack traces to all events  |
 
 ## Health Endpoint
 
