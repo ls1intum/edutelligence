@@ -7,6 +7,7 @@ from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
 
 from iris.common.callback_token import scrub_callback_credentials
+from iris.common.logging_config import get_logger
 
 # Keys whose values are callback credentials. Request bodies from Artemis carry the token in
 # settings.authenticationToken, and claimed ingestion jobs are dicts with the same key.
@@ -41,7 +42,6 @@ def credential_safety_options() -> dict:
         "include_local_variables": False,
     }
 
-from iris.common.logging_config import get_logger
 
 logger = get_logger(__name__)
 
