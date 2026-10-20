@@ -4117,5 +4117,18 @@ async def test_a_model_calibrated_meanwhile_is_not_calibrated_again(tmp_path, mo
 
     events = [(e.event, e.model, e.details) for e in app.state.lane_manager._event_log]
     assert ("calibration_model_skipped", "org/second", "calibrated meanwhile") in events
+    names = [e for e, m, _ in events if m == "org/first" and e.startswith("calibration_model_")]
+    assert names[0] == "calibration_model_selected"  # before the precheck can skip it
     assert probed == []
     assert not any(e == "calibration_model_started" and m == "org/second" for e, m, _ in events)
+
+
+@pytest.mark.asyncio
+async def test_hello_names_the_calibrations_logos_has_not_snapshotted_yet(tmp_path):
+    client = _central_client(tmp_path)
+    client._app.state.model_profiles.apply_calibration_result(  # noqa: SLF001
+        "org/ready", {"base_residency_mb": 9.0, "residency_source": "calibrated"}
+    )
+    ws = _CollectWS()
+    await client._send_hello(ws)  # noqa: SLF001
+    assert ws.frames[0]["pending_snapshots"] == ["org/ready"]

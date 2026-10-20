@@ -4436,3 +4436,96 @@ def test_a_local_calibration_is_never_reported_as_rejected() -> None:
     manager = _shared_profile_manager(calibration_origin="local")
     manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
     assert _rejections(manager) == []
+
+
+class _FailingStartHandle:
+    """A replacement process that dies while starting, with a log to show why."""
+
+    def __init__(self, tail: str) -> None:
+        self.recent_log_tail = tail
+        self.lane_config = None
+
+    async def init(self) -> None:
+        pass
+
+    async def spawn(self, _config: LaneConfig) -> ProcessStatus:
+        raise RuntimeError("process did not enter running state")
+
+    async def destroy(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+
+def _manager_with_lane_on_shared_profile(monkeypatch, tail: str) -> LaneManager:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    old_config = LaneConfig(lane_id="lane-1", model="org/old", vllm=True, vllm_config=VllmConfig())
+    old_handle = _StubHandle(old_config)
+    manager._handles["lane-1"] = old_handle  # noqa: SLF001
+    manager._port_alloc._used["lane-1"] = 15200  # noqa: SLF001
+    manager._wait_for_vram_headroom = AsyncMock()  # noqa: SLF001
+    manager._auto_place_gpu_devices = AsyncMock(side_effect=lambda _lid, cfg: cfg)  # noqa: SLF001
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *a, **k: _FailingStartHandle(tail))
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_a_reconfiguration_that_runs_out_of_memory_reports_its_shared_calibration(monkeypatch) -> None:
+    manager = _manager_with_lane_on_shared_profile(monkeypatch, "torch.OutOfMemoryError: CUDA out of memory")
+    new_config = LaneConfig(lane_id="lane-1", model="org/m", vllm=True, vllm_config=VllmConfig())
+    with pytest.raises(RuntimeError):
+        await manager._restart_lane_unlocked("lane-1", new_config)  # noqa: SLF001
+    assert _rejections(manager) == [("org/m", "11")]
+    assert "lane-1" not in manager._handles  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_a_reconfiguration_failing_for_another_reason_reports_nothing(monkeypatch) -> None:
+    manager = _manager_with_lane_on_shared_profile(monkeypatch, "OSError: Can't load tokenizer")
+    new_config = LaneConfig(lane_id="lane-1", model="org/m", vllm=True, vllm_config=VllmConfig())
+    with pytest.raises(RuntimeError):
+        await manager._restart_lane_unlocked("lane-1", new_config)  # noqa: SLF001
+    assert _rejections(manager) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fatal_cuda", "tail", "reported"),
+    [
+        (True, "RuntimeError: CUDA error: out of memory", True),  # the skip branch must not swallow it
+        (True, "CUDA error: all CUDA-capable devices are busy or unavailable | out of memory", False),  # wedged GPU
+        (False, "[metal::malloc] Attempting to allocate more than the maximum allowed buffer size", True),
+    ],
+)
+async def test_a_crash_the_restart_logic_gives_up_on_is_still_reported(fatal_cuda, tail, reported) -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    lane_config = LaneConfig(lane_id="lane-1", model="org/m", vllm=True, vllm_config=VllmConfig())
+
+    class _Dead:
+        lane_id = "lane-1"
+        port = 15200
+        has_stuck_vram = False
+        has_fatal_cuda_errors = fatal_cuda
+        has_metal_allocation_failure = "metal" in tail
+        recent_log_tail = tail
+
+        def __init__(self) -> None:
+            self.lane_config = lane_config
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.ERROR, pid=1, return_code=1)
+
+    manager._handles["lane-1"] = _Dead()  # noqa: SLF001
+    status = LaneStatus(
+        lane_id="lane-1",
+        lane_uid="vllm:lane-1",
+        model="org/m",
+        port=15200,
+        vllm=True,
+        process=ProcessStatus(state=ProcessState.ERROR, pid=1, return_code=1),
+        runtime_state="error",
+        lane_config=lane_config,
+    )
+    await manager._recover_dead_lanes([status])  # noqa: SLF001
+    assert _rejections(manager) == ([("org/m", "11")] if reported else [])

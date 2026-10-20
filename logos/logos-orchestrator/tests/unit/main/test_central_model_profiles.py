@@ -567,7 +567,9 @@ def test_a_node_calibrating_the_model_is_not_offered_one(monkeypatch):
     db.sibling_adopters = {"org/model": [(7, 21), (8, 21)]}
     monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
     monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: f"gpu-{pid}")
-    monkeypatch.setattr(logosnode_mod, "_calibrating_model", lambda pid: "org/model" if pid == 7 else None)
+    monkeypatch.setattr(
+        logosnode_mod, "_models_in_calibration", lambda pid: frozenset({"org/model"}) if pid == 7 else frozenset()
+    )
     assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model"]) == {8: ["org/model"]}
 
 
@@ -575,7 +577,7 @@ def test_a_reconnecting_node_does_not_adopt_the_model_it_is_calibrating(monkeypa
     db = _FakeDB()
     monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
     monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
-    monkeypatch.setattr(logosnode_mod, "_calibrating_model", lambda pid: "org/busy")
+    monkeypatch.setattr(logosnode_mod, "_models_in_calibration", lambda pid: frozenset({"org/busy"}))
     logosnode_mod._update_reported_calibration_keys(5, {"org/busy": "H1", "org/idle": "H2"}, {})
     assert db.adopted == [(5, ["org/idle"], 30, True)]
 
@@ -607,6 +609,7 @@ def test_a_rejected_shared_calibration_is_pushed_to_every_node_that_lost_it(monk
     db.reject_result = [(1, "org/model"), (2, "org/model")]
     pushed: list = []
     monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: f"gpu-{pid}")
     monkeypatch.setattr(
         logosnode_mod, "_schedule_model_profile_push", lambda pid, names=None: pushed.append((pid, names))
     )
@@ -652,3 +655,17 @@ def test_the_sharing_setting_can_be_read_without_changing_it(monkeypatch):
     assert result == {"shared_profiles": True, "max_age_days": 30}
     monkeypatch.setenv("LOGOS_SHARED_PROFILES", "0")
     assert asyncio.run(logosnode_mod.logosnode_calibration_sharing(data))["shared_profiles"] is False
+
+
+def test_a_linked_snapshot_lifts_the_protection_of_a_finished_model(monkeypatch):
+    lifted: list = []
+    monkeypatch.setattr(
+        main_mod,
+        "_logosnode_registry",
+        SimpleNamespace(snapshots_linked=lambda pid, models: lifted.append((pid, models))),
+    )
+    logosnode_mod._snapshots_linked(5, ["org/model"])
+    assert lifted == [(5, ["org/model"])]
+    monkeypatch.setattr(main_mod, "_logosnode_registry", None)
+    logosnode_mod._snapshots_linked(5, ["org/model"])  # no registry: nothing to lift
+    assert logosnode_mod._models_in_calibration(5) == frozenset()

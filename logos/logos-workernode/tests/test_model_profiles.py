@@ -1140,3 +1140,12 @@ def test_slice_gpu_counts_are_kept_per_model():
     registry = ModelProfileRegistry()
     registry.set_slice_gpu_counts({"org/m": 2})
     assert registry.slice_gpu_counts() == {"org/m": 2}
+
+
+def test_a_local_calibration_awaits_its_snapshot_until_logos_links_it():
+    registry = ModelProfileRegistry()
+    registry.apply_calibration_result("org/m", {"base_residency_mb": 1.0, "residency_source": "calibrated"})
+    registry.replace_from_sync({"org/other": {"base_residency_mb": 2.0, "sync_revision": 1, "calibration_id": 3}})
+    assert registry.awaiting_snapshot_models() == ["org/m"]
+    registry.replace_from_sync({"org/m": {"base_residency_mb": 1.0, "sync_revision": 1, "calibration_id": 4}})
+    assert registry.awaiting_snapshot_models() == []

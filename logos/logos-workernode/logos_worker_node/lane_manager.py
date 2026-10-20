@@ -286,9 +286,17 @@ _MEMORY_TROUBLE_MARKERS = (
 )
 
 
+# A wedged GPU fails every start, whatever the calibration says.
+_NODE_FAULT_MARKERS = ("busy or unavailable", "nccl warn cuda failure")
+
+
 def _log_shows_memory_trouble(handle: Any) -> bool:
     tail = str(getattr(handle, "recent_log_tail", "") or "").lower()
-    return any(marker in tail for marker in _MEMORY_TROUBLE_MARKERS)
+    if any(marker in tail for marker in _NODE_FAULT_MARKERS):
+        return False
+    return bool(getattr(handle, "has_metal_allocation_failure", False)) or any(
+        marker in tail for marker in _MEMORY_TROUBLE_MARKERS
+    )
 
 
 class LaneManager:
@@ -1428,6 +1436,9 @@ class LaneManager:
                 continue
             lid = status.lane_id
             handle = self._handles.get(lid)
+            # Before the skip branches below: an out-of-memory crash is
+            # exactly what they stop on.
+            self._reject_unproven_shared_calibration(lid, lane_config.model, handle)
 
             # Skip if the handle has fatal CUDA errors (GPU unrecoverable without reboot)
             if handle is not None and getattr(handle, "has_fatal_cuda_errors", False):
@@ -1517,7 +1528,6 @@ class LaneManager:
             self._last_crash_restart_attempt_at[lid] = now
             new_count = restart_count + 1
             self._crash_restart_counts[lid] = new_count
-            self._reject_unproven_shared_calibration(lid, lane_config.model, handle)
             self._record_event(
                 lid,
                 "crash_restart_attempt",
@@ -2999,6 +3009,7 @@ class LaneManager:
                     exc,
                 )
                 self._record_event(lane_id, "restart_failed", model=new_config.model, details=str(exc))
+                self._reject_unproven_shared_calibration(lane_id, new_config.model, new_handle)
                 if new_handle is not None:
                     try:
                         await new_handle.destroy()

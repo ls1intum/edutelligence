@@ -952,6 +952,11 @@ class ModelProfileRegistry:
         with self._lock:
             self._slice_gpu_counts = dict(counts)
 
+    def awaiting_snapshot_models(self) -> list[str]:
+        """Models whose fresh local calibration Logos has not snapshotted yet."""
+        with self._lock:
+            return sorted(name for name, profile in self._profiles.items() if _awaits_snapshot(profile))
+
     def slice_gpu_counts(self) -> dict[str, int]:
         with self._lock:
             return dict(self._slice_gpu_counts)

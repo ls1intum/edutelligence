@@ -255,6 +255,7 @@ async def _write_status_samples(provider_id: int) -> None:
                 continue
             changed_models, rejected_models = persisted
             if changed_models:
+                _snapshots_linked(provider_id, changed_models)
                 _schedule_model_profile_push(provider_id, changed_models)
                 await _offer_to_siblings(provider_id, changed_models)
             if rejected_models:
@@ -282,6 +283,14 @@ async def _handle_calibration_rejected(provider_id: int, event: Dict[str, Any]) 
     except Exception:
         logger.warning("Failed to reject calibration %s of provider %s", calibration_id, provider_id, exc_info=True)
         return
+    if affected:
+        logger.warning(
+            "calibration_rejected provider=%s model=%s calibration_id=%s dropped_on=%s",
+            _resolve_provider_name(provider_id),
+            model_name,
+            calibration_id,
+            sorted({pid for pid, _ in affected}),
+        )
     by_provider: Dict[int, list[str]] = {}
     for affected_provider, affected_model in affected:
         _profile_write_cache.forget(affected_provider, affected_model)
@@ -506,8 +515,8 @@ def _update_reported_calibration_keys(
     with DBManager() as db:
         db.update_reported_calibration_keys(provider_id, calibration_key_hashes, slice_gpu_counts)
         # Its own result for the model in progress would be discarded.
-        busy = _calibrating_model(provider_id)
-        models = [name for name in calibration_key_hashes if name != busy]
+        busy = _models_in_calibration(provider_id)
+        models = [name for name in calibration_key_hashes if name not in busy]
         try:
             # Switched off, a calibration that stopped fitting still goes.
             adopted = db.adopt_shared_calibrations(
@@ -530,9 +539,15 @@ def _update_reported_calibration_keys(
         )
 
 
-def _calibrating_model(provider_id: int) -> str | None:
-    lookup = getattr(_main._logosnode_registry, "calibrating_model", None)
-    return lookup(provider_id) if lookup is not None else None
+def _models_in_calibration(provider_id: int) -> frozenset[str]:
+    lookup = getattr(_main._logosnode_registry, "models_in_calibration", None)
+    return lookup(provider_id) if lookup is not None else frozenset()
+
+
+def _snapshots_linked(provider_id: int, model_names: list[str]) -> None:
+    lift = getattr(_main._logosnode_registry, "snapshots_linked", None)
+    if lift is not None:
+        lift(provider_id, model_names)
 
 
 def _offer_calibrations_to_siblings(provider_id: int, model_names: list[str]) -> Dict[int, list[str]]:
@@ -547,7 +562,7 @@ def _offer_calibrations_to_siblings(provider_id: int, model_names: list[str]) ->
                 provider_id,
                 model_name,
                 shared_profile_max_age_days(),
-                skip=lambda sibling, model_name=model_name: _calibrating_model(sibling) == model_name,
+                skip=lambda sibling, model_name=model_name: model_name in _models_in_calibration(sibling),
             ):
                 adopters.setdefault(sibling, []).append(model_name)
                 if calibration_id is not None:
@@ -903,6 +918,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     actions=(payload.get("actions") if isinstance(payload.get("actions"), list) else None),
                     calibrating_model=(
                         payload["calibrating_model"] if isinstance(payload.get("calibrating_model"), str) else None
+                    ),
+                    pending_snapshots=(
+                        payload["pending_snapshots"] if isinstance(payload.get("pending_snapshots"), list) else None
                     ),
                 )
                 _schedule_model_profile_push(

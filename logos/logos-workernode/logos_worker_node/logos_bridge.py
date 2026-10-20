@@ -555,9 +555,11 @@ class LogosBridgeClient:
             static_lane_ids = sorted(self._app.state.lane_manager._static_lane_ids)
         calibration_key_hashes: dict[str, str] = {}
         slice_gpu_counts: dict[str, int] = {}
+        pending_snapshots: list[str] = []
         if hasattr(self._app, "state") and hasattr(self._app.state, "model_profiles"):
             calibration_key_hashes = self._app.state.model_profiles.calibration_key_hashes()
             slice_gpu_counts = self._app.state.model_profiles.slice_gpu_counts()
+            pending_snapshots = self._app.state.model_profiles.awaiting_snapshot_models()
         await self._send_json(
             ws,
             {
@@ -578,6 +580,7 @@ class LogosBridgeClient:
                 # worker from placement for as long as no new session begins.
                 "calibrating": self._calibration_session_is_live(),
                 "calibrating_model": self._calibrating_model(),
+                "pending_snapshots": pending_snapshots,
                 "calibration_key_hashes": calibration_key_hashes,
                 "slice_gpu_counts": slice_gpu_counts,
                 "actions": [
@@ -1938,6 +1941,9 @@ class LogosBridgeClient:
                     continue
 
                 session.current_model = model_name
+                # The precheck below can take a while; Logos must not hand this
+                # model a calibration from elsewhere in the meantime.
+                self._record_calibration_event("calibration_model_selected", model=model_name)
                 plan = plan_by_model.get(model_name) or {"model": model_name}
 
                 # Pin to the slice begin_calibration_session actually freed
