@@ -98,7 +98,9 @@ RUN if [ -f src/grpclocal/model.proto ]; then \
 
 # Copy other project files
 COPY logos/db/ ./logos/db/
-COPY logos/logos-orchestrator/tests/ ./tests/
+# The performance wrapper copies the workloads in with `docker compose cp`.
+COPY logos/logos-orchestrator/tests/performance/run_api_workload.py ./tests/performance/run_api_workload.py
+RUN mkdir -p tests/performance/workloads
 
 EXPOSE 8080 50051
 
