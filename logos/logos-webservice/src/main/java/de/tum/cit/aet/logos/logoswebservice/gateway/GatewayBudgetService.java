@@ -5,15 +5,9 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.LongAdder;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -22,6 +16,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import de.tum.cit.aet.logos.logoswebservice.common.BackgroundRefreshedCache;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 
 /**
@@ -64,8 +59,10 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
  * background, so the bound above grows by one refresh's duration. Only a key
  * without a snapshot, or one older than
  * {@code logos.gateway.budget-cache-max-stale-seconds} (default 60, the
- * fallback when background refreshes keep failing), loads in line. Reservations noted while a refresh is in flight are queued
- * and merged into the new snapshot so a reload cannot discard them; if the load
+ * fallback when background refreshes keep failing), loads in line. The
+ * mechanics live in {@link BackgroundRefreshedCache}. Reservations noted while
+ * a refresh is in flight are queued and merged into the new snapshot so a
+ * reload cannot discard them; if the load
  * already counted the same row, the merge double-counts until the next TTL
  * (refuse-more), and the following refresh installs the database total without
  * preserving the inflated value. The bound is the price of that. Trading it for
@@ -76,45 +73,15 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 @Service
 public class GatewayBudgetService {
 
-    private static final Logger log = LoggerFactory.getLogger(GatewayBudgetService.class);
-
     private final NamedParameterJdbcTemplate jdbc;
     private final long ttlMillis;
-    private final long maxStaleMillis;
     private final Clock clock;
-    private final Executor refreshExecutor;
 
     /**
-     * Process-local budget snapshot cache. Remaining gateway state (none beyond
-     * this map and the JDK HttpClient connection pools in the forwarders).
+     * Process-local budget snapshots: usage, limits and provider overrides per
+     * key or team. The only budget-related process state of the gateway.
      */
-    private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
-
-    /**
-     * Reservation increments noted while a usage refresh is in flight. Merged
-     * on install; if the load already counted the same row this double-counts
-     * until the next TTL (refuse-more). The next refresh installs the database
-     * total and does not preserve the inflated value.
-     */
-    private final ConcurrentHashMap<String, LongAdder> pendingUsageIncrements = new ConcurrentHashMap<>();
-
-    /** Single-flight usage/limit loads: concurrent misses share one refresh. */
-    private final ConcurrentHashMap<String, CompletableFuture<CacheEntry>> inflight = new ConcurrentHashMap<>();
-
-    /** Bounded monitors: same stripe serializes bump vs install for a given key. */
-    private static final int MONITOR_STRIPES = 64;
-    private final Object[] monitorStripes = new Object[MONITOR_STRIPES];
-
-    {
-        for (int i = 0; i < MONITOR_STRIPES; i++) {
-            monitorStripes[i] = new Object();
-        }
-    }
-
-    private Object monitorFor(String cacheKey) {
-        int h = cacheKey.hashCode();
-        return monitorStripes[(h ^ (h >>> 16)) & (MONITOR_STRIPES - 1)];
-    }
+    private final BackgroundRefreshedCache cache;
 
     @Autowired
     public GatewayBudgetService(
@@ -137,9 +104,9 @@ public class GatewayBudgetService {
                          Clock clock, Executor refreshExecutor) {
         this.jdbc = jdbc;
         this.ttlMillis = Math.max(0, ttlSeconds) * 1000L;
-        this.maxStaleMillis = Math.max(this.ttlMillis, Math.max(0, maxStaleSeconds) * 1000L);
         this.clock = clock;
-        this.refreshExecutor = refreshExecutor;
+        this.cache = new BackgroundRefreshedCache("budget snapshot", ttlMillis,
+            Math.max(0, maxStaleSeconds) * 1000L, clock, refreshExecutor);
     }
 
     /**
@@ -220,7 +187,7 @@ public class GatewayBudgetService {
     }
 
     private Long apiKeyBudgetLimit(int apiKeyId) {
-        return cached("limit:key:" + apiKeyId, () -> {
+        return cache.get("limit:key:" + apiKeyId, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource("aki", apiKeyId);
             return jdbc.query("""
                 SELECT CAST(ak.settings ->>'budget_limit_micro_cents' AS BIGINT) AS specific_limit,
@@ -248,7 +215,7 @@ public class GatewayBudgetService {
      * which no price exists for yet.
      */
     private long apiKeyBudgetUsage(int apiKeyId, String monthStart) {
-        Long v = cached("usage:key:" + apiKeyId + ":" + monthStart, () -> {
+        Long v = cache.get("usage:key:" + apiKeyId + ":" + monthStart, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("aki", apiKeyId)
                 .addValue("month", monthStart);
@@ -271,7 +238,7 @@ public class GatewayBudgetService {
     }
 
     private Long teamMonthlyBudget(int teamId) {
-        return cached("limit:team:" + teamId, () -> {
+        return cache.get("limit:team:" + teamId, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource("tid", teamId);
             return jdbc.query("""
                 SELECT team_monthly_budget_micro_cents
@@ -292,7 +259,7 @@ public class GatewayBudgetService {
      * unlimited for that provider.
      */
     private ProviderBudgetOverride teamProviderBudget(int teamId, int providerId) {
-        ProviderBudgetOverride cached = cached(
+        ProviderBudgetOverride cached = cache.get(
             "limit:team:" + teamId + ":provider:" + providerId,
             () -> {
                 MapSqlParameterSource params = new MapSqlParameterSource()
@@ -315,7 +282,7 @@ public class GatewayBudgetService {
 
     /** Month-to-date developer-key spend for one team; same two parts as {@link #apiKeyBudgetUsage}. */
     private long teamBudgetUsage(int teamId, String monthStart) {
-        Long v = cached("usage:team:" + teamId + ":" + monthStart, () -> {
+        Long v = cache.get("usage:team:" + teamId + ":" + monthStart, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("tid", teamId)
                 .addValue("month", monthStart);
@@ -345,7 +312,7 @@ public class GatewayBudgetService {
      * override row.
      */
     private long teamDefaultBudgetUsage(int teamId, String monthStart) {
-        Long v = cached("usage:team:" + teamId + ":default:" + monthStart, () -> {
+        Long v = cache.get("usage:team:" + teamId + ":default:" + monthStart, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("tid", teamId)
                 .addValue("month", monthStart);
@@ -374,7 +341,7 @@ public class GatewayBudgetService {
 
     /** Developer-key spend on one provider for the team (settled + in-flight). */
     private long teamProviderBudgetUsage(int teamId, int providerId, String monthStart) {
-        Long v = cached("usage:team:" + teamId + ":provider:" + providerId + ":" + monthStart, () -> {
+        Long v = cache.get("usage:team:" + teamId + ":provider:" + providerId + ":" + monthStart, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("tid", teamId)
                 .addValue("pid", providerId)
@@ -452,150 +419,7 @@ public class GatewayBudgetService {
     }
 
     private void addToCachedUsage(String cacheKey, long microCents) {
-        synchronized (monitorFor(cacheKey)) {
-            cache.compute(cacheKey, (k, entry) -> {
-                if (entry == null) {
-                    return null;
-                }
-                long current = entry.value instanceof Long l ? l : 0L;
-                return new CacheEntry(current + microCents, entry.loadedAtMs, entry.loadStartedAtMs);
-            });
-            if (inflight.containsKey(cacheKey)) {
-                pendingUsageIncrements.computeIfAbsent(cacheKey, ignored -> new LongAdder()).add(microCents);
-            }
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private <T> T cached(String key, Loader<T> loader) {
-        if (ttlMillis <= 0) {
-            return loader.load();
-        }
-        long now = clock.millis();
-        CacheEntry entry = cache.get(key);
-        if (entry != null && now - entry.loadedAtMs < ttlMillis) {
-            return (T) entry.value;
-        }
-        if (entry != null && now - entry.loadedAtMs < maxStaleMillis) {
-            refreshInBackground(key, loader, now);
-            return (T) entry.value;
-        }
-        CacheEntry loaded = refresh(key, loader, now);
-        if (cache.size() > 4096) {
-            long t = clock.millis();
-            cache.entrySet().removeIf(e -> t - e.getValue().loadedAtMs >= maxStaleMillis);
-        }
-        return (T) loaded.value;
-    }
-
-    /**
-     * Start one refresh of {@code key} unless one is already running. The
-     * caller answers from the expired snapshot meanwhile; reservations noted
-     * during the load are merged into the new snapshot as for an inline load.
-     */
-    private <T> void refreshInBackground(String key, Loader<T> loader, long refreshStartedAtMs) {
-        if (inflight.containsKey(key)) {
-            return;
-        }
-        try {
-            refreshExecutor.execute(() -> {
-                try {
-                    refresh(key, loader, refreshStartedAtMs);
-                } catch (RuntimeException e) {
-                    // The expired snapshot keeps answering; the next admission
-                    // tries again, and past the stale limit one loads in line.
-                    log.warn("Background budget refresh of {} failed: {}", key, e.toString());
-                }
-            });
-        } catch (RuntimeException e) {
-            log.warn("Could not start a background budget refresh of {}: {}", key, e.toString());
-        }
-    }
-
-    /**
-     * Load a fresh snapshot for {@code key}, sharing the work among concurrent
-     * misses. Pending reservation bumps are added to the database total on
-     * install; the previous entry is never preserved via {@code Math.max}.
-     */
-    @SuppressWarnings("unchecked")
-    private <T> CacheEntry refresh(String key, Loader<T> loader, long refreshStartedAtMs) {
-        CompletableFuture<CacheEntry> created = new CompletableFuture<>();
-        CompletableFuture<CacheEntry> winner = inflight.computeIfAbsent(key, k -> created);
-        if (winner != created) {
-            return join(winner);
-        }
-        Object monitor = monitorFor(key);
-        final long[] loadStartedAtMs = { clock.millis() };
-        try {
-            synchronized (monitor) {
-                CacheEntry latest = cache.get(key);
-                long now = clock.millis();
-                if (latest != null && now - latest.loadedAtMs < ttlMillis) {
-                    // Another caller installed a fresh entry after we registered
-                    // inflight. Drop any increments queued against that spurious
-                    // flight — noteReservation already bumped the live entry, and
-                    // leaving them pending would double-count on the next refresh.
-                    pendingUsageIncrements.remove(key);
-                    created.complete(latest);
-                    inflight.remove(key, created);
-                    return latest;
-                }
-                loadStartedAtMs[0] = clock.millis();
-            }
-
-            T value = loader.load();
-            long loadedAt = clock.millis();
-
-            synchronized (monitor) {
-                LongAdder pending = value instanceof Long ? pendingUsageIncrements.remove(key) : null;
-                long extra = pending == null ? 0L : pending.sum();
-
-                CacheEntry installed = cache.compute(key, (k, existing) -> {
-                    if (existing != null
-                            && existing.loadedAtMs >= refreshStartedAtMs
-                            && loadedAt - existing.loadedAtMs < ttlMillis) {
-                        if (extra > 0L && existing.value instanceof Long current) {
-                            return new CacheEntry(current + extra, existing.loadedAtMs, existing.loadStartedAtMs);
-                        }
-                        return existing;
-                    }
-                    Object toStore = value;
-                    if (value instanceof Long loaded) {
-                        // DB total + bumps noted during this load. Do not
-                        // Math.max with the previous entry — that made a
-                        // one-TTL double-count sticky across refreshes.
-                        toStore = loaded + extra;
-                    }
-                    return new CacheEntry(toStore, loadedAt, loadStartedAtMs[0]);
-                });
-                created.complete(installed);
-                inflight.remove(key, created);
-                return installed;
-            }
-        } catch (RuntimeException | Error e) {
-            created.completeExceptionally(e);
-            throw e;
-        } finally {
-            inflight.remove(key, created);
-        }
-    }
-
-    private static CacheEntry join(CompletableFuture<CacheEntry> future) {
-        try {
-            return future.get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted waiting for budget cache refresh", e);
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof RuntimeException re) {
-                throw re;
-            }
-            if (cause instanceof Error err) {
-                throw err;
-            }
-            throw new IllegalStateException("Budget cache refresh failed", cause);
-        }
+        cache.update(cacheKey, value -> value instanceof Long current ? current + microCents : value);
     }
 
     private static final String KEY_FILTER = "le.api_key_id = :aki";
@@ -642,17 +466,6 @@ public class GatewayBudgetService {
             ), 0)""".replace("{key}", keyFilter).replace("{extra}", extraFilter);
     }
 
-    @FunctionalInterface
-    private interface Loader<T> {
-        T load();
-    }
-
-    record CacheEntry(Object value, long loadedAtMs, long loadStartedAtMs) {
-        CacheEntry(Object value, long loadedAtMs) {
-            this(value, loadedAtMs, loadedAtMs);
-        }
-    }
-
     /**
      * {@code exists} false → use the team default budget; true with a null
      * limit → unlimited for that provider; true with any other limit (0
@@ -669,7 +482,7 @@ public class GatewayBudgetService {
     }
 
     /** Visible for tests. */
-    Map<String, CacheEntry> cacheView() {
-        return cache;
+    Map<String, BackgroundRefreshedCache.Entry> cacheView() {
+        return cache.view();
     }
 }

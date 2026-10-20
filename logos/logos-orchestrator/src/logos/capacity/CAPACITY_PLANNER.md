@@ -191,7 +191,7 @@ On every poll the pipeline also calls `ClassificationCorrectingScheduler.try_rer
 
 ### 6.2 Operator lane locks
 
-An operator can lock a lane warm from the statistics page. Locks live in the `lane_locks` table (owned by the webservice). The planner serves them from memory (`BackgroundRefreshedValue`, `logos/background_refresh.py`): the webservice pushes every committed lock or unlock to `POST /internal/lane_lock_changed`, which applies it at once (`apply_lane_lock`), and the table is read through the `lane_lock_reader` only once before the first cycle and then in the background every `LANE_LOCK_REFRESH_S` (300 s) to catch a lost push. No lock check waits for the database. A failed read keeps the previous set and is retried after `LANE_LOCK_RETRY_S` (10 s); a push that lands while a read runs wins over that read. A locked lane:
+An operator can lock a lane warm from the statistics page. Locks live in the `lane_locks` table (owned by the webservice). The planner serves them from memory (`BackgroundRefreshedValue`, `logos/background_refresh.py`): the webservice pushes every committed lock or unlock to `POST /internal/lane_lock_changed`, which applies it at once (`apply_lane_lock`), and the table is read through the `lane_lock_reader` only once before the first cycle and then in the background every `LANE_LOCK_REFRESH_S` (300 s) to catch a lost push. No lock check waits for the database. A failed read keeps the previous set and is retried after `LANE_LOCK_RETRY_S` (10 s); a push that lands while a read runs is replayed onto what that read returns. A locked lane:
 
 - is never idle-slept (L1 or L2);
 - is never an eviction, reclaim or headroom-stop victim for another model;

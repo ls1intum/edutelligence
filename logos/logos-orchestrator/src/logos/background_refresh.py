@@ -8,9 +8,8 @@ the service that made it) is applied to the memory copy at once with
 :meth:`BackgroundRefreshedValue.update`, so it takes effect without waiting
 for the next refresh; the refresh only catches what a lost push missed.
 
-The webservice's budget cache (``GatewayBudgetService``) follows the same
-pattern: serve the snapshot, refresh it in the background once it expired,
-apply known changes to it in place.
+The webservice has the same pattern in Java (``BackgroundRefreshedCache``,
+used by its budget snapshots).
 
 Thread-safe: reads happen on the event loop, the background load runs on a
 worker thread.
@@ -37,9 +36,9 @@ class BackgroundRefreshedValue(Generic[T]):
     blip never replaces known state with nothing. A failed load is retried
     after ``retry_after_s`` instead of the full ``refresh_after_s``.
 
-    A write applied with :meth:`update` while a load is running wins: the
-    load may have read the database before the write, so its result is
-    dropped and the next read starts a new load.
+    A change applied with :meth:`update` while a load is running is replayed
+    onto the loaded value when it is installed, so the load cannot discard it
+    (it may have read the database before the change).
     """
 
     def __init__(
@@ -62,7 +61,7 @@ class BackgroundRefreshedValue(Generic[T]):
         self._loaded = False
         self._due_at = 0.0
         self._refreshing = False
-        self._version = 0
+        self._pending: list[Callable[[T], T]] = []
 
     @property
     def loaded(self) -> bool:
@@ -99,7 +98,8 @@ class BackgroundRefreshedValue(Generic[T]):
         """Apply a known write to the memory copy at once and return the new value."""
         with self._lock:
             self._value = change(self._value)
-            self._version += 1
+            if self._refreshing:
+                self._pending.append(change)
             return self._value
 
     def _start_background_refresh(self) -> None:
@@ -119,8 +119,6 @@ class BackgroundRefreshedValue(Generic[T]):
                 self._due_at = self._clock() + self._retry_after_s
 
     def _load_and_install(self) -> bool:
-        with self._lock:
-            version = self._version
         try:
             value = self._loader()
         except Exception:  # noqa: BLE001 — the previous value stays in use
@@ -128,15 +126,14 @@ class BackgroundRefreshedValue(Generic[T]):
             value = None
         with self._lock:
             self._refreshing = False
+            pending, self._pending = self._pending, []
             now = self._clock()
             if value is None:
+                # The changes are already in the value that stays in use.
                 self._due_at = now + self._retry_after_s
                 return False
-            if self._version != version:
-                # A write landed while the load ran and may postdate what it
-                # read: keep the write, and load again on the next read.
-                self._due_at = now
-                return False
+            for change in pending:
+                value = change(value)
             self._value = value
             self._loaded = True
             self._due_at = now + self._refresh_after_s

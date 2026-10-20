@@ -82,7 +82,7 @@ def test_a_failed_load_keeps_the_value_and_is_retried_sooner():
     assert _wait_for(lambda: value.peek() == "reloaded")
 
 
-def test_a_write_during_a_load_wins_over_what_the_load_read():
+def test_a_change_during_a_load_is_replayed_onto_the_loaded_value():
     reading = threading.Event()
     release = threading.Event()
 
