@@ -196,7 +196,7 @@ class GatewayAdmissionConcurrencyTest {
         GatewayBudgetService snapshot = new GatewayBudgetService(
             namedJdbc, 3600, Clock.fixed(Instant.parse("2026-09-28T09:00:00Z"), ZoneOffset.UTC));
         GatewayCloudAccounting local = new GatewayCloudAccounting(
-            namedJdbc, snapshot, objectMapper, RESERVATION, 30);
+            namedJdbc, snapshot, objectMapper, RESERVATION, 30, 1000, 50);
         Fixture f = seedFixture(ApiKeyType.application);
         setKeyBudget(f.apiKeyId(), 2 * RESERVATION);
         snapshot.enforceCloudBudget(f.key());
@@ -216,7 +216,7 @@ class GatewayAdmissionConcurrencyTest {
         GatewayBudgetService snapshot = new GatewayBudgetService(
             namedJdbc, 3600, Clock.fixed(Instant.parse("2026-09-28T09:00:00Z"), ZoneOffset.UTC));
         GatewayCloudAccounting local = new GatewayCloudAccounting(
-            namedJdbc, snapshot, objectMapper, RESERVATION, 30);
+            namedJdbc, snapshot, objectMapper, RESERVATION, 30, 1000, 50);
         Fixture f = seedFixture(ApiKeyType.developer);
         setTeamBudget(f.teamId(), 2 * RESERVATION);
         snapshot.enforceCloudBudget(f.key());

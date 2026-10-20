@@ -326,11 +326,42 @@ async def test_route_labels_a_local_bad_gateway_as_api_error(monkeypatch):
     assert "logprobs" in body["error"]["message"]
 
 
-async def test_route_labels_an_unknown_model_as_invalid_request(monkeypatch):
-    monkeypatch.setattr(user_facing, "authenticate_api_key", Mock())
-    response = await post({"model": "not-a-decision-model", "state": "x", "questions": {"q": {"type": "noul"}}})
+async def test_route_hands_a_model_without_a_profile_to_its_lane(monkeypatch):
+    seen = []
+
+    async def handle(path, req):
+        seen.append((path, await req.json(), decision.lane_model_override.get()))
+        return JSONResponse({"object": "structured_decision", "answers": {}})
+
+    monkeypatch.setattr(user_facing, "handle_sync_request", handle)
+    # Fields Logos' own read-out does not know reach the lane untouched.
+    payload = {
+        "model": "Qwen/Qwen3.8-27B",
+        "state": "x",
+        "instructions": "Be strict.",
+        "chat_template_kwargs": {"enable_thinking": False},
+        "questions": {f"q{i}": {"type": "choice", "criteria": {"only": None}} for i in range(40)},
+    }
+    response = await post(payload)
+
+    assert response.status_code == 200
+    assert response.json()["object"] == "structured_decision"
+    assert seen == [("v1/systemone", payload, None)]
+
+
+async def test_route_hands_an_unparsable_body_to_the_pipeline(monkeypatch):
+    seen = []
+
+    async def handle(path, req):
+        seen.append((path, await req.body()))
+        return JSONResponse({"error": {"message": "Invalid JSON body"}}, status_code=400)
+
+    monkeypatch.setattr(user_facing, "handle_sync_request", handle)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
+        response = await client.post("/v1/systemone", content=b"{not json", headers={"Authorization": "Bearer lg-key"})
+
     assert response.status_code == 400
-    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert seen == [("v1/systemone", b"{not json")]
 
 
 async def test_route_rejects_too_many_questions(monkeypatch):
@@ -381,7 +412,7 @@ async def test_route_cancels_when_the_client_disconnects(monkeypatch):
             raise
 
     monkeypatch.setattr(user_facing, "answer_system_one", never_finishes)
-    response = await user_facing.system_one(
+    response = await user_facing._answer_with_decision_profile(
         request({"q": {"type": "noul"}}),
         LeavingClient(),
     )

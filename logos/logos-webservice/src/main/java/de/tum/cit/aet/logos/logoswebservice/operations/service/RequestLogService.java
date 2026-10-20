@@ -134,6 +134,17 @@ public class RequestLogService {
                                                  String status, String cursorTs, String cursorId,
                                                  int limit, boolean withTotal,
                                                  List<Integer> modelIds, List<Integer> providerIds) {
+        return getLatestRequests(startDate, endDate, userId, teamId, providerId, null, errorsOnly,
+            status, cursorTs, cursorId, limit, withTotal, modelIds, providerIds);
+    }
+
+    /** Same as above, additionally narrowed to one API key ({@code null} for every key). */
+    public Map<String, Object> getLatestRequests(String startDate, String endDate,
+                                                 Integer userId, Integer teamId,
+                                                 Integer providerId, Integer apiKeyId, boolean errorsOnly,
+                                                 String status, String cursorTs, String cursorId,
+                                                 int limit, boolean withTotal,
+                                                 List<Integer> modelIds, List<Integer> providerIds) {
         ZonedDateTime endDt = parseInstantOrNow(endDate);
         // Same lenient parse as the end: a malformed range must fall back to the
         // default window, not surface as a 500.
@@ -157,7 +168,7 @@ public class RequestLogService {
         // One row beyond the page: its presence is the has_more answer, and it is
         // dropped before the rows go out.
         List<Map<String, Object>> fetched = logEntryRepository
-            .findLatestRequests(startTs, endTs, userId, teamId, providerId, errorsOnly,
+            .findLatestRequests(startTs, endTs, userId, teamId, providerId, apiKeyId, errorsOnly,
                                 modelIds.isEmpty(), queryIds(modelIds), providerIds.isEmpty(), queryIds(providerIds),
                                 status, cursor, cursorRequestId, pageSize + 1)
             .stream()
@@ -212,7 +223,7 @@ public class RequestLogService {
         }
         if (withTotal) {
             Long total = logEntryRepository.countRequestsInRange(
-                startTs, endTs, userId, teamId, providerId, errorsOnly,
+                startTs, endTs, userId, teamId, providerId, apiKeyId, errorsOnly,
                 modelIds.isEmpty(), queryIds(modelIds), providerIds.isEmpty(), queryIds(providerIds), status);
             // The feed shows a window onto the range, so it has to say how big
             // the range is — "1-10 of 4,312" is the difference between a capped
@@ -250,6 +261,14 @@ public class RequestLogService {
                               Integer userId, Integer teamId,
                               Integer providerId, boolean errorsOnly, String status,
                               List<Integer> modelIds, List<Integer> providerIds) {
+        return countFeedRows(startDate, endDate, userId, teamId, providerId, null, errorsOnly, status,
+            modelIds, providerIds);
+    }
+
+    public long countFeedRows(String startDate, String endDate,
+                              Integer userId, Integer teamId,
+                              Integer providerId, Integer apiKeyId, boolean errorsOnly, String status,
+                              List<Integer> modelIds, List<Integer> providerIds) {
         ZonedDateTime endDt = parseInstantOrNow(endDate);
         ZonedDateTime startDt = parseInstantOrNull(startDate);
         if (startDt == null || startDt.isAfter(endDt)) {
@@ -258,7 +277,7 @@ public class RequestLogService {
         Timestamp startTs = Timestamp.from(startDt.toInstant());
         Timestamp endTs = Timestamp.from(endDt.toInstant());
         Long total = logEntryRepository.countRequestsInRange(
-            startTs, endTs, userId, teamId, providerId, errorsOnly,
+            startTs, endTs, userId, teamId, providerId, apiKeyId, errorsOnly,
             modelIds.isEmpty(), queryIds(modelIds), providerIds.isEmpty(), queryIds(providerIds), status);
         return total != null ? total : 0L;
     }
@@ -296,6 +315,13 @@ public class RequestLogService {
                                    Integer userId, Integer teamId,
                                    Integer providerId, boolean errorsOnly,
                                    List<Integer> modelIds) {
+        return scopeMovementSig(startDate, endDate, userId, teamId, providerId, null, errorsOnly, modelIds);
+    }
+
+    public String scopeMovementSig(String startDate, String endDate,
+                                   Integer userId, Integer teamId,
+                                   Integer providerId, Integer apiKeyId, boolean errorsOnly,
+                                   List<Integer> modelIds) {
         ZonedDateTime endDt = parseInstantOrNow(endDate);
         ZonedDateTime startDt = parseInstantOrNull(startDate);
         if (startDt == null || startDt.isAfter(endDt)) {
@@ -304,7 +330,7 @@ public class RequestLogService {
         Timestamp startTs = Timestamp.from(startDt.toInstant());
         Timestamp endTs = Timestamp.from(endDt.toInstant());
         var movement = logEntryRepository.findScopeMovement(
-            startTs, endTs, userId, teamId, providerId, modelIds.isEmpty(), queryIds(modelIds), errorsOnly);
+            startTs, endTs, userId, teamId, providerId, apiKeyId, modelIds.isEmpty(), queryIds(modelIds), errorsOnly);
         if (movement == null) return "";
         return movement.getRowCount() + ";" + movement.getLastEventTs();
     }

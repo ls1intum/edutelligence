@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -16,6 +17,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 
@@ -33,6 +36,15 @@ class GatewayCloudAccountingTest {
 
     @Autowired
     GatewayCloudAccounting accounting;
+
+    @Autowired
+    NamedParameterJdbcTemplate namedJdbc;
+
+    @Autowired
+    GatewayBudgetService budgetService;
+
+    @Autowired
+    ObjectMapper objectMapper;
 
     @MockitoBean
     JwtDecoder jwtDecoder;
@@ -54,6 +66,9 @@ class GatewayCloudAccountingTest {
         registry.add("spring.liquibase.enabled", () -> "true");
         registry.add("spring.liquibase.change-log", () -> "classpath:liquibase/changelog/master.xml");
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
+        // The tests drive the sweep themselves; a scheduled run in between
+        // would finalize the rows they set up as still unpriced.
+        registry.add("logos.gateway.cost-finalize-seconds", () -> "3600");
     }
 
     private static final AtomicInteger SEQ = new AtomicInteger(1);
@@ -249,6 +264,130 @@ class GatewayCloudAccountingTest {
         assertThat(cost(logId)).isEqualTo(36_000L);
     }
 
+    // --------------------------------------------------------- finalization
+
+    @Test
+    void settleSuccess_storesThePriceOnTheRowSoReadsDoNotRePriceIt() {
+        Fixture f = seedPricedDeployment();
+        int logId = admit(f);
+
+        accounting.settleSuccess(logId, USAGE, null, null);
+
+        assertThat(costFinalized(logId)).isTrue();
+        assertThat(settledCost(logId)).isEqualTo(20_000L + 36_000L);
+        assertThat(cost(logId)).isEqualTo(20_000L + 36_000L);
+    }
+
+    @Test
+    void settleSuccess_storesTheTierPriceTheResponseReported() {
+        Fixture f = seedPricedDeployment();
+        seedPrice(f.modelId(), f.providerId(), "billed_input_uncached", 10000, "flex");
+        seedPrice(f.modelId(), f.providerId(), "billed_output_text", 60000, "flex");
+        int logId = admit(f);
+
+        accounting.settleSuccess(logId, USAGE, null, "flex");
+
+        assertThat(settledCost(logId)).isEqualTo(10_000L + 18_000L);
+    }
+
+    @Test
+    void settleSuccess_priceIsNotRewrittenByALaterCatalogChange() {
+        Fixture f = seedPricedDeployment();
+        int logId = admit(f);
+        accounting.settleSuccess(logId, USAGE, null, null);
+
+        jdbc.update("UPDATE token_prices SET price_per_k_unit = price_per_k_unit * 10 "
+            + "WHERE model_id = ? AND provider_id = ?", f.modelId(), f.providerId());
+
+        // Completed budget history stays what it was billed at.
+        assertThat(cost(logId)).isEqualTo(20_000L + 36_000L);
+    }
+
+    @Test
+    void settleSuccess_usageThatPricesToNothingIsFinalizedAtTheReservation() {
+        Fixture f = seedUnpricedDeployment();
+        int logId = admit(f);
+
+        accounting.settleSuccess(logId, USAGE, null, null);
+
+        assertThat(costFinalized(logId)).isTrue();
+        assertThat(settledCost(logId)).isEqualTo(RESERVATION);
+    }
+
+    @Test
+    void settleSuccess_withReservationsOffUnpricedUsageIsFinalizedWithoutACharge() {
+        GatewayCloudAccounting noReservation = localAccounting(0, 1000, 50);
+        Fixture f = seedUnpricedDeployment();
+        int logId = admit(f);
+
+        noReservation.settleSuccess(logId, USAGE, null, null);
+
+        // Nothing to charge and no reservation to keep: the row is still
+        // finalized, so it is never re-priced on a budget read.
+        assertThat(costFinalized(logId)).isTrue();
+        assertThat(settledCost(logId)).isNull();
+        assertThat(cost(logId)).isNull();
+    }
+
+    @Test
+    void finalizeUnsettled_storesThePriceOfRowsSettledWithoutOne() {
+        Fixture f = seedPricedDeployment();
+        int priced = unfinalizedSuccess(f, USAGE);
+
+        accounting.finalizeUnsettled();
+
+        assertThat(costFinalized(priced)).isTrue();
+        assertThat(settledCost(priced)).isEqualTo(20_000L + 36_000L);
+        assertThat(cost(priced)).isEqualTo(20_000L + 36_000L);
+    }
+
+    @Test
+    void finalizeUnsettled_keepsTheReservationForRowsThatPriceToNothing() {
+        Fixture f = seedUnpricedDeployment();
+        int unpriced = unfinalizedSuccess(f, USAGE);
+
+        accounting.finalizeUnsettled();
+
+        assertThat(costFinalized(unpriced)).isTrue();
+        assertThat(settledCost(unpriced)).isEqualTo(RESERVATION);
+    }
+
+    @Test
+    void finalizeUnsettled_leavesInFlightAndOrchestratorRowsAlone() {
+        Fixture f = seedPricedDeployment();
+        int inFlight = admit(f);
+        int orchestrator = unfinalizedSuccess(f, USAGE);
+        jdbc.update("UPDATE log_entry SET request_id = 'orch-' || id WHERE id = ?", orchestrator);
+
+        accounting.finalizeUnsettled();
+
+        assertThat(status(inFlight)).isNull();
+        assertThat(settledCost(inFlight)).isEqualTo(RESERVATION);
+        // The orchestrator settles its own rows; the gateway sweep is not theirs.
+        assertThat(costFinalized(orchestrator)).isFalse();
+        assertThat(settledCost(orchestrator)).isNull();
+    }
+
+    @Test
+    void finalizeUnsettled_worksThroughABacklogInBoundedBatches() {
+        accounting.finalizeUnsettled();
+        Fixture f = seedPricedDeployment();
+        int first = unfinalizedSuccess(f, USAGE);
+        int second = unfinalizedSuccess(f, USAGE);
+        int third = unfinalizedSuccess(f, USAGE);
+
+        // Two batches of one row: the third waits for the next run.
+        int finalized = localAccounting(RESERVATION, 1, 2).finalizeUnsettled();
+
+        assertThat(finalized).isEqualTo(2);
+        assertThat(costFinalized(first)).isTrue();
+        assertThat(costFinalized(second)).isTrue();
+        assertThat(costFinalized(third)).isFalse();
+
+        assertThat(accounting.finalizeUnsettled()).isEqualTo(1);
+        assertThat(settledCost(third)).isEqualTo(20_000L + 36_000L);
+    }
+
     // ------------------------------------------------------- payload logging
 
     @Test
@@ -332,6 +471,28 @@ class GatewayCloudAccountingTest {
     }
 
     // --------------------------------------------------------------- helpers
+
+    private GatewayCloudAccounting localAccounting(long reservation, int batchSize, int maxBatches) {
+        return new GatewayCloudAccounting(
+            namedJdbc, budgetService, objectMapper, reservation, 30, batchSize, maxBatches);
+    }
+
+    /**
+     * A successful direct-cloud row in the shape a settle left it before the
+     * price was stored: usage recorded, no settled cost, not finalized.
+     */
+    private int unfinalizedSuccess(Fixture f, Map<String, Long> usage) {
+        int logId = admit(f);
+        accounting.settleSuccess(logId, usage, null, null);
+        jdbc.update("UPDATE log_entry SET settled_cost_micro_cents = NULL, cost_finalized = FALSE "
+            + "WHERE id = ?", logId);
+        return logId;
+    }
+
+    private Boolean costFinalized(int logEntryId) {
+        return jdbc.queryForObject(
+            "SELECT cost_finalized FROM log_entry WHERE id = ?", Boolean.class, logEntryId);
+    }
 
     private record Fixture(int modelId, int providerId, GatewayKey key, GatewayDeployment deployment) {
     }
