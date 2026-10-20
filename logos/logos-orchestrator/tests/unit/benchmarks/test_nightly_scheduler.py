@@ -12,6 +12,7 @@ from logos.benchmarks.reservations import benchmark_reservations
 
 @pytest.fixture
 def scheduler(monkeypatch):
+    monkeypatch.delenv("LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER", raising=False)
     registry = MagicMock()
     registry.is_provider_online.return_value = True
     registry.has_received_first_status.return_value = True
@@ -373,3 +374,33 @@ async def test_terminal_orphan_job_still_requires_worker_cleanup_before_restore(
     scheduler.restore.assert_not_awaited()
     scheduler.run_schedule.assert_not_awaited()
     assert not scheduler.saved
+
+
+async def test_explicit_single_worker_maintenance_runs_and_restores(scheduler, monkeypatch):
+    monkeypatch.setenv("LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER", "true")
+    scheduler.registry.active_provider_ids.return_value = [20]
+
+    async def submit(*args):
+        assert not benchmark_reservations.allows(20, "other", "new-production-request")
+        return 7, asyncio.create_task(asyncio.sleep(0, result=1))
+
+    scheduler.submit = AsyncMock(side_effect=submit)
+    assert await scheduler.run_schedule(31, MagicMock())
+    assert scheduler.submit.await_count == 5
+    scheduler.restore.assert_awaited_once()
+    assert scheduler.saved[-1][1] == "completed"
+    assert benchmark_reservations.owner(20, "other") is None
+
+
+@pytest.mark.parametrize("condition", ["offline", "unhealthy", "calibrating"])
+def test_single_worker_override_still_requires_healthy_idle_worker(scheduler, monkeypatch, condition):
+    monkeypatch.setenv("LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER", "true")
+    scheduler.registry.active_provider_ids.return_value = [20]
+    if condition == "offline":
+        scheduler.registry.is_provider_online.return_value = False
+    elif condition == "calibrating":
+        scheduler.registry.is_calibrating.return_value = True
+    else:
+        scheduler.registry.peek_runtime_snapshot.return_value["runtime"]["node_health"] = {"healthy": False}
+    with pytest.raises(RuntimeError, match="selected worker must be online and healthy"):
+        scheduler.target_lane(31)

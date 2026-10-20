@@ -18,6 +18,7 @@ from logos.benchmarks.nightly import (
     can_start,
     local_now,
     parameter_plan,
+    requires_spare_worker,
 )
 from logos.benchmarks.reservations import benchmark_reservations
 from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
@@ -190,7 +191,9 @@ class NightlyScheduler:
         if target["provider_type"] != "logosnode":
             raise RuntimeError("Nightly benchmarks require a Logos worker")
         pid, model = int(target["provider_id"]), str(target["model_name"])
-        if not self.healthy(pid) or not any(
+        if not self.healthy(pid):
+            raise RuntimeError("The selected worker must be online and healthy")
+        if requires_spare_worker() and not any(
             other != pid and self.healthy(other) for other in self.registry.active_provider_ids()
         ):
             raise RuntimeError("Need the selected worker and another healthy worker for production")

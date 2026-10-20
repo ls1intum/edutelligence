@@ -123,7 +123,7 @@ local-date claim prevents re-running a schedule after an application restart.
 Existing manual benchmarks finish before nightly admission.
 
 The selected worker must be online, healthy and not calibrating. Another
-healthy worker must remain available. The model must have exactly one existing,
+healthy worker must remain available by default. The model must have exactly one existing,
 loaded and awake vLLM lane. Production requests cannot enter the reserved node;
 existing traffic drains before a benchmark starts.
 Requests already accepted by the scheduler can finish, including requests that still wait for transport access.
@@ -215,6 +215,15 @@ Age alone does not release these records.
 An operator must stop the original benchmark process and verify worker cleanup before database recovery.
 Then mark the affected job as failed and remove its matching `maintenance_benchmark` record.
 Keep every nightly recovery journal until the scheduler restores the original worker configuration.
+
+## Single-worker maintenance
+
+`LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER=false` requires another healthy worker. This is the default.
+Set this variable to `true` only in an environment where normal requests can wait during benchmarks.
+The activation dialog states this policy. The selected worker must still be online, healthy and free of calibration.
+Existing requests drain first. New normal requests cannot enter the reserved worker.
+All time limits, recovery checks and configuration restoration still apply.
+This option does not enable schedules. Enable each intended model/worker pair separately.
 
 ## Deployment recovery
 
