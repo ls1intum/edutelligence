@@ -1,32 +1,28 @@
 # Configurable model benchmarks
 
-The Models → Performance runner supports public Hugging Face datasets with a plain-text prompt column. Search selects a repository; configuration, split and prompt column are loaded from the HF Dataset Viewer. Private/gated datasets and structured conversation or multimodal columns are not supported by this editor.
+This guide covers the internal benchmark API, lane reservations and implementation.
+For the user workflow, see [Model Benchmarks](../../docs/admin/model-benchmarks.md).
 
 ## Start and confirm a run
 
-Open **Models → Model Management → model → Performance** as a Logos admin.
-Select the worker/provider, dataset, sample size and serving settings.
-Select **Review & start benchmark** to open the shared confirmation dialog.
-The dialog uses the same `app-modal-confirm` component as team deletion.
-Only **Start benchmark** submits the job; **Cancel** or closing the dialog does not start it.
-For a batch, one confirmation starts all configurations and repetitions.
-
-The dialog explains whether the target model lanes will be reserved.
-It also explains that changed vLLM settings remain active after the run.
-External provider benchmarks run alongside other requests; their traffic can affect the measurements.
+In **Performance → Run benchmark**, **Review benchmark** or **Review batch**
+opens the shared `app-modal-confirm` dialog. Only **Start benchmark** submits the job.
+One confirmation starts all configurations and repetitions in a batch.
+External provider benchmarks do not reserve serving capacity.
 
 ## User guide and screenshots
 
 The published [Model Benchmarks guide](../../docs/admin/model-benchmarks.md)
-contains the user workflow and desktop/mobile screenshots. This document keeps
-API details and implementation references for orchestrator development.
+contains the user workflow and complete desktop screenshots.
 
 ## Automatic lane reservation
 
 For an internal Logos worker benchmark, the orchestrator reserves the selected
-provider/model pair before the background job starts. The reservation covers all
-lanes for that model on that worker, including replacement lanes and gaps between
-batch runs. It is temporary; there is no persistent benchmark-only lane setting.
+provider/model pair before the background job starts, even if no lane exists yet.
+The reservation covers all lanes for that pair, including newly created lanes,
+replacement lanes and gaps between batch runs.
+The worker node loads the model and executes requests; the orchestrator enforces the reservation.
+It is temporary; there is no persistent benchmark-only lane setting.
 Other models on the same worker remain available.
 
 - Existing admitted requests finish before measurement starts. Preparation checks
@@ -67,7 +63,14 @@ Implementation entry points:
 
 ## Data loading
 
-The default remains `openai/gsm8k`, configuration `main`, split `test`, prompt column `question`. Search and schema discovery query Hugging Face metadata APIs; the browser does not download the dataset. When the job starts, GuideLLM 0.7.2 uses `datasets.load_dataset` on the orchestrator. This downloads/prepares data and reuses the Hugging Face cache on subsequent runs while that cache exists. The dataset is not bundled in the Logos image. Cache survival across container replacement depends on deployment storage; the code does not guarantee it. A small sample count limits benchmark requests, not necessarily the volume downloaded by the datasets library.
+The default is `openai/gsm8k`, configuration `main`, split `test`, prompt column `question`.
+The editor supports public datasets with a plain-text prompt column.
+Private or gated datasets and structured conversation or multimodal columns are not supported.
+Search and schema discovery use Hugging Face metadata APIs.
+GuideLLM 0.7.2 downloads the dataset on the orchestrator when the job starts.
+It reuses the Hugging Face cache while that cache exists.
+Cache persistence across container replacement depends on deployment storage.
+A small sample count limits requests, not necessarily the download size.
 
 These are serving-performance benchmarks. Choosing GSM8K supplies its questions as prompts; Logos does not grade answers against the dataset's reference answers.
 
@@ -78,7 +81,7 @@ there is no additional dataset download. Each cell is limited to 2,000 character
 with truncation indicated in the UI. Structured answers are displayed as plain
 JSON text. These are dataset examples, not generated model responses or a promise
 that the benchmark's seeded sample will contain these exact rows.
-**Open in Hugging Face** opens the full viewer for the current configuration/split
+**View on Hugging Face** opens the full viewer for the current configuration/split
 in a new tab and stays available if the preview cannot load.
 
 ## Next-run settings
@@ -87,7 +90,9 @@ A historical result's Configuration section offers **Use for next benchmark**. I
 
 vLLM overrides apply only to Logos workers. Blank fields keep the current worker value; explicit false is preserved. The orchestrator prepares an idle lane, prevents routing during reconfiguration, merges the selected overrides, and asks the worker to reload. The worker checks its active-request counters under the lane lock before restarting. The orchestrator waits for the updated configuration to appear in worker status before measuring. Unsupported settings, worker errors and timeouts fail the job instead of recording a successful run. When retrying a failed lane with corrected settings, the new configuration is applied before another startup attempt.
 
-Changed vLLM settings remain active after the benchmark, including if measurement fails or is cancelled after reconfiguration. There is no automatic rollback. Deploy the updated workernode together with the orchestrator to enforce the `require_idle` reconfiguration guard.
+Applied vLLM settings remain active after completion, failure or cancellation.
+There is no automatic rollback.
+The worker must support the `require_idle` reconfiguration guard.
 
 `attention_backend` can be fixed for a run or varied in a batch: `FLASHINFER`,
 `FLASH_ATTN`, `TRITON_ATTN`, `FLEX_ATTENTION`, and `TURBOQUANT`. An empty
@@ -109,14 +114,23 @@ All Spring endpoints below require `logos_admin` and forward to the internal orc
 - `POST /logosdb/model_benchmarks/datasets/metadata`: `{ "dataset": "openai/gsm8k", "subset": "main", "split": "test" }` (subset and split are optional)
 - `POST /logosdb/model_benchmarks/run`: existing target and sample fields plus `dataset`, `subset`, `split`, `text_column`, `profile`, `concurrency`, `seed` and optional `serving_overrides`.
 
-The selected settings are persisted with the job; successful results store the actual GuideLLM scenario and the worker's serving snapshot. No database migration is required.
+The job stores the selected settings.
+Successful results store the actual GuideLLM scenario and the worker's serving snapshot.
+Pipeline parallelism uses the worker's effective value, including global flags and lane overrides.
+For older workers, explicit lane flags remain usable. Missing values remain unknown instead of defaulting to 1.
 
 
 ## Benchmark batches and comparison
 
 Enable **Run a batch**, choose repetitions per configuration, and add parameters to vary. Numeric parameters accept a comma-separated list or a From/To/Step range; boolean parameters accept `true, false`. Multiple varied parameters produce all combinations. The preview lists each configuration and the fixed settings before starting. Concurrency sweeps use the concurrent profile, including the one-stream case. Limits are 1,000 configurations and 10,000 total runs, independent of the sample count per run.
 
-The start confirmation uses the same modal dialog as team deletion. Confirming once submits the complete plan to the server; closing the browser does not stop execution. Each configuration is repeated before advancing to the next one. One provider lease covers the whole batch, with progress and one cancel action. On Logos workers, the selected model’s lanes are reserved for the job, including the intervals between repetitions and configurations. Existing requests drain before measurement; production requests remain queued or use another provider. Other models on the worker remain available. The reservation is released on completion, failure, or cancellation. The capacity planner does not reclaim the reserved lanes. The first failed run stops the remaining batch; completed measurements stay stored. Worker disconnects and orchestrator restarts stop the batch under the existing lease rules; batches do not resume automatically after a server restart. Serving overrides remain applied, as for a single run.
+The server executes each configuration's repetitions before the next configuration.
+One provider lease covers the whole batch, with progress and one cancel action.
+The reservation follows the [same lifecycle](#automatic-lane-reservation) as a single run.
+Closing the browser does not stop execution.
+The first failed run stops the remaining batch; completed measurements stay stored.
+Worker disconnects and orchestrator restarts stop the batch. Batches do not resume automatically.
+Serving overrides remain applied, as for a single run.
 
 The existing run endpoint accepts optional `batch: { configurations: [...], repetitions: 3 }`. Every configuration contains the same settings as a single run, using `samples` (1–100) inside the batch. Configurations are complete settings, not patches to the outer request. All configurations and their hardware limits are validated before a job is created. Every changed serving key must be present in every configuration to avoid inheriting a prior run's value. The job result exposes `total_runs`, `run_index` (one-based), `completed_runs`, `configuration_index`, and `repetition`.
 

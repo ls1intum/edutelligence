@@ -59,9 +59,8 @@ the error reports and the scheduling statistics of the model.
 ### Model benchmarks
 
 Open the model's **Performance** tab to configure and start a benchmark.
-Logos reserves the selected model lanes during a worker benchmark.
+The orchestrator reserves the selected model lanes during a worker benchmark.
 The [Model Benchmarks guide](../admin/model-benchmarks.md) explains the confirmation dialog, single-run charts, batches and failed-model retries.
-It includes desktop and mobile screenshots.
 
 ## Providers
 

@@ -8,41 +8,15 @@ provider-model pair → GuideLLM → benchmarks.json → Logos import endpoint �
 
 ## Run from Logos
 
-For the normal admin flow, open **Models → Model Management → model → Performance**.
-Select the provider-model pair and configure the run. The default dataset is GSM8K
-`main/test`, with 50 samples and at most 512 output tokens per request.
-Select **Review & start benchmark**, then confirm **Start benchmark** in the dialog.
-The page shows live job status and adds successful results automatically.
-
-Logos worker runs use a signed, job-scoped internal endpoint. They need no benchmark
-endpoint or API key under **Providers**. The selected model's lanes are reserved
-while the job runs, including all batch repetitions. Existing requests finish first;
-new production requests wait or use another eligible provider. Completion, failure
-and cancellation release the reservation. Other models on the worker remain available.
-External provider runs use their configured server-side endpoint and credential;
-Logos does not reserve their serving capacity.
-
-One eligible measurement appears as a filled point in the comparison charts.
-When retrying a failed lane with serving overrides, Logos applies the selected
-settings before attempting startup. Applied settings remain active after the run.
-
-See [Configurable model benchmarks](../logos-orchestrator/docs/benchmark-configuration.md)
-for batch behavior, comparison requirements, reservation limits and the Dev checklist.
-
-### Performance page preview
-
-The desktop example shows the run settings and one completed measurement as a
-filled point in each comparison chart. It uses synthetic data in the actual UI
-component, without live services or the authenticated application shell.
-
-![Benchmark settings and single-run results on desktop](../docs/static/img/benchmarks/performance-desktop.png)
-
-See the [desktop and mobile screenshots](../docs/admin/model-benchmarks.md)
-for the complete page and confirmation dialog in both viewport sizes.
+For the admin workflow, use **Models → Model Management → model → Performance → Run benchmark**.
+Follow the [Model Benchmarks guide](../docs/admin/model-benchmarks.md) for configuration,
+confirmation, results and screenshots.
 
 The commands below remain available for local diagnosis and manual imports.
 They do not create an internal benchmark job or acquire its lane reservation.
 Requests sent to Logos through a public endpoint remain normal production requests.
+See [Configurable model benchmarks](../logos-orchestrator/docs/benchmark-configuration.md)
+for the orchestrator's reservation and API behavior.
 
 ## Setup
 
@@ -72,7 +46,7 @@ python run_guidellm_gsm8k.py \
 
 ## Run without importing
 
-For the current test against Logos-dev, only its API key is required:
+To measure Logos Dev without importing results, use its API key:
 
 ```bash
 export MODEL_PROVIDER_API_KEY='<logos-dev-api-key>'
