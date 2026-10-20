@@ -215,6 +215,18 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration061_requestedModelHfStatusColumnExists() {
+        // The decisive Hugging Face verdict (reachable/rejected) a requested
+        // model carries; null until the precheck has produced one, so the
+        // check constraint must allow NULL.
+        assertThat(columnExists("requested_models", "hugging_face_status")).isTrue();
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_constraint WHERE conname='ck_requested_models_hf_status'",
+            Integer.class);
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
     void migration003_backfillsKeyForKeylessMembership() {
         // A current membership with no developer key for that team (the legacy
         // logos_admin case) must receive exactly one active developer key whose

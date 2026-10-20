@@ -26,8 +26,17 @@ public class RequestedModel {
     @Column(nullable = false)
     private String name;
 
+    /**
+     * The last decisive Hugging Face verdict for this name ({@code reachable}
+     * or {@code rejected}); null until the precheck has produced one — a
+     * timeout is no verdict and leaves this empty.
+     */
+    private String huggingFaceStatus;
+
     public Integer getId() { return id; }
     public String getName() { return name; }
+    public String getHuggingFaceStatus() { return huggingFaceStatus; }
 
     public void setName(String name) { this.name = name; }
+    public void setHuggingFaceStatus(String huggingFaceStatus) { this.huggingFaceStatus = huggingFaceStatus; }
 }

@@ -46,7 +46,9 @@ public class ModelRequestController {
 
     /**
      * Cast the caller's vote for a model. Refused (409) when the model is
-     * already served by Logos. Re-voting an already-voted model is a no-op.
+     * already served by Logos, (400) when the Hugging Face precheck does not
+     * find the repository, and (503) when the precheck could not be performed
+     * (the user should retry). Re-voting an already-voted model is a no-op.
      */
     @PostMapping("/add_model_request")
     public ResponseEntity<?> addModelRequest(@RequestBody SubmitModelRequestDTO req,
@@ -60,6 +62,10 @@ public class ModelRequestController {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (RequestedModelService.ModelAlreadyAvailableException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
+        } catch (RequestedModelService.ModelNotOnHuggingFaceException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (RequestedModelService.HfReachabilityUnavailableException e) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("error", e.getMessage()));
         }
     }
 
