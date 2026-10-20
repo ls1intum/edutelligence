@@ -115,6 +115,18 @@ describe('CloudLatencyPanel', () => {
     expect(calls[1].scope.teamId).toBe(7);
   });
 
+  it('reloads the same range when the refresh counter changes', async () => {
+    const fixture = create();
+    respond({ range: { start: '', end: '' }, rows: [] });
+    await fixture.whenStable();
+
+    fixture.componentRef.setInput('refresh', 1);
+    fixture.detectChanges();
+
+    expect(calls.length).toBe(2);
+    expect(calls[1]).toEqual(calls[0]);
+  });
+
   it('says so when nothing is in range or the load fails', async () => {
     const fixture = create();
     respond({ range: { start: '', end: '' }, rows: [] });

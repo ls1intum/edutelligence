@@ -45,6 +45,11 @@ export class CloudLatencyPanel {
     apiKeyId: null,
     modelIds: [],
   });
+  /**
+   * Bumped by the host's Refresh. A calendar range read again within the same
+   * period has the same start and end, so this is what reloads the table then.
+   */
+  readonly refresh = input(0);
 
   readonly rows = signal<CloudLatencyRow[]>([]);
   readonly loading = signal(true);
@@ -73,6 +78,7 @@ export class CloudLatencyPanel {
       const start = this.start();
       const end = this.end();
       const scope = this.scope();
+      this.refresh();
       void this.load(start, end, scope);
     });
   }
