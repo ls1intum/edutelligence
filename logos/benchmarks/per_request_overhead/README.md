@@ -85,7 +85,7 @@ orchestrator startup (the CI workflow caches the model).
 ## CI
 
 `.github/workflows/logos_benchmark-overhead.yml` runs the same harness on
-every PR (incl. leaving draft) touching `logos/**` or `shared/**`, against a
+every PR (incl. leaving draft) touching `logos/**`, against a
 postgres:17 service + Liquibase migration. The job **fails** when p50 exceeds
 15 ms or p95 exceeds 150 ms. Results between the 10 ms / 30 ms goals and those
 CI thresholds are warnings in the idempotent comment.
