@@ -106,12 +106,16 @@ WHERE api_key_id = {key_id} AND result_status = 'success' AND NOT cost_finalized
 """
 
 # Per request of the load: the time in Logos (whole request minus the provider
-# window) and the admission part of it (arrival to forwarding).
+# window), split into its three parts: admission (arrival to forwarding), the
+# call (forwarding to the provider call) and the tail (provider response to
+# the end of the response, i.e. delivery to the client and the settle).
 _LOGOS_TIME_QUERY = """
 WITH r AS (
     SELECT EXTRACT(EPOCH FROM ((le.timestamp_response - le.timestamp_request)
                                - (le.timestamp_provider_response - le.timestamp_provider_call))) * 1000 AS logos_ms,
-           EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) * 1000 AS admission_ms
+           EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) * 1000 AS admission_ms,
+           EXTRACT(EPOCH FROM (le.timestamp_provider_call - le.timestamp_forwarding)) * 1000 AS call_ms,
+           EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_provider_response)) * 1000 AS tail_ms
     FROM log_entry le
     WHERE le.api_key_id = {key_id}
       AND le.timestamp_request >= CAST('{since}' AS TIMESTAMPTZ)
@@ -125,7 +129,11 @@ SELECT COUNT(*),
        array_to_string(percentile_cont(ARRAY[0.5, 0.95, 0.99]) WITHIN GROUP (ORDER BY logos_ms), ','),
        MAX(logos_ms),
        array_to_string(percentile_cont(ARRAY[0.5, 0.95, 0.99]) WITHIN GROUP (ORDER BY admission_ms), ','),
-       MAX(admission_ms)
+       MAX(admission_ms),
+       array_to_string(percentile_cont(ARRAY[0.5, 0.95, 0.99]) WITHIN GROUP (ORDER BY call_ms), ','),
+       MAX(call_ms),
+       array_to_string(percentile_cont(ARRAY[0.5, 0.95, 0.99]) WITHIN GROUP (ORDER BY tail_ms), ','),
+       MAX(tail_ms)
 FROM r;
 """
 
@@ -198,7 +206,7 @@ def logos_time(key_id: int, since: Optional[str]) -> Dict[str, Any]:
     try:
         out = _psql(_LOGOS_TIME_QUERY.format(key_id=key_id, since=since), timeout_s=120.0)
         row = next(ln for ln in out.splitlines() if "|" in ln)
-        n, logos_pcts, logos_max, adm_pcts, adm_max = row.split("|")
+        n, logos_pcts, logos_max, adm_pcts, adm_max, call_pcts, call_max, tail_pcts, tail_max = row.split("|")
         if int(n) == 0:
             return {"n": 0}
 
@@ -206,7 +214,13 @@ def logos_time(key_id: int, since: Optional[str]) -> Dict[str, Any]:
             p50, p95, p99 = (float(v) for v in pcts.split(","))
             return {"p50_ms": p50, "p95_ms": p95, "p99_ms": p99, "max_ms": float(mx)}
 
-        return {"n": int(n), "logos": _summary(logos_pcts, logos_max), "admission": _summary(adm_pcts, adm_max)}
+        return {
+            "n": int(n),
+            "logos": _summary(logos_pcts, logos_max),
+            "admission": _summary(adm_pcts, adm_max),
+            "call": _summary(call_pcts, call_max),
+            "tail": _summary(tail_pcts, tail_max),
+        }
     except Exception as exc:  # noqa: BLE001 — reported, not raised
         return {"n": 0, "error": repr(exc)[:300]}
 

@@ -68,17 +68,17 @@ def _budget_section(bud: Dict[str, Any]) -> List[str]:
                 f"{_ms(s['p99_ms'])} ms | {_ms(s['max_ms'])} ms |"
             )
     if logos:
-        adm = in_logos.get("admission", {})
-        lines.append(
-            f"| Time in Logos, per request of the load | {in_logos['n']} | {_ms(logos['p50_ms'])} ms | "
-            f"{_ms(logos['p95_ms'])} ms | {_ms(logos['p99_ms'])} ms | {_ms(logos['max_ms'])} ms |"
-        )
-        if adm:
-            lines.append(
-                f"| … of which admission (auth, rate limit, budget, reservation) | {in_logos['n']} | "
-                f"{_ms(adm['p50_ms'])} ms | {_ms(adm['p95_ms'])} ms | {_ms(adm['p99_ms'])} ms | "
-                f"{_ms(adm['max_ms'])} ms |"
-            )
+        for key, label in (
+            ("admission", "… admission (auth, rate limit, budget, reservation)"),
+            ("call", "… call (admission end to the provider call)"),
+            ("tail", "… tail (provider response to end of the response: delivery, settle)"),
+        ):
+            part = in_logos.get(key, {})
+            if part:
+                lines.append(
+                    f"| {label} | {in_logos['n']} | {_ms(part['p50_ms'])} ms | {_ms(part['p95_ms'])} ms | "
+                    f"{_ms(part['p99_ms'])} ms | {_ms(part['max_ms'])} ms |"
+                )
     lines.append("")
     lines.append(
         "_Time in Logos_ is read back from each request's `log_entry` row: arrival at the controller to the "
