@@ -6,6 +6,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -49,6 +50,7 @@ final class GatewayUsageCapture extends OutputStream {
     private final ObjectMapper objectMapper;
     private final boolean sse;
     private final boolean retainBody;
+    private final Supplier<Instant> clock;
 
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
     private boolean bufferOverflowed;
@@ -56,14 +58,22 @@ final class GatewayUsageCapture extends OutputStream {
     private String serviceTier;
     private byte[] capturedBody;
     private Instant firstByteAt;
+    private Instant firstTokenAt;
+    /** When the chunk being written arrived, before it was passed to the client. */
+    private Instant chunkArrivedAt;
 
     GatewayUsageCapture(OutputStream delegate, ObjectMapper objectMapper, String upstreamContentType) {
-        this(delegate, objectMapper, upstreamContentType, false);
+        this(delegate, objectMapper, upstreamContentType, false, Instant::now);
     }
 
+    /**
+     * @param clock dates the arrival of each chunk; the forwarder passes the
+     *              upstream read clock so a slow client does not shift it
+     */
     GatewayUsageCapture(OutputStream delegate, ObjectMapper objectMapper,
-                        String upstreamContentType, boolean retainBody) {
+                        String upstreamContentType, boolean retainBody, Supplier<Instant> clock) {
         this.delegate = delegate;
+        this.clock = clock;
         this.objectMapper = objectMapper;
         this.sse = isEventStream(upstreamContentType);
         this.retainBody = retainBody;
@@ -75,11 +85,26 @@ final class GatewayUsageCapture extends OutputStream {
     }
 
     /**
-     * When the first response body byte passed through, i.e. the first token
-     * of a stream or the start of a JSON body; null while none has.
+     * When the first response body byte arrived from the upstream; null while
+     * none has. For a stream this can be a role-only event or a keep-alive.
      */
     Instant firstByteAt() {
         return firstByteAt;
+    }
+
+    /**
+     * When the first token arrived from the upstream; null while none has.
+     *
+     * <p>For a stream it is the first event that carries generated content
+     * (see {@link #carriesContent}), not the first byte: a stream often opens
+     * with a role-only delta or a keep-alive, which would understate the time
+     * to the first token. A stream in which no event is recognised as content
+     * (an unfamiliar event format) falls back to the first byte, so the figure
+     * stays available. A JSON body has no tokens in flight; its first byte is
+     * the moment the whole answer starts to arrive and stands in for it.
+     */
+    Instant firstTokenAt() {
+        return firstTokenAt != null ? firstTokenAt : firstByteAt;
     }
 
     /** The usage seen so far; empty when the response carried none. */
@@ -102,6 +127,7 @@ final class GatewayUsageCapture extends OutputStream {
 
     @Override
     public void write(int b) throws IOException {
+        chunkArrivedAt = clock.get();
         markFirstByte(1);
         delegate.write(b);
         capture(new byte[] {(byte) b}, 0, 1);
@@ -111,6 +137,9 @@ final class GatewayUsageCapture extends OutputStream {
     public void write(byte[] b, int off, int len) throws IOException {
         // Overridden so the pass-through stays a bulk copy: FilterOutputStream's
         // default would forward this byte by byte.
+        // Taken before the write: a slow client must not delay the instant
+        // this chunk is recorded as having arrived from the upstream.
+        chunkArrivedAt = clock.get();
         markFirstByte(len);
         delegate.write(b, off, len);
         capture(b, off, len);
@@ -136,7 +165,7 @@ final class GatewayUsageCapture extends OutputStream {
 
     private void markFirstByte(int len) {
         if (firstByteAt == null && len > 0) {
-            firstByteAt = Instant.now();
+            firstByteAt = chunkArrivedAt;
         }
     }
 
@@ -197,6 +226,9 @@ final class GatewayUsageCapture extends OutputStream {
         if (event == null) {
             return;
         }
+        if (firstTokenAt == null && carriesContent(event)) {
+            firstTokenAt = chunkArrivedAt;
+        }
         Map<String, Long> found = GatewayUsageExtractor.fromEnvelope(event);
         if (!found.isEmpty()) {
             // Later events refine earlier ones (Responses API reports usage on
@@ -207,6 +239,45 @@ final class GatewayUsageCapture extends OutputStream {
         if (tier != null) {
             serviceTier = tier;
         }
+    }
+
+    /**
+     * Whether a streamed event carries generated content: a non-empty text,
+     * reasoning or tool-call delta of a Chat Completions chunk, the text of a
+     * legacy Completions chunk, a non-empty {@code *.delta} event of the
+     * Responses API, or a {@code content_block_delta} of the Messages API.
+     * Role-only deltas, usage-only chunks and lifecycle events are not.
+     */
+    static boolean carriesContent(JsonNode event) {
+        JsonNode choices = event.path("choices");
+        if (choices.isArray()) {
+            for (JsonNode choice : choices) {
+                JsonNode delta = choice.path("delta");
+                if (nonEmptyText(delta.path("content")) || nonEmptyText(delta.path("reasoning_content"))
+                        || nonEmptyText(delta.path("reasoning")) || nonEmptyText(choice.path("text"))
+                        || (delta.path("tool_calls").isArray() && !delta.path("tool_calls").isEmpty())) {
+                    return true;
+                }
+            }
+        }
+        String type = event.path("type").asText("");
+        if (type.endsWith(".delta") && nonEmptyText(event.path("delta"))) {
+            return true;
+        }
+        if ("content_block_delta".equals(type)) {
+            JsonNode delta = event.path("delta");
+            return nonEmptyText(delta.path("text")) || nonEmptyText(delta.path("thinking"))
+                || nonEmptyText(delta.path("partial_json"));
+        }
+        return false;
+    }
+
+    private static boolean nonEmptyText(JsonNode node) {
+        if (node.isTextual()) {
+            return !node.asText().isEmpty();
+        }
+        // Some providers send content as an array of parts.
+        return node.isArray() && !node.isEmpty();
     }
 
     private void finishJson() {

@@ -10,13 +10,21 @@ import java.time.Instant;
  * rate limit, budget check, waiting for a database connection), and
  * {@code providerCall} to {@code providerResponse} is the provider's own time.
  *
+ * <p>The end of the delivery to the client is not one of them: a slow client
+ * keeps the relay busy after the upstream has finished, which is neither
+ * Logos' nor the provider's time and is stored as the response timestamp of
+ * the row instead.
+ *
  * @param providerCall     the request is handed to the upstream; null when it never was
- * @param firstByte        the first response body byte arrived from the upstream
- *                         (the first streamed event, or the start of a JSON body);
- *                         null when no body byte arrived
- * @param providerResponse the upstream response ended; null when it never started
+ * @param firstToken       the first token arrived from the upstream: the first
+ *                         streamed event that carries content, or the start of a
+ *                         JSON body, which has no tokens in flight and stands in
+ *                         for it; null when no body byte arrived
+ * @param providerResponse the upstream finished sending, excluding time the relay
+ *                         spent blocked on writes to the client; on a failed call,
+ *                         when the call failed
  */
-public record GatewayForwardTimings(Instant providerCall, Instant firstByte, Instant providerResponse) {
+public record GatewayForwardTimings(Instant providerCall, Instant firstToken, Instant providerResponse) {
 
     static final GatewayForwardTimings NONE = new GatewayForwardTimings(null, null, null);
 }

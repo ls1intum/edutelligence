@@ -79,6 +79,40 @@ class RequestLogStatsControllerTest {
     }
 
     @Test
+    void cloudLatencyStats_keepsARenamedModelInOneRowUnderItsCurrentName() throws Exception {
+        jdbc.update("UPDATE providers SET privacy_level = 'CLOUD_IN_EU_BY_US_PROVIDER' WHERE id = 6001");
+        jdbc.update("UPDATE log_entry SET model_name = 'gpt-4-old' WHERE id = 9001");
+        jdbc.update("UPDATE log_entry SET model_name = 'gpt-4-older' WHERE id = 9002");
+
+        mvc.perform(post("/logosdb/cloud_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.rows.length()").value(1))
+           .andExpect(jsonPath("$.rows[0].modelId").value(5001))
+           .andExpect(jsonPath("$.rows[0].modelName").value("gpt-4"))
+           .andExpect(jsonPath("$.rows[0].requestCount").value(2));
+    }
+
+    @Test
+    void cloudLatencyStats_groupsADeletedModelByItsCapturedName() throws Exception {
+        jdbc.update("UPDATE providers SET privacy_level = 'CLOUD_IN_EU_BY_US_PROVIDER' WHERE id = 6001");
+        jdbc.update("UPDATE log_entry SET model_id = NULL, model_name = 'retired-a' WHERE id = 9001");
+        jdbc.update("UPDATE log_entry SET model_id = NULL, model_name = 'retired-b' WHERE id = 9002");
+
+        mvc.perform(post("/logosdb/cloud_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.rows.length()").value(2))
+           .andExpect(jsonPath("$.rows[0].modelName").value("retired-a"))
+           .andExpect(jsonPath("$.rows[0].requestCount").value(1))
+           .andExpect(jsonPath("$.rows[1].modelName").value("retired-b"));
+    }
+
+    @Test
     void cloudLatencyStats_leavesLocalProvidersOut() throws Exception {
         // The seeded provider is LOCAL: its requests are not cloud requests.
         mvc.perform(post("/logosdb/cloud_latency_stats")

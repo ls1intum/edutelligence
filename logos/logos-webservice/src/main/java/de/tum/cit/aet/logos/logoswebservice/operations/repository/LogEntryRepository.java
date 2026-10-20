@@ -1144,6 +1144,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * not LOCAL. Percentiles need the single rows, so this reads log_entry
      * directly instead of the hourly rollup; it runs when the range or the
      * scope changes, not on the push cadence.
+     *
+     * A model that still exists is one row per provider under its current
+     * name, however its rows captured the name at request time. Only rows of a
+     * deleted model fall back to the captured name.
      */
     @Transactional(readOnly = true)
     @Query(value = """
@@ -1174,9 +1178,16 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
               AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
+        ),
+        named AS (
+            SELECT f.*, m.id AS live_model_id, m.name AS live_model_name,
+                   CASE WHEN m.id IS NULL THEN f.model_name END AS deleted_model_name,
+                   CASE WHEN m.id IS NULL AND f.model_name IS NULL THEN f.model_id END AS unnamed_model_id
+            FROM finished f
+            LEFT JOIN models m ON m.id = f.model_id
         )
-        SELECT f.model_id AS modelId,
-               COALESCE(m.name, f.model_name, 'Model ' || f.model_id) AS modelName,
+        SELECT COALESCE(f.live_model_id, MIN(f.model_id)) AS modelId,
+               COALESCE(f.live_model_name, f.deleted_model_name, 'Model ' || MIN(f.model_id)) AS modelName,
                f.provider_id AS providerId,
                COALESCE(p.name, 'Provider ' || f.provider_id) AS providerName,
                COUNT(*)::bigint AS requestCount,
@@ -1188,10 +1199,9 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                COUNT(f.ttft_ms)::bigint AS ttftSamples,
                (percentile_cont(0.5)  WITHIN GROUP (ORDER BY f.ttft_ms))::double precision     AS ttftP50Ms,
                (percentile_cont(0.95) WITHIN GROUP (ORDER BY f.ttft_ms))::double precision     AS ttftP95Ms
-        FROM finished f
-        LEFT JOIN models m ON m.id = f.model_id
+        FROM named f
         LEFT JOIN providers p ON p.id = f.provider_id
-        GROUP BY f.model_id, f.model_name, m.name, f.provider_id, p.name
+        GROUP BY f.live_model_id, f.live_model_name, f.deleted_model_name, f.unnamed_model_id, f.provider_id, p.name
         ORDER BY requestCount DESC, modelName, providerName
         """, nativeQuery = true)
     List<CloudLatencyProjection> findCloudLatency(

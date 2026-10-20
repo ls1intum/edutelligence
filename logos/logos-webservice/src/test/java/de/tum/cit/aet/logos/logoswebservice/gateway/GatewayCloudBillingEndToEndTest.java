@@ -9,6 +9,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -161,6 +162,40 @@ class GatewayCloudBillingEndToEndTest {
             .isBeforeOrEqualTo(instant(row, "timestamp_provider_response"));
         assertThat(instant(row, "timestamp_provider_response"))
             .isBeforeOrEqualTo(instant(row, "timestamp_response"));
+    }
+
+    @Test
+    void slowClient_doesNotStretchTheProviderTime() throws Exception {
+        responseContentType = "text/event-stream";
+        responseBody = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+            + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n"
+            + "data: [DONE]\n\n";
+        Fixture f = seedPricedDeployment();
+        int logId = admit(f);
+
+        ResponseEntity<StreamingResponseBody> response = forward(f, requestBody(true), "/v1/chat/completions");
+        response.getBody().writeTo(new OutputStream() {
+            @Override
+            public void write(int b) throws IOException {
+                write(new byte[] {(byte) b}, 0, 1);
+            }
+
+            @Override
+            public void write(byte[] b, int off, int len) throws IOException {
+                try {
+                    Thread.sleep(400);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException(e);
+                }
+            }
+        });
+
+        Map<String, Object> row = timings(logId);
+        assertThat(Duration.between(instant(row, "timestamp_provider_response"), instant(row, "timestamp_response")))
+            .isGreaterThanOrEqualTo(Duration.ofMillis(350));
+        assertThat(instant(row, "time_at_first_token"))
+            .isBeforeOrEqualTo(instant(row, "timestamp_provider_response"));
     }
 
     @Test

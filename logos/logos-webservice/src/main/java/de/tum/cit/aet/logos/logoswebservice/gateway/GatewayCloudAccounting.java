@@ -401,7 +401,7 @@ public class GatewayCloudAccounting {
         return new MapSqlParameterSource()
             .addValue("responded", utc(Instant.now()))
             .addValue("providerCall", utc(t.providerCall()))
-            .addValue("firstToken", utc(t.firstByte()))
+            .addValue("firstToken", utc(t.firstToken()))
             .addValue("providerResponse", utc(t.providerResponse()));
     }
 

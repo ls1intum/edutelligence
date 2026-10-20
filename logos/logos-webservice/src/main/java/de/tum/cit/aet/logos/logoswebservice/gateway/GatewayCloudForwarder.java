@@ -141,6 +141,7 @@ public class GatewayCloudForwarder {
             throw e;
         }
 
+        Instant headersAt = Instant.now();
         int status = upstream.statusCode();
         boolean upstreamOk = status >= 200 && status < 400;
 
@@ -153,7 +154,7 @@ public class GatewayCloudForwarder {
             responseHeaders.put(name, values);
         });
 
-        InputStream upstreamBody = upstream.body();
+        UpstreamReadClock upstreamBody = new UpstreamReadClock(upstream.body());
         String upstreamContentType = upstream.headers().firstValue("content-type").orElse(null);
         StreamingResponseBody stream = outputStream -> {
             IOException streamError = null;
@@ -161,7 +162,8 @@ public class GatewayCloudForwarder {
             // reported token counts can be billed; it never delays or alters
             // the bytes the client receives.
             GatewayUsageCapture capture = new GatewayUsageCapture(
-                outputStream, objectMapper, upstreamContentType, retainResponseBody);
+                outputStream, objectMapper, upstreamContentType, retainResponseBody,
+                () -> upstreamBody.at(headersAt));
             try (upstreamBody; OutputStream out = capture) {
                 upstreamBody.transferTo(out);
                 out.flush();
@@ -169,7 +171,7 @@ public class GatewayCloudForwarder {
                 streamError = e;
             }
             GatewayForwardTimings timings = new GatewayForwardTimings(
-                providerCall, capture.firstByteAt(), Instant.now());
+                providerCall, capture.firstTokenAt(), upstreamBody.at(headersAt));
             if (streamError != null) {
                 if (onFailure != null) {
                     onFailure.accept(streamError.getMessage(), timings);
@@ -188,6 +190,56 @@ public class GatewayCloudForwarder {
 
         return ResponseEntity.status(status).headers(responseHeaders)
             .body(GatewayRelayOccupancy.track(stream));
+    }
+
+    /**
+     * Times the upstream body apart from the client it is relayed to.
+     *
+     * <p>Reads and client writes alternate on one thread, so the instant the
+     * last read returns is late by every write that blocked on a slow client.
+     * Summing only the time spent inside {@code read} and adding it to the
+     * instant the response headers arrived gives the instant the upstream
+     * finished sending, as far as this process could observe it: time the
+     * relay spent writing is excluded, time spent waiting for the upstream is
+     * not. Bytes the upstream sent while a write blocked are already buffered,
+     * so their reads return at once and add next to nothing.
+     */
+    static final class UpstreamReadClock extends java.io.FilterInputStream {
+
+        private long readNanos;
+
+        UpstreamReadClock(InputStream in) {
+            super(in);
+        }
+
+        @Override
+        public int read() throws IOException {
+            long start = System.nanoTime();
+            try {
+                return super.read();
+            } finally {
+                readNanos += System.nanoTime() - start;
+            }
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            long start = System.nanoTime();
+            try {
+                return in.read(b, off, len);
+            } finally {
+                readNanos += System.nanoTime() - start;
+            }
+        }
+
+        /**
+         * The upstream's progress as an instant: when the headers arrived plus
+         * the time spent waiting on reads so far. After the last read it is
+         * the instant the upstream body ended.
+         */
+        Instant at(Instant headersAt) {
+            return headersAt.plusNanos(readNanos);
+        }
     }
 
     /**
