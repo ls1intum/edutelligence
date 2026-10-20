@@ -13,9 +13,11 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -120,11 +122,26 @@ public class InferenceGatewayController {
                 ctx.deploymentsForModel(), request, modelName);
             GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(privacyFiltered);
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
-                cloudRateLimiter.enforce(ctx.key(), body);
                 String logLevel = GatewayLoggingLevel.resolve(request, ctx.key().logLevel());
-                Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(), decision.deployment(), body, logLevel, arrivedAt,
-                    GatewayReasoningEffort.from(root));
+                // Every request turned away between here and the forward is
+                // recorded, whatever the reason — a request that fails must
+                // never be missing from the request log.
+                final Integer logId;
+                try {
+                    cloudRateLimiter.enforce(ctx.key(), body);
+                    logId = cloudAccounting.admitAndReserve(
+                        ctx.key(), decision.deployment(), body, logLevel, arrivedAt,
+                        GatewayReasoningEffort.from(root));
+                } catch (ResponseStatusException e) {
+                    cloudAccounting.recordRejected(ctx.key(), decision.deployment(), logLevel,
+                        "HTTP " + e.getStatusCode().value() + ": " + e.getReason(),
+                        e.getStatusCode().value() == HttpStatus.TOO_MANY_REQUESTS.value());
+                    throw e;
+                } catch (RuntimeException e) {
+                    cloudAccounting.recordRejected(ctx.key(), decision.deployment(), logLevel,
+                        "Gateway error: " + e.getClass().getSimpleName(), false);
+                    throw e;
+                }
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());
