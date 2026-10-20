@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import WebSocketDisconnect
@@ -12,11 +13,13 @@ from fastapi import WebSocketDisconnect
 import logos as main_mod
 from logos.dbutils.dbrequest import (
     LogosKeyModel,
+    LogosNodeCalibrationReservationRequest,
     LogosNodeClearUnsupportedRequest,
     LogosNodeInvalidateCalibrationRequest,
     LogosNodeModelProfilesRequest,
     LogosNodeResetProfilesRequest,
 )
+from logos.logosnode_registry import LogosNodeRuntimeRegistry, ProviderSession
 from logos.model_profile_store import ProfileWriteCache
 from logos.routers import logosnode as logosnode_mod
 
@@ -669,3 +672,99 @@ def test_a_linked_snapshot_lifts_the_protection_of_a_finished_model(monkeypatch)
     monkeypatch.setattr(main_mod, "_logosnode_registry", None)
     logosnode_mod._snapshots_linked(5, ["org/model"])  # no registry: nothing to lift
     assert logosnode_mod._models_in_calibration(5) == frozenset()
+
+
+def _registry_with_sessions(*provider_ids):
+    registry = LogosNodeRuntimeRegistry()
+    for pid in provider_ids:
+        session = ProviderSession(provider_id=pid, worker_id=f"w{pid}", websocket=MagicMock())
+        registry._sessions[pid] = session  # noqa: SLF001
+    return registry
+
+
+def _reservation_endpoint(monkeypatch, provider_id=5):
+    monkeypatch.setattr(logosnode_mod, "_require_tls_request", lambda request: None)
+    monkeypatch.setattr(logosnode_mod, "_logosnode_provider_for_key", lambda key: {"id": provider_id})
+    data = LogosNodeCalibrationReservationRequest(shared_key="k", model_name="org/model")
+    return lambda: asyncio.run(logosnode_mod.logosnode_calibration_reservation(data, request=None))
+
+
+def test_a_reservation_answers_with_the_profile_and_bars_adoption(monkeypatch):
+    registry = _registry_with_sessions(5)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(
+        logosnode_mod, "_load_effective_profiles", lambda pid, names=None: {"org/model": {"sync_revision": 4}}
+    )
+    reserve = _reservation_endpoint(monkeypatch)
+    assert reserve() == {"profiles": {"org/model": {"sync_revision": 4}}}
+    assert registry.models_in_calibration(5) == frozenset({"org/model"})
+
+
+def test_a_node_that_reserved_a_model_is_not_offered_one_before_its_events_arrive(monkeypatch):
+    """Event delivery is delayed: no calibration_model_selected has been seen,
+    yet a sibling finishing now must not be adopted by the reserving node."""
+    registry = _registry_with_sessions(7, 8)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    db = _FakeDB()
+    db.sibling_adopters = {"org/model": [(7, 21), (8, 21)]}
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: f"gpu-{pid}")
+
+    assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model"]) == {  # noqa: SLF001
+        7: ["org/model"],
+        8: ["org/model"],
+    }
+    registry.reserve_calibration(7, "org/model")
+    assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model"]) == {8: ["org/model"]}  # noqa: SLF001
+
+
+def test_a_reservation_waits_for_an_adoption_in_flight_and_answers_after_it(monkeypatch):
+    """An adoption that already checked for a reservation commits first, and
+    the answer then carries what it changed; none can slip in afterwards."""
+    started, release = threading.Event(), threading.Event()
+    state = {"adopted": False}
+
+    class _SlowAdoption(_FakeDB):
+        def adopt_shared_calibrations(self, provider_id, model_names, max_age_days, adopt=True):
+            started.set()
+            release.wait(5)
+            state["adopted"] = True
+            return [("org/model", 11)]
+
+    registry = _registry_with_sessions(5)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: _SlowAdoption())
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
+    monkeypatch.setattr(
+        logosnode_mod, "_load_effective_profiles", lambda pid, names=None: {"org/model": {"adopted": state["adopted"]}}
+    )
+    reserve = _reservation_endpoint(monkeypatch)
+    adopting = threading.Thread(
+        target=lambda: logosnode_mod._update_reported_calibration_keys(5, {"org/model": "H"}, {})  # noqa: SLF001
+    )
+    adopting.start()
+    assert started.wait(5)
+
+    answer: dict = {}
+    reserving = threading.Thread(target=lambda: answer.update(reserve()))
+    reserving.start()
+    reserving.join(0.5)
+    assert reserving.is_alive(), "the reservation must wait for the adoption"
+    assert registry.models_in_calibration(5) == frozenset()  # not reserved yet
+
+    release.set()
+    adopting.join(5)
+    reserving.join(5)
+    assert answer["profiles"]["org/model"] == {"adopted": True}
+    assert registry.models_in_calibration(5) == frozenset({"org/model"})
+
+
+def test_once_reserved_the_hello_adoption_leaves_the_model_alone(monkeypatch):
+    registry = _registry_with_sessions(5)
+    registry.reserve_calibration(5, "org/busy")
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    db = _FakeDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
+    logosnode_mod._update_reported_calibration_keys(5, {"org/busy": "H1", "org/idle": "H2"}, {})  # noqa: SLF001
+    assert db.adopted == [(5, ["org/idle"], 30, True)]

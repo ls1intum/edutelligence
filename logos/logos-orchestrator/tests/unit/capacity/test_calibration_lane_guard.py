@@ -93,6 +93,30 @@ def test_a_model_is_protected_from_the_moment_the_worker_picks_it():
     assert registry.models_in_calibration(1) == frozenset()
 
 
+def test_a_reservation_protects_a_model_before_any_event_arrives():
+    registry, _ = _registry_with_session()
+    assert registry.reserve_calibration(1, "org/m") is True
+    assert registry.models_in_calibration(1) == frozenset({"org/m"})
+    assert registry.reserve_calibration(9, "org/m") is False  # no session, nothing to protect
+
+
+def test_the_workers_events_take_over_from_the_reservation():
+    for event_name in ("calibration_model_selected", "calibration_model_skipped", "calibration_model_failed"):
+        registry, _ = _registry_with_session()
+        registry.reserve_calibration(1, "org/m")
+        asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+        asyncio.run(registry.append_event(1, {"event": event_name, "model": "org/m", "details": ""}))
+        expected = frozenset({"org/m"}) if event_name == "calibration_model_selected" else frozenset()
+        assert registry.models_in_calibration(1) == expected, event_name
+
+
+def test_a_finished_session_drops_the_reservation():
+    registry, _ = _registry_with_session()
+    registry.reserve_calibration(1, "org/m")
+    asyncio.run(registry.append_event(1, _event("calibration_session_cancelled")))
+    assert registry.models_in_calibration(1) == frozenset()
+
+
 def test_a_finished_model_stays_protected_until_its_snapshot_is_linked():
     registry, session = _registry_with_session()
     asyncio.run(registry.append_event(1, _event("calibration_session_started")))

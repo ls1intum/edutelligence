@@ -195,6 +195,15 @@ older than the age limit: 30 days by default, or the number of days set in
 that stops fitting (e.g. after re-pinning to fewer GPUs) is dropped, also with
 sharing switched off.
 
+Before a worker calibrates a model it reserves it with Logos
+(`POST /logosdb/providers/logosnode/calibration-reservation`, shared key).
+From then on Logos adopts nothing for that model, and the answer carries the
+profile as Logos holds it, so a calibration that just arrived from another
+node is used and the probe is skipped. The reservation is serialized with
+adoption inside one orchestrator process; with several processes a worker's
+events remain the only, up to a second late, barrier. An older Logos answers
+404 and the worker relies on the events alone.
+
 If a lane started with a shared calibration fails with a memory error (out of
 memory, KV cache too small) before that node ever saw it serve, the worker
 reports it: that node drops the calibration, never adopts it again and

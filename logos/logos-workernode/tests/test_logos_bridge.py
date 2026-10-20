@@ -24,6 +24,19 @@ def _pin_backend_to_cuda(monkeypatch):
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
 
 
+_REAL_RESERVE_CALIBRATION = LogosBridgeClient._reserve_calibration
+
+
+@pytest.fixture(autouse=True)
+def _no_calibration_reservation_over_http(monkeypatch):
+    """Sessions would otherwise call a Logos that does not exist."""
+
+    async def _unreachable(self, model_name):
+        return None
+
+    monkeypatch.setattr(LogosBridgeClient, "_reserve_calibration", _unreachable)
+
+
 class _DummyState:
     pass
 
@@ -4132,3 +4145,162 @@ async def test_hello_names_the_calibrations_logos_has_not_snapshotted_yet(tmp_pa
     ws = _CollectWS()
     await client._send_hello(ws)  # noqa: SLF001
     assert ws.frames[0]["pending_snapshots"] == ["org/ready"]
+
+
+def _calibration_session_client(tmp_path, monkeypatch, models):
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=list(models)
+    )
+    client = LogosBridgeClient(app, cfg)
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=200 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    probed: list[str] = []
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        lambda plan, **kwargs: probed.append(plan["model"]),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+    return app, client, probed
+
+
+_ADOPTED = {
+    "base_residency_mb": 9000.0,
+    "residency_source": "calibrated",
+    "kv_cache_to_max_model_len_pairs": [{"kv": 1, "mml": 1}],
+    "sleeping_residual_mb": 100.0,
+    "sleep_l1_transient_host_ram_mb": 10.0,
+    "sync_revision": 5,
+    "calibration_id": 9,
+    "calibration_origin": "shared",
+    "calibration_stale": False,
+}
+
+
+@pytest.mark.asyncio
+async def test_the_model_is_reserved_before_its_events_can_be_sent(tmp_path, monkeypatch):
+    """The events go out up to a second late; only the reservation, made first,
+    bars an adoption in that gap."""
+    app, client, probed = _calibration_session_client(tmp_path, monkeypatch, ["org/first"])
+    seen: list[tuple[str, list[str]]] = []
+
+    async def _reserve(self, model_name):
+        seen.append((model_name, [e.event for e in app.state.lane_manager._event_log]))
+        return None
+
+    monkeypatch.setattr(LogosBridgeClient, "_reserve_calibration", _reserve)
+    assert (await client._handle_start_calibration_session({"sleep_level": 0}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    assert [m for m, _ in seen] == ["org/first"]
+    assert "calibration_model_selected" not in seen[0][1]  # nothing announced yet
+    events = [e.event for e in app.state.lane_manager._event_log]
+    assert "calibration_model_selected" in events
+
+
+@pytest.mark.asyncio
+async def test_a_calibration_adopted_while_events_were_in_flight_is_used_not_probed(tmp_path, monkeypatch):
+    """A sibling's calibration reached Logos before the node's events did.
+
+    The reservation answers with it: the node takes it and measures nothing.
+    """
+    app, client, probed = _calibration_session_client(tmp_path, monkeypatch, ["org/first"])
+
+    async def _reserve(self, model_name):
+        return dict(_ADOPTED)
+
+    monkeypatch.setattr(LogosBridgeClient, "_reserve_calibration", _reserve)
+    assert (await client._handle_start_calibration_session({"sleep_level": 0}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    profile = app.state.model_profiles.get_profile("org/first")
+    assert profile.base_residency_mb == 9000.0
+    assert (profile.sync_revision, profile.calibration_id, profile.calibration_origin) == (5, 9, "shared")
+    assert probed == []
+    events = [(e.event, e.details) for e in app.state.lane_manager._event_log if e.model == "org/first"]
+    assert ("calibration_model_skipped", "calibrated meanwhile") in events
+    assert not any(name == "calibration_model_selected" for name, _ in events)
+
+
+@pytest.mark.asyncio
+async def test_the_profile_revision_is_synchronized_before_probing_starts(tmp_path, monkeypatch):
+    """The reservation hands back a revision above the worker's; the probe then
+    runs against it, so its result is not rejected as outdated."""
+    app, client, probed = _calibration_session_client(tmp_path, monkeypatch, ["org/first"])
+    revisions: list[int] = []
+
+    async def _reserve(self, model_name):
+        return {"sync_revision": 7}  # a central change the worker has not seen
+
+    def _spy_precheck(*a, **k):
+        revisions.append(app.state.model_profiles.get_profile("org/first").sync_revision)
+        raise RuntimeError("stop before the probe")
+
+    monkeypatch.setattr(LogosBridgeClient, "_reserve_calibration", _reserve)
+    monkeypatch.setattr(client, "_run_hf_compatibility_precheck", _spy_precheck)  # noqa: SLF001
+    await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    await _drain_session(client)
+    assert revisions == [7]
+
+
+class _Http:
+    def __init__(self, status=200, body=None, error=None):
+        self.status, self.body, self.error, self.posted = status, body, error, []
+
+    def __call__(self, timeout=15.0):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def post(self, url, json=None):
+        self.posted.append((url, json))
+        if self.error:
+            raise self.error
+        outer = self
+
+        class _Resp:
+            status_code = outer.status
+            content = b"{}"
+            text = ""
+
+            @staticmethod
+            def json():
+                return outer.body
+
+        return _Resp()
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_is_asked_of_logos_with_the_shared_key(tmp_path, monkeypatch):
+    client = _central_client(tmp_path)
+    http = _Http(body={"profiles": {"org/ready": {"sync_revision": 3}}})
+    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", http)
+    assert await _REAL_RESERVE_CALIBRATION(client, "org/ready") == {"sync_revision": 3}
+    url, body = http.posted[0]
+    assert url == "https://logos.example/logosdb/providers/logosnode/calibration-reservation"
+    assert body == {"shared_key": "secret", "model_name": "org/ready"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "http",
+    [_Http(status=404), _Http(status=500), _Http(error=RuntimeError("down")), _Http(body={"profiles": {}})],
+)
+async def test_without_a_reservation_the_events_remain_the_barrier(tmp_path, monkeypatch, http):
+    client = _central_client(tmp_path)
+    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", http)
+    assert await _REAL_RESERVE_CALIBRATION(client, "org/ready") is None

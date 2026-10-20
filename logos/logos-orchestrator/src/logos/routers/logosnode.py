@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 from typing import Any, Dict
 
@@ -18,6 +19,7 @@ from logos.dbutils.dbrequest import (
     LogosKeyModel,
     LogosNodeApplyLanesRequest,
     LogosNodeAuthRequest,
+    LogosNodeCalibrationReservationRequest,
     LogosNodeClearUnsupportedRequest,
     LogosNodeDeleteLaneRequest,
     LogosNodeInvalidateCalibrationRequest,
@@ -71,6 +73,10 @@ router = APIRouter()
 _MAX_VLLM_METRICS_BYTES = 4 * 1024 * 1024
 
 _profile_write_cache = ProfileWriteCache()
+# Held while a calibration is reserved and while an adoption checks for one and
+# commits, so an adoption either lands before the reservation answers or sees
+# it. Process-wide: with several orchestrator processes it would not serialize.
+_adoption_gate = threading.Lock()
 # (provider_id, model) -> last_measured_epoch already snapshotted
 _recorded_calibrations: dict[tuple[int, str], float] = {}
 # provider_id -> models whose echo was rejected, awaiting one coalesced push
@@ -514,14 +520,15 @@ def _update_reported_calibration_keys(
     """Store what a node reports about its models, then let it adopt."""
     with DBManager() as db:
         db.update_reported_calibration_keys(provider_id, calibration_key_hashes, slice_gpu_counts)
-        # Its own result for the model in progress would be discarded.
-        busy = _models_in_calibration(provider_id)
-        models = [name for name in calibration_key_hashes if name not in busy]
         try:
-            # Switched off, a calibration that stopped fitting still goes.
-            adopted = db.adopt_shared_calibrations(
-                provider_id, models, shared_profile_max_age_days(), adopt=shared_profiles_enabled()
-            )
+            with _adoption_gate:
+                # Its own result for the model in progress would be discarded.
+                busy = _models_in_calibration(provider_id)
+                models = [name for name in calibration_key_hashes if name not in busy]
+                # Switched off, a calibration that stopped fitting still goes.
+                adopted = db.adopt_shared_calibrations(
+                    provider_id, models, shared_profile_max_age_days(), adopt=shared_profiles_enabled()
+                )
         except Exception:
             # Sharing is an optimisation; it must not keep a worker from
             # starting or from receiving its profiles.
@@ -556,7 +563,7 @@ def _offer_calibrations_to_siblings(provider_id: int, model_names: list[str]) ->
         return {}
     adopters: Dict[int, list[str]] = {}
     adopted: list[tuple[int, str, int]] = []
-    with DBManager() as db:
+    with _adoption_gate, DBManager() as db:
         for model_name in model_names:
             for sibling, calibration_id in db.adopt_shared_calibration_for_siblings(
                 provider_id,
@@ -870,6 +877,27 @@ async def logosnode_model_profiles(data: LogosNodeModelProfilesRequest, request:
     _profile_write_cache.forget(provider_id)
     profiles = await asyncio.to_thread(_load)
     return {"profiles": profiles}
+
+
+@router.post("/logosdb/providers/logosnode/calibration-reservation", tags=["logosnode"])
+async def logosnode_calibration_reservation(data: LogosNodeCalibrationReservationRequest, request: Request):
+    """Bar adoption for a model a worker is about to calibrate.
+
+    Answers with the model's profile as of the reservation, so the worker
+    probes from the revision Logos holds, and skips a model another node's
+    calibration just reached.
+    """
+    _require_tls_request(request)
+    provider_id = int(_logosnode_provider_for_key(data.shared_key)["id"])
+
+    def _reserve() -> Dict[str, Dict[str, Any]]:
+        with _adoption_gate:
+            reserve = getattr(_main._logosnode_registry, "reserve_calibration", None)
+            if reserve is not None:
+                reserve(provider_id, data.model_name)
+            return _load_effective_profiles(provider_id, [data.model_name])
+
+    return {"profiles": await asyncio.to_thread(_reserve)}
 
 
 @router.websocket("/logosdb/providers/logosnode/session")

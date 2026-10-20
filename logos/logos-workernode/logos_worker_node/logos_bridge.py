@@ -343,6 +343,26 @@ class LogosBridgeClient:
             raise RuntimeError("logos.shared_key (LOGOS_API_KEY) is required")
         return logos_url
 
+    async def _reserve_calibration(self, model_name: str) -> dict[str, Any] | None:
+        """Have Logos stop adopting for this model, and get its profile.
+
+        The events below reach Logos up to a second late, so they cannot bar
+        an adoption in time. None when Logos cannot answer (an older server,
+        unreachable): the events are then the only barrier.
+        """
+        url = f"{self._logos_base_url()}/logosdb/providers/logosnode/calibration-reservation"
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(url, json={"shared_key": self._cfg.shared_key, "model_name": model_name})
+            if resp.status_code != 200:
+                logger.info("[Calibration] No reservation for %s (HTTP %s)", model_name, resp.status_code)
+                return None
+            profile = ((resp.json() if resp.content else {}).get("profiles") or {}).get(model_name)
+        except Exception:  # noqa: BLE001
+            logger.info("[Calibration] Could not reserve %s with Logos", model_name, exc_info=True)
+            return None
+        return profile if isinstance(profile, dict) else None
+
     async def fetch_model_profiles(
         self,
         calibration_key_hashes: dict[str, str],
@@ -1933,7 +1953,12 @@ class LogosBridgeClient:
                     terminal_event = "calibration_session_cancelled"
                     break
 
-                # Logos may have handed it a calibration measured elsewhere.
+                # Reserved: Logos adopts nothing for it from here, and the
+                # answer carries its profile now. Probe from that, or not
+                # at all when another node's calibration already arrived.
+                reserved = await self._reserve_calibration(model_name)
+                if reserved is not None:
+                    model_profiles.replace_from_sync({model_name: reserved})
                 if model_name not in self._list_uncalibrated_models(log_skips=False):
                     self._record_calibration_event(
                         "calibration_model_skipped", model=model_name, details="calibrated meanwhile"
@@ -1941,8 +1966,8 @@ class LogosBridgeClient:
                     continue
 
                 session.current_model = model_name
-                # The precheck below can take a while; Logos must not hand this
-                # model a calibration from elsewhere in the meantime.
+                # Without a reservation this is the only barrier; the
+                # precheck below can take a while.
                 self._record_calibration_event("calibration_model_selected", model=model_name)
                 plan = plan_by_model.get(model_name) or {"model": model_name}
 

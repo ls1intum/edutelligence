@@ -114,6 +114,11 @@ class LogosNodeModelProfilesRequest(BaseModel):
     legacy_import: LogosNodeLegacyProfileImport | None = None
 
 
+class LogosNodeCalibrationReservationRequest(BaseModel):
+    shared_key: str
+    model_name: str
+
+
 class LogosNodeClearUnsupportedRequest(LogosKeyModel):
     provider_id: int
     model_name: str
