@@ -29,7 +29,7 @@
     ...(role() === 'logos_admin' ? ['TAGS', 'ALIASES'] : []),
     'CAPABILITIES',
     'PROFILE',
-    ...(role() === 'logos_admin' ? ['LAST USED', 'NIGHTLY', 'WEIGHTS', ''] : [])
+    ...(role() === 'logos_admin' ? ['LAST USED', 'NIGHTLY BENCHMARK', 'WEIGHTS', ''] : [])
   ]"
   [gridCols]="
     role() === 'logos_admin'
@@ -38,9 +38,10 @@
   "
   [loading]="loading()"
   [empty]="filteredModels().length === 0"
-  [sortableColumn]="role() === 'logos_admin' ? 6 : -1"
-  [sortDirection]="lastUsedSortDirection"
-  (sortToggle)="toggleLastUsedSort()"
+  [sortableColumns]="role() === 'logos_admin' ? [6, 7] : []"
+  [sortableColumn]="role() === 'logos_admin' ? (nightlySort() !== 'none' ? 7 : 6) : -1"
+  [sortDirection]="nightlySort() !== 'none' ? (nightlySort() === 'asc' ? 'asc' : 'desc') : lastUsedSortDirection"
+  (sortToggle)="toggleSort($event)"
   emptyMessage="No models match your search."
 >
   @for (model of filteredModels(); track model.id) {
@@ -208,7 +209,7 @@
       }
 
       @if (role() === 'logos_admin') {
-        <div role="cell" data-label="Nightly" class="nightly-cell">
+        <div role="cell" data-label="Nightly benchmark" class="nightly-cell">
           @if (nightlyError()) { <span title="Nightly status could not be loaded">Unavailable</span> }
           @else if (!nightly()) { <span>Loading…</span> }
           @else {

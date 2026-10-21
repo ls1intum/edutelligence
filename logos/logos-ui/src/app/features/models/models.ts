@@ -96,6 +96,7 @@ export class Models implements OnInit {
   search = signal('');
   loadError = signal(false);
   /** Sort of the last-used column: unsorted, oldest first or newest first. */
+  nightlySort = signal<'none' | 'asc' | 'desc'>('none');
   lastUsedSort = signal<'none' | 'asc' | 'desc'>('none');
 
   /** Sort direction for the table header; null while unsorted. */
@@ -149,6 +150,17 @@ export class Models implements OnInit {
             (m.aliases ?? '').toLowerCase().includes(q),
         )
       : this.models();
+    const nightlyDir = this.nightlySort();
+    if (nightlyDir !== 'none') {
+      const priority: Record<NightlySchedule['state'], number> = {
+        busy: 0, next: 1, queued: 2, recent: 3, waiting: 4, blocked: 5, disabled: 6,
+      };
+      // A model can have several providers; its most immediate status determines its position.
+      const rank = (id: number) => Math.min(6, ...this.nightlyFor(id).map(row => priority[row.state]));
+      return [...list].sort((a, b) =>
+        (nightlyDir === 'asc' ? rank(a.id) - rank(b.id) : rank(b.id) - rank(a.id))
+        || a.name.localeCompare(b.name));
+    }
     const dir = this.lastUsedSort();
     if (dir === 'none') return list;
     // ISO-8601 UTC timestamps sort lexicographically; the empty string (never
@@ -245,7 +257,17 @@ export class Models implements OnInit {
 
   // ── Last used ─────────────────────────────────────────────────────────────
   /** Cycles unsorted → oldest first (deprecation candidates) → newest first. */
+  toggleSort(column: number): void {
+    if (column === 7) {
+      this.lastUsedSort.set('none');
+      this.nightlySort.update(dir => dir === 'none' ? 'asc' : dir === 'asc' ? 'desc' : 'none');
+    } else {
+      this.toggleLastUsedSort();
+    }
+  }
+
   toggleLastUsedSort(): void {
+    this.nightlySort.set('none');
     this.lastUsedSort.update((dir) => (dir === 'none' ? 'asc' : dir === 'asc' ? 'desc' : 'none'));
   }
 

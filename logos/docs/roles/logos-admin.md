@@ -75,7 +75,10 @@ capabilities and scheduling weights for each model. It also shows the Likert
 model to open its **Model Details** view. This view shows the request history,
 the error reports and the scheduling statistics of the model.
 
-The **Nightly** column shows the planned rotation for each model/worker pair.
+Select the **Nightly benchmark** column header to sort by status.
+Select it again to reverse the order.
+
+The **Nightly benchmark** column shows the planned rotation for each model/worker pair.
 Blue means a candidate for the next window. Yellow means a later place in the rotation.
 Green marks a successful measurement within 7 days. Red means the pair is blocked.
 Point to a status for the worker and date. Select it to open **Performance**.
