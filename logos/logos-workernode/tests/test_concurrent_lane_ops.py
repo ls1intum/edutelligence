@@ -29,8 +29,12 @@ async def _settle() -> None:
 async def test_scopes_on_other_lanes_and_gpus_are_held_together() -> None:
     lock = ResourceLock()
     async with lock.scoped(["a"], [0]):
-        async with lock.scoped(["b"], [1]):
-            assert lock.holds("a") and lock.holds("b")
+        await asyncio.wait_for(_enter(lock.scoped(["b"], [1])), timeout=1)
+
+
+async def _enter(scope) -> None:
+    async with scope:
+        pass
 
 
 @pytest.mark.asyncio
@@ -213,7 +217,8 @@ async def test_port_stays_taken_until_the_unloaded_process_is_gone() -> None:
 
 @pytest.mark.asyncio
 async def test_two_unloads_overlap() -> None:
-    first, second = _Handle(LaneConfig(model="m-a")), _Handle(LaneConfig(model="m-b"))
+    first = _Handle(LaneConfig(model="m-a", gpu_devices="0"))
+    second = _Handle(LaneConfig(model="m-b", gpu_devices="1"))
     first.release.clear()
     manager = _manager_with({"a": first, "b": second})
 
@@ -394,7 +399,7 @@ async def test_bridge_hands_two_loads_to_the_lane_manager_at_once() -> None:
 
 @pytest.mark.asyncio
 async def test_bridge_answers_a_calibration_start_while_a_load_runs() -> None:
-    """The case behind a stuck calibration claim: the start sat unread behind a cold load."""
+    """A calibration start is read and answered while a load is still starting."""
     lanes = _SlowLoads()
     client = LogosBridgeClient(_App(lanes), LogosConfig(enabled=True, logos_url="https://logos.example"))
     started: list[dict] = []
@@ -597,3 +602,22 @@ async def test_bridge_orders_a_worker_wide_change_after_earlier_lane_commands() 
     await asyncio.gather(*client._lifecycle_tasks)  # noqa: SLF001
     assert order == ["delete a", "apply"]
     assert lanes.calls == ["add b"]
+
+
+@pytest.mark.asyncio
+async def test_an_unload_waits_for_a_start_on_its_gpu() -> None:
+    """vLLM profiles free memory at start: it must not grow under a starting lane."""
+    manager = _manager_with({"old": _Handle(LaneConfig(model="m-a", gpu_devices="0"))})
+    release = asyncio.Event()
+
+    async def start_on_gpu0() -> None:
+        async with manager._lock.scoped(["new"], [0]):  # noqa: SLF001
+            await release.wait()
+
+    starting = asyncio.create_task(start_on_gpu0())
+    await _settle()
+    unload = asyncio.create_task(manager.remove_lane("old"))
+    await _settle()
+    assert not unload.done()
+    release.set()
+    await asyncio.wait_for(asyncio.gather(starting, unload), timeout=2)

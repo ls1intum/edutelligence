@@ -192,7 +192,7 @@ def test_two_unloads_at_once_both_stay_unloaded():
 
 
 def test_a_lane_still_reported_while_it_unloads_is_not_recorded_again():
-    """Found on the e2e stack: the report after an unload still showed the lane, which was recorded and put back."""
+    """The report right after an unload still shows the lane; it must not be recorded and put back."""
     registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
     planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
     _restore(planner)
@@ -420,10 +420,29 @@ def test_an_unload_waiting_on_the_worker_stays_forgotten_until_the_lane_is_gone(
     planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
     _restore(planner)
     asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
-    planner._forgotten_lanes()[(PROVIDER, LANE)] -= 3600  # an hour behind other work
+    planner._forgotten_lanes()[(PROVIDER, LANE)] -= 600  # ten minutes behind other work
     assert _restore(planner) == []
     registry.lanes = []
     assert _restore(planner) == []
+
+
+def test_a_lane_never_unloaded_is_recorded_again_after_the_limit():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+    asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
+    planner._forgotten_lanes()[(PROVIDER, LANE)] -= planner.FORGOTTEN_LANE_LIMIT_S + 1
+    _restore(planner)  # still there, not unloading: record it again
+    registry.lanes = []
+    assert [a.lane_id for a in _restore(planner)] == [LANE]
+
+
+def test_a_lane_still_unloading_after_the_limit_stays_forgotten():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1", transition="stopping")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    planner._forgotten_lanes()[(PROVIDER, LANE)] = 0.0
+    _restore(planner)
+    assert (PROVIDER, LANE) in planner._forgotten_lanes()
 
 
 def test_a_refused_unload_records_the_lane_again():

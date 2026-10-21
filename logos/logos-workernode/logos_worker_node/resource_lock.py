@@ -48,7 +48,7 @@ class Claim:
         Waiters are not consulted: one that conflicts with this claim already
         waits for it, so queueing behind it would deadlock.
         """
-        wider = Scope(self.scope.lanes, gpus)
+        wider = Scope(self.scope.lanes, None if gpus is None or self.scope.gpus is None else self.scope.gpus | gpus)
         while any(holder is not self and holder.scope.conflicts(wider) for holder in self._lock._holders):
             await self._lock._released()
         self.scope = wider
@@ -66,13 +66,6 @@ class ResourceLock:
         self._waiters: deque[_Waiter] = deque()
         self._release_event = asyncio.Event()
         self._whole: list[Claim] = []
-
-    def locked(self) -> bool:
-        return bool(self._holders)
-
-    def holds(self, lane_id: str) -> bool:
-        """Whether a holder works on *lane_id* (or on every lane)."""
-        return any(holder.scope.lanes is None or lane_id in holder.scope.lanes for holder in self._holders)
 
     async def __aenter__(self) -> None:
         self._whole.append(await self._acquire(EVERYTHING, queue=True))

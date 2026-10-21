@@ -244,10 +244,13 @@ class LogosBridgeClient:
             except asyncio.CancelledError:
                 pass
         # No command is read any more. Shutdown, unlike a disconnect, ends the
-        # lane commands still running, before the lane manager cleans up.
+        # lane commands still running before the lane manager cleans up. An
+        # unload runs to its end: cancelled mid-exit, it would leave a process
+        # that no handle tracks.
         lifecycle = tuple(self._lifecycle_tasks)
         for running in lifecycle:
-            running.cancel()
+            if not running.get_name().startswith("logos-bridge-delete_lane-"):
+                running.cancel()
         if lifecycle:
             await asyncio.gather(*lifecycle, return_exceptions=True)
         await self._relay_client.aclose()
@@ -944,9 +947,8 @@ class LogosBridgeClient:
             self._track_command_task(task, action=action, cmd_id=cmd_id)
             return
 
-        # Awaited here, a load blocked every later command for as long as it
-        # started, up to 15 minutes: a calibration start sent meanwhile timed
-        # out on the server although the worker ran it afterwards.
+        # Off the receive loop: every command is read, and answered, while a
+        # load is still starting.
         self._start_lifecycle_task(self._execute_in_order(ws, cmd_id, action, params), action, cmd_id)
 
     @staticmethod

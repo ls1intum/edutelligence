@@ -807,6 +807,11 @@ class CapacityPlanner:
     # Restoring locked lanes after a worker restart (see lane_restore)
     # ------------------------------------------------------------------
 
+    # An unload may wait behind other commands on the worker, the longest
+    # 900 s; a lane still reported, and not unloading, after this was not
+    # unloaded.
+    FORGOTTEN_LANE_LIMIT_S = 1200.0
+
     def _restore_record_lock(self, provider_id: int) -> asyncio.Lock:
         """Serializes every change to one worker's restore records.
 
@@ -820,7 +825,8 @@ class CapacityPlanner:
         """Lanes an operator unloaded, by when: not recorded while the worker still reports them.
 
         An unload can wait behind other work on the worker for minutes, so
-        the mark stays until the lane is gone or the worker refused the unload.
+        the mark stays until the lane is gone, the worker refused the unload,
+        or the lane is still there, not unloading, after FORGOTTEN_LANE_LIMIT_S.
         """
         return self.__dict__.setdefault("_forgotten_lane_times", {})
 
@@ -854,8 +860,18 @@ class CapacityPlanner:
             return []
         present = {str(lane.get("lane_id")) for lane in runtime_lanes if isinstance(lane, dict)}
         forgotten = self._forgotten_lanes()
-        for key in list(forgotten):
-            if key[0] == provider_id and key[1] not in present:
+        stopping = {
+            str(lane.get("lane_id"))
+            for lane in runtime_lanes
+            if isinstance(lane, dict) and lane.get("transition") == "stopping"
+        }
+        now = time.time()
+        for key, since in list(forgotten.items()):
+            if key[0] != provider_id:
+                continue
+            # Gone: done. Still there and not unloading long after the longest
+            # command could have run: the unload failed, so record it again.
+            if key[1] not in present or (key[1] not in stopping and now - since > self.FORGOTTEN_LANE_LIMIT_S):
                 del forgotten[key]
         observed = {
             lane_id: entry
@@ -1134,7 +1150,7 @@ class CapacityPlanner:
         """
         if action.operator_initiated:
             return False
-        if self.is_worker_locked(action.provider_id) and not action.restore:
+        if self.is_worker_locked(action.provider_id) and not (action.restore or MAINTENANCE_RECOVERY.get()):
             logger.info(
                 "Aborting %s of lane %s on worker=%s: the worker was locked while the lane drained",
                 action.action,

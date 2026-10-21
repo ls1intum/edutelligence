@@ -15,7 +15,9 @@ AUTOMATIC_CALIBRATION = ContextVar("automatic_calibration", default=False)
 # A start whose reply was lost keeps an unconfirmed claim. The worker activates
 # its session before it answers, so once this has passed since the claim, an
 # idle status proves the start never took effect or has already finished.
-UNCONFIRMED_CLAIM_GRACE = timedelta(minutes=5)
+# Longer than the longest lane command (900 s): a worker that still reads
+# commands one at a time can run a start that long after it was sent.
+UNCONFIRMED_CLAIM_GRACE = timedelta(minutes=20)
 
 
 class MaintenanceCoordinator:
@@ -126,5 +128,8 @@ class MaintenanceCoordinator:
 
 
 def _past_grace(claim):
+    age_s = claim.get("age_s")
+    if age_s is not None:
+        return float(age_s) >= UNCONFIRMED_CLAIM_GRACE.total_seconds()
     created_at = claim.get("created_at")
     return created_at is not None and datetime.now(UTC) - created_at >= UNCONFIRMED_CLAIM_GRACE

@@ -8,6 +8,7 @@ import math
 import os
 import socket
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from itertools import combinations
 from typing import Any, Awaitable, Callable, Iterable
@@ -385,6 +386,10 @@ class LaneManager:
         self._loading_gpus: dict[str, frozenset[int] | None] = {}
         # Replaced, after being set, every time a load stops starting.
         self._load_finished = asyncio.Event()
+        # One host-RAM change at a time: a sleep moves weights into host RAM
+        # and re-plans the RAM cache before the next sleep or cache admission,
+        # which would otherwise size the cache for one sleeper while two land.
+        self._host_ram_lock = asyncio.Lock()
         # Lanes detached by an unload whose process is still exiting. A new
         # lane with the same id waits for the event before it takes the port.
         self._finalizing: dict[str, asyncio.Event] = {}
@@ -995,14 +1000,47 @@ class LaneManager:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _LANE_SLEEP_DRAIN_TIMEOUT_S
         while True:
-            # Unloading only frees memory, so it waits for no load, sleep or
-            # wake of another lane, and not behind waiters either.
-            async with self._lock.scoped([lane_id], queue=False):
+            # The lane and its GPUs only: unloads on other GPUs, and work on
+            # other lanes, go on. Not behind waiters, since it frees memory.
+            # Held until the process has exited: a start on these GPUs must
+            # not see their memory free up while it profiles.
+            async with self._holding_lane(lane_id, queue=False):
                 detached = self._detach_if_drained(lane_id, loop.time() >= deadline)
-            if detached is not None:
-                break
+                if detached is not None:
+                    await self._finalize_unloaded(lane_id, *detached)
+                    break
             await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
-        handle, port = detached
+        # Refresh GPU snapshot immediately after the process exits so the next
+        # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
+        # Without this the server-side planner would see phantom VRAM (lanes=0
+        # but VRAM still reported as occupied) for up to the poll interval.
+        if self._gpu_force_poll is not None:
+            await self._gpu_force_poll()
+        prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
+
+    @asynccontextmanager
+    async def _holding_lane(self, lane_id: str, *, queue: bool = True):
+        """Hold the lane and the GPUs its process runs on.
+
+        A vLLM start profiles the free memory of its GPUs and fails when it
+        grows meanwhile, so a sleep or unload must not overlap a start on the
+        same GPU. The GPUs are read again under the lock: a reconfigure may
+        have moved the lane while this waited.
+        """
+        while True:
+            gpus = self._lane_launch_gpus(lane_id)
+            async with self._lock.scoped([lane_id], gpus, queue=queue) as claim:
+                if self._lane_launch_gpus(lane_id) != gpus:
+                    continue
+                yield claim
+                return
+
+    def _lane_launch_gpus(self, lane_id: str) -> frozenset[int] | None:
+        handle = self._handles.get(lane_id)
+        lane_config = getattr(handle, "lane_config", None)
+        return self._launch_gpu_set(lane_config) if lane_config is not None else None
+
+    async def _finalize_unloaded(self, lane_id: str, handle: ProcessHandle, port: int | None) -> None:
         finalized = self._finalizing[lane_id] = asyncio.Event()
         self._finalizing_gpus[lane_id] = self._launch_gpu_set(handle.lane_config) if handle.lane_config else None
         try:
@@ -1014,13 +1052,6 @@ class LaneManager:
             self._finalizing.pop(lane_id, None)
             self._finalizing_gpus.pop(lane_id, None)
             finalized.set()
-        # Refresh GPU snapshot immediately after the process exits so the next
-        # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
-        # Without this the server-side planner would see phantom VRAM (lanes=0
-        # but VRAM still reported as occupied) for up to the poll interval.
-        if self._gpu_force_poll is not None:
-            await self._gpu_force_poll()
-        prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
 
     def _detach_if_drained(self, lane_id: str, force: bool) -> tuple[ProcessHandle, int | None] | None:
         """Take the lane out of service once it has no request in flight, or when *force* is set."""
@@ -1128,7 +1159,7 @@ class LaneManager:
         while True:
             # This lane only: a whole-lock waiter would queue every request on
             # other lanes behind a load still starting.
-            async with self._lock.scoped([lane_id]):
+            async with self._lock.scoped([lane_id], queue=False):
                 if lane_id not in self._handles:
                     return
                 active = self._active_requests.get(lane_id, 0)
@@ -1233,8 +1264,10 @@ class LaneManager:
             self._set_transition(lane_id, "draining")
             await self._drain_lane_inflight(lane_id)
         self._set_transition(lane_id, "falling_asleep")
-        # Sleeping only frees memory, so a load on the same GPUs may go on.
-        async with self._lock.scoped([lane_id]):
+        # Not behind waiters: a load waiting for memory may need this sleep.
+        # Host RAM is taken only once the lane and its GPUs are held, so a
+        # sleep waiting for a start on its GPU holds up no other sleep.
+        async with self._holding_lane(lane_id, queue=False), self._host_ram_lock:
             if len(self._handles) == 1:
                 logger.warning(
                     "Sleeping the only active lane '%s' — worker will have zero serving capacity",
@@ -1248,8 +1281,8 @@ class LaneManager:
                 raise ValueError(f"Lane '{lane_id}' has no lane config")
             # Final interlock closing the drain gap: a request may have been
             # admitted between the drain loop's last (lock-free) check and here.
-            # self._lock is held continuously from this point through
-            # handle.sleep(), and increment_active_requests needs the same lock,
+            # The lane is held continuously from this point through
+            # handle.sleep(), and increment_active_requests needs the lane too,
             # so re-checking active==0 now guarantees no in-flight request is
             # severed. If one slipped in, skip the sleep and let the planner retry
             # next cycle (the lane stays awake and keeps serving it).
@@ -1281,15 +1314,14 @@ class LaneManager:
                 port=handle.port,
             )
             status = await self._get_status_unlocked(lane_id)
-        # The lane is asleep and its weights are in host RAM now — re-plan
-        # the RAM cache immediately, before the next sleep lands, instead of
-        # on the next 60 s tick: the kernel cannot reclaim tmpfs pages, so a
-        # cache that keeps its old size in that window is what makes the host
-        # OOM killer pick vLLM rather than the cache. Runs outside
-        # self._lock so the (async) re-plan does not extend the sleep's
-        # critical section; a failing hook must never fail the sleep itself
-        # (see _notify_lane_slept).
-        await self._notify_lane_slept()
+            # The lane is asleep and its weights are in host RAM now — re-plan
+            # the RAM cache immediately, before the next sleep or cache
+            # admission (both wait for host RAM), instead of on the next 60 s
+            # tick: the kernel cannot reclaim tmpfs pages, so a cache that
+            # keeps its old size in that window is what makes the host OOM
+            # killer pick vLLM rather than the cache. A failing hook must never
+            # fail the sleep itself (see _notify_lane_slept).
+            await self._notify_lane_slept()
         return status
 
     async def wake_lane(self, lane_id: str) -> LaneStatus:
@@ -1303,14 +1335,12 @@ class LaneManager:
     async def _wake_lane(self, lane_id: str) -> LaneStatus:
         cleanup: tuple[ProcessHandle, int | None, str] | None = None
         status: LaneStatus | None = None
-        async with self._lock.scoped([lane_id]) as claim:
+        # Waking grows the lane on its GPUs, so no load may start there meanwhile.
+        async with self._holding_lane(lane_id):
             handle = self._handles.get(lane_id)
             if handle is None:
                 raise KeyError(f"Lane '{lane_id}' not found")
             lc = handle.lane_config
-            # Waking grows the lane on its GPUs, so no load may start there
-            # meanwhile. Read under the lane: a reconfigure may have moved it.
-            await claim.widen(self._launch_gpu_set(lc) if lc is not None else None)
             if lc is None:
                 raise ValueError(f"Lane '{lane_id}' has no lane config")
             try:
@@ -1683,7 +1713,7 @@ class LaneManager:
             )
 
     async def get_lane_status(self, lane_id: str) -> LaneStatus:
-        async with self._lock.scoped([lane_id]):
+        async with self._lock.scoped([lane_id], queue=False):
             return await self._get_status_unlocked(lane_id)
 
     def get_current_lane_configs(self) -> list[LaneConfig]:
@@ -1727,8 +1757,9 @@ class LaneManager:
 
     async def increment_active_requests(self, lane_id: str) -> None:
         # Only a sleep or unload of this lane must see the count, and both
-        # hold the lane; a load of another lane does not hold up requests.
-        async with self._lock.scoped([lane_id]):
+        # hold the lane. Not behind waiters: a whole-lock request waiting for
+        # a long load would otherwise hold up every request on the worker.
+        async with self._lock.scoped([lane_id], queue=False):
             if lane_id not in self._handles:
                 raise KeyError(f"Lane '{lane_id}' not found")
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
@@ -1761,7 +1792,7 @@ class LaneManager:
         """
         if not lane_id:
             raise LaneNotServingError("lane_id is required")
-        async with self._lock.scoped([lane_id]):
+        async with self._lock.scoped([lane_id], queue=False):
             if lane_id not in self._handles:
                 raise LaneNotServingError(f"Lane '{lane_id}' not found")
             status = await self._get_status_unlocked(lane_id)
@@ -1782,7 +1813,7 @@ class LaneManager:
             return status
 
     async def decrement_active_requests(self, lane_id: str) -> None:
-        async with self._lock.scoped([lane_id]):
+        async with self._lock.scoped([lane_id], queue=False):
             if lane_id not in self._handles:
                 return
             current = self._active_requests.get(lane_id, 0)
@@ -2914,6 +2945,11 @@ class LaneManager:
         # unreclaimable and the lane's first sleep lacks host RAM.
         self._pending_lane_configs[lane_id] = lane_config
         try:
+            # A process of the same lane id still exiting holds the port and
+            # the memory placement and the headroom check would count.
+            finalizing = self._finalizing.get(lane_id)
+            if finalizing is not None:
+                await finalizing.wait()
             # Re-plan now that the pending lane is counted, BEFORE the wait or
             # copy below: the floor must already hold this lane's sleeping
             # footprint when its copy is admitted. The post-registration
@@ -2933,7 +2969,8 @@ class LaneManager:
                 # still works for models the startup planner didn't pick.
                 if hasattr(self._model_cache, "wait_for_cached"):
                     await self._model_cache.wait_for_cached(lane_config.model)
-                effective = await self._model_cache.ensure_cached(lane_config.model)
+                async with self._host_ram_lock:
+                    effective = await self._model_cache.ensure_cached(lane_config.model)
                 if effective:
                     hf_home_override = effective
                     is_tmpfs = hasattr(self._model_cache, "_cache_hub") and effective == str(
@@ -2968,9 +3005,6 @@ class LaneManager:
                     "Placement is refused until the session ends; leftover GPU(s) remain available."
                 )
             await self._wait_for_vram_headroom(lane_id, lane_config)
-            finalizing = self._finalizing.get(lane_id)
-            if finalizing is not None:
-                await finalizing.wait()
             port = self._port_alloc.allocate(lane_id)
             self._note_lane_spawn(lane_id, lane_config.model)
             handle = _create_handle(
@@ -2994,7 +3028,9 @@ class LaneManager:
                         f"process did not enter running state (state={status.state.value}, "
                         f"return_code={status.return_code})"
                     )
-            except Exception:
+            except BaseException:
+                # Cancellation too (a worker shutdown): the process must not
+                # outlive a handle that never reached _handles.
                 self._reject_unproven_shared_calibration(lane_id, lane_config.model, handle)
                 # Keep apply_lanes transactional: failed startup must not leak ports
                 # or dangling handles.
@@ -3053,7 +3089,7 @@ class LaneManager:
     async def _place_for_spawn(self, lane_id: str, lane_config: LaneConfig, claim: Claim | None) -> LaneConfig:
         """Pick the lane's GPUs; with *claim*, also take them for the start.
 
-        A holder of the whole lock places as before: no other load is starting.
+        A holder of the whole lock places directly: no other load is starting.
         Otherwise the GPUs of loads still starting are left out, as if they
         were full, so two loads never start on one GPU. When nothing else
         fits, the lane waits until one of them has started and places again.
