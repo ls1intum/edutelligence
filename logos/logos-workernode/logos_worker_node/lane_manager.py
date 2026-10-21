@@ -587,11 +587,15 @@ class LaneManager:
         whole node counts as busy rather than under-reporting its footprint.
         """
         busy: set[int] = set()
-        for handle in self._handles.values():
-            lc = handle.lane_config
-            if lc is None or not lc.vllm:
-                continue
-            gset = self._lane_gpu_set(lc.gpu_devices)
+        gpu_sets = [
+            self._lane_gpu_set(handle.lane_config.gpu_devices)
+            for handle in self._handles.values()
+            if handle.lane_config is not None and handle.lane_config.vllm
+        ]
+        # A lane still starting holds its GPUs too: a calibration slice
+        # picked there would stop the lane the moment it has started.
+        gpu_sets.extend(self._loading_gpus.values())
+        for gset in gpu_sets:
             if gset is None:
                 return frozenset(range(self._gpu_device_count()))
             busy |= gset
@@ -1828,6 +1832,16 @@ class LaneManager:
             return_exceptions=False,
         )
 
+    def _lanes_on_gpus(self, gpu_set: set[int]) -> frozenset[str]:
+        """vLLM lanes that occupy a GPU in *gpu_set*."""
+        return frozenset(
+            lid
+            for lid, handle in self._handles.items()
+            if handle.lane_config is not None
+            and handle.lane_config.vllm
+            and self._lane_touches_gpus(handle.lane_config.gpu_devices, gpu_set)
+        )
+
     async def destroy_lanes_on_gpus(self, gpu_set: set[int]) -> int:
         """Stop only the vLLM lanes that occupy a GPU in *gpu_set*.
 
@@ -1839,17 +1853,19 @@ class LaneManager:
         """
         if not gpu_set:
             return 0
-        async with self._lock:
-            detached: list[tuple[str, ProcessHandle, int | None]] = []
-            for lid in list(self._handles.keys()):
-                handle = self._handles[lid]
-                lc = handle.lane_config
-                if lc is None or not lc.vllm:
-                    continue
-                if self._lane_touches_gpus(lc.gpu_devices, gpu_set):
+        # Hold the slice and its lanes only: loads, sleeps and wakes on the
+        # leftover GPUs go on, and the probe need not wait for them.
+        detached: list[tuple[str, ProcessHandle, int | None]] = []
+        while True:
+            lanes = self._lanes_on_gpus(gpu_set)
+            async with self._lock.scoped(lanes, gpu_set):
+                if not self._lanes_on_gpus(gpu_set) <= lanes:
+                    continue  # a lane started there meanwhile: hold it too
+                for lid in lanes:
                     h, port = self._detach_lane_unlocked(lid)
                     if h is not None:
                         detached.append((lid, h, port))
+            break
 
         if not detached:
             return 0

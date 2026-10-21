@@ -376,7 +376,7 @@ async def test_bridge_answers_an_unload_while_a_load_runs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bridge_keeps_other_lane_commands_in_arrival_order() -> None:
+async def test_bridge_hands_two_loads_to_the_lane_manager_at_once() -> None:
     lanes = _SlowLoads()
     client = LogosBridgeClient(_App(lanes), LogosConfig(enabled=True, logos_url="https://logos.example"))
     ws = _WS()
@@ -384,9 +384,60 @@ async def test_bridge_keeps_other_lane_commands_in_arrival_order() -> None:
     await client._handle_message(ws, _command("first", "add_lane", {"lane_id": "a", "model": MODEL}))  # noqa: SLF001
     await client._handle_message(ws, _command("second", "add_lane", {"lane_id": "b", "model": MODEL}))  # noqa: SLF001
     await _settle()
-    assert lanes.calls == ["add a"]
+    # The lane manager decides whether they may overlap (separate GPUs).
+    assert lanes.calls == ["add a", "add b"]
 
     lanes.release.set()
     await asyncio.gather(*client._lifecycle_tasks)  # noqa: SLF001
-    assert lanes.calls == ["add a", "add b"]
-    assert [frame["cmd_id"] for frame in ws.frames] == ["first", "second"]
+    assert {frame["cmd_id"] for frame in ws.frames} == {"first", "second"}
+
+
+@pytest.mark.asyncio
+async def test_bridge_answers_a_calibration_start_while_a_load_runs() -> None:
+    """The case behind a stuck calibration claim: the start sat unread behind a cold load."""
+    lanes = _SlowLoads()
+    client = LogosBridgeClient(_App(lanes), LogosConfig(enabled=True, logos_url="https://logos.example"))
+    started: list[dict] = []
+
+    async def start(params: dict) -> dict:
+        started.append(params)
+        return {"ok": True}
+
+    client._handle_start_calibration_session = start  # noqa: SLF001
+    ws = _WS()
+
+    await client._handle_message(ws, _command("load", "add_lane", {"lane_id": "a", "model": MODEL}))  # noqa: SLF001
+    await client._handle_message(ws, _command("calibrate", "start_calibration_session", {}))  # noqa: SLF001
+    await _settle()
+    assert [frame["cmd_id"] for frame in ws.frames] == ["calibrate"]
+
+    lanes.release.set()
+    await asyncio.gather(*client._lifecycle_tasks)  # noqa: SLF001
+
+
+# ── Calibration next to starting loads ─────────────────────────────────────
+
+
+def test_calibration_slice_avoids_gpus_a_load_is_starting_on() -> None:
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"), lane_port_start=15400, lane_port_end=15410, gpu_device_count=lambda: 3
+    )
+    # Three GPUs, as on deioma: the slice is two of them.
+    manager._loading_gpus["starting"] = frozenset({1})  # noqa: SLF001
+    assert manager.begin_calibration_session() == frozenset({0, 2})
+
+
+@pytest.mark.asyncio
+async def test_calibration_teardown_does_not_wait_for_a_load_on_other_gpus() -> None:
+    manager = _manager_with({"slice": _Handle(LaneConfig(model="m-s", gpu_devices="2"))})
+    release = asyncio.Event()
+
+    async def load_on_gpu0() -> None:
+        async with manager._lock.scoped(["new"], [0]):  # noqa: SLF001
+            await release.wait()
+
+    load = asyncio.create_task(load_on_gpu0())
+    await _settle()
+    assert await asyncio.wait_for(manager.destroy_lanes_on_gpus({2, 3}), timeout=2) == 1
+    release.set()
+    await load
