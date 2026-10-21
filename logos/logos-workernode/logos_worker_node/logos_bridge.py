@@ -141,6 +141,13 @@ class LogosBridgeClient:
         self._command_tasks: dict[str, asyncio.Task] = {}
         self._stopping = asyncio.Event()
         self._send_lock = asyncio.Lock()
+        # Commands other than inference and unloads run one at a time, in the
+        # order they arrived. They run off the receive loop so that an unload
+        # is read while a load is still running.
+        self._serial_command_lock = asyncio.Lock()
+        # Strong references to those commands. A disconnect does not cancel
+        # them: a lane change half done is worse than one whose answer is lost.
+        self._lifecycle_tasks: set[asyncio.Task] = set()
         # One pooled relay client shared by every infer/stream command instead
         # of a fresh AsyncClient (and a fresh TCP connection to the lane) per
         # request. It outlives individual commands, so command finally-blocks
@@ -923,7 +930,34 @@ class LogosBridgeClient:
             self._track_command_task(task, action=action, cmd_id=cmd_id)
             return
 
-        await self._execute_command_and_respond(ws, cmd_id, action, params)
+        if action == "delete_lane":
+            # Unloading only frees memory, so it may overlap any other command.
+            self._start_lifecycle_task(self._execute_command_and_respond(ws, cmd_id, action, params), action, cmd_id)
+            return
+
+        self._start_lifecycle_task(self._execute_serialized(ws, cmd_id, action, params), action, cmd_id)
+
+    async def _execute_serialized(self, ws, cmd_id: str, action: str, params: dict[str, Any]) -> None:
+        # asyncio.Lock wakes its waiters first in, first out, so the commands
+        # keep their arrival order.
+        async with self._serial_command_lock:
+            await self._execute_command_and_respond(ws, cmd_id, action, params)
+
+    def _start_lifecycle_task(self, coro: Any, action: str, cmd_id: str) -> None:
+        task = asyncio.create_task(coro, name=f"logos-bridge-{action}-{cmd_id[:8]}")
+        self._lifecycle_tasks.add(task)
+
+        def _done(done_task: asyncio.Task) -> None:
+            self._lifecycle_tasks.discard(done_task)
+            if done_task.cancelled():
+                return
+            exc = done_task.exception()
+            if exc is not None:
+                # The command itself reports its failure; this is the answer
+                # that could not be sent, e.g. after a disconnect.
+                logger.warning("Could not answer %s cmd_id=%s: %s", action, cmd_id[:8], exc)
+
+        task.add_done_callback(_done)
 
     async def _execute_command(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         lane_manager = self._app.state.lane_manager

@@ -32,6 +32,7 @@ from logos_worker_node.models import (
     VllmEngineConfig,
     WorkerConfig,
 )
+from logos_worker_node.resource_lock import Claim, ResourceLock
 from logos_worker_node.vllm_process import VllmProcessHandle, effective_gmu
 
 logger = logging.getLogger("logos_worker_node.lane_manager")
@@ -299,6 +300,9 @@ def _log_shows_memory_trouble(handle: Any) -> bool:
     )
 
 
+_NOT_LOADING = object()
+
+
 class LaneManager:
     """Manages a pool of vLLM process handles, one per model lane."""
 
@@ -369,7 +373,21 @@ class LaneManager:
             end=lane_port_end,
             reserved_ports=reserved_ports,
         )
-        self._lock = asyncio.Lock()
+        # ``async with self._lock`` holds every lane and GPU. A load, sleep,
+        # wake or unload holds only its lane and the GPUs it grows into
+        # (self._lock.scoped), so those on other lanes and GPUs run alongside.
+        self._lock = ResourceLock()
+        # One placement decision at a time: a load picks its GPUs knowing the
+        # GPUs of every load still starting (see _place_for_spawn).
+        self._placement_lock = asyncio.Lock()
+        # GPUs of loads still starting, by lane id; None for a load that may
+        # use every GPU. Set the moment a load has picked its GPUs.
+        self._loading_gpus: dict[str, frozenset[int] | None] = {}
+        # Replaced, after being set, every time a load stops starting.
+        self._load_finished = asyncio.Event()
+        # Lanes detached by an unload whose process is still exiting. A new
+        # lane with the same id waits for the event before it takes the port.
+        self._finalizing: dict[str, asyncio.Event] = {}
         self._event_log: list[LaneEvent] = []
         self._active_requests: dict[str, int] = {}
         # The lifecycle step a lane is in the middle of ("draining",
@@ -940,10 +958,10 @@ class LaneManager:
         self._validate_vllm_runtime_requirements([lane_config])
         if self._max_lanes > 0 and len(self._handles) >= self._max_lanes:
             raise ValueError(f"MAX_LANES limit reached ({self._max_lanes})")
-        async with self._lock:
+        async with self._lock.scoped([lid]) as claim:
             if lid in self._handles:
                 raise ValueError(f"Lane '{lid}' already exists")
-            await self._add_lane_unlocked(lid, lane_config)
+            await self._add_lane_unlocked(lid, lane_config, claim=claim)
             status = await self._get_status_unlocked(lid)
         await self._notify_lane_added()
         return status
@@ -971,28 +989,50 @@ class LaneManager:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _LANE_SLEEP_DRAIN_TIMEOUT_S
         while True:
-            async with self._lock:
-                if lane_id not in self._handles:
-                    raise KeyError(f"Lane '{lane_id}' not found")
-                active = self._active_requests.get(lane_id, 0)
-                if active <= 0 or loop.time() >= deadline:
-                    if active > 0:
-                        logger.warning(
-                            "remove_lane '%s': %d request(s) still in-flight after %.0fs drain — " "removing anyway",
-                            lane_id,
-                            active,
-                            _LANE_SLEEP_DRAIN_TIMEOUT_S,
-                        )
-                    await self._remove_lane_unlocked(lane_id)
-                    # Refresh GPU snapshot immediately after the process exits so the next
-                    # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
-                    # Without this the server-side planner would see phantom VRAM (lanes=0
-                    # but VRAM still reported as occupied) for up to the poll interval.
-                    if self._gpu_force_poll is not None:
-                        await self._gpu_force_poll()
-                    prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
-                    return
+            # Unloading only frees memory, so it waits for no load, sleep or
+            # wake of another lane, and not behind waiters either.
+            async with self._lock.scoped([lane_id], queue=False):
+                detached = self._detach_if_drained(lane_id, loop.time() >= deadline)
+            if detached is not None:
+                break
             await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
+        handle, port = detached
+        finalized = self._finalizing[lane_id] = asyncio.Event()
+        try:
+            await self._finalize_detached_lane(lane_id, handle, port)
+        finally:
+            # The port stays taken until the process is gone, so no new lane
+            # binds it while the old one still listens.
+            self._port_alloc.release(lane_id)
+            self._finalizing.pop(lane_id, None)
+            finalized.set()
+        # Refresh GPU snapshot immediately after the process exits so the next
+        # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
+        # Without this the server-side planner would see phantom VRAM (lanes=0
+        # but VRAM still reported as occupied) for up to the poll interval.
+        if self._gpu_force_poll is not None:
+            await self._gpu_force_poll()
+        prom.LANE_TRANSITIONS_TOTAL.labels(action="delete").inc()
+
+    def _detach_if_drained(self, lane_id: str, force: bool) -> tuple[ProcessHandle, int | None] | None:
+        """Take the lane out of service once it has no request in flight, or when *force* is set."""
+        if lane_id not in self._handles:
+            raise KeyError(f"Lane '{lane_id}' not found")
+        active = self._active_requests.get(lane_id, 0)
+        if active > 0 and not force:
+            return None
+        if active > 0:
+            logger.warning(
+                "remove_lane '%s': %d request(s) still in-flight after %.0fs drain — " "removing anyway",
+                lane_id,
+                active,
+                _LANE_SLEEP_DRAIN_TIMEOUT_S,
+            )
+        handle = self._handles.pop(lane_id)
+        port = self._port_alloc.get_port(lane_id)
+        self._active_requests.pop(lane_id, None)
+        self._starting_deadlines.pop(lane_id, None)
+        return handle, port
 
     async def reconfigure_lane(
         self, lane_id: str, updates: dict[str, Any], *, require_idle: bool = False, force_restart: bool = False
@@ -1183,7 +1223,8 @@ class LaneManager:
             self._set_transition(lane_id, "draining")
             await self._drain_lane_inflight(lane_id)
         self._set_transition(lane_id, "falling_asleep")
-        async with self._lock:
+        # Sleeping only frees memory, so a load on the same GPUs may go on.
+        async with self._lock.scoped([lane_id]):
             if len(self._handles) == 1:
                 logger.warning(
                     "Sleeping the only active lane '%s' — worker will have zero serving capacity",
@@ -1252,7 +1293,11 @@ class LaneManager:
     async def _wake_lane(self, lane_id: str) -> LaneStatus:
         cleanup: tuple[ProcessHandle, int | None, str] | None = None
         status: LaneStatus | None = None
-        async with self._lock:
+        # Waking grows the lane on its GPUs, so no load may start there meanwhile.
+        current = self._handles.get(lane_id)
+        lc = current.lane_config if current is not None else None
+        gpus = self._lane_gpu_set(getattr(lc, "gpu_devices", None)) if lc is not None else None
+        async with self._lock.scoped([lane_id], gpus):
             handle = self._handles.get(lane_id)
             if handle is None:
                 raise KeyError(f"Lane '{lane_id}' not found")
@@ -2377,8 +2422,14 @@ class LaneManager:
                 "(nvidia-smi reports them as failed; reset or reboot the node)"
             )
 
-    async def _auto_place_gpu_devices(self, lane_id: str, lane_config: LaneConfig) -> LaneConfig:
+    async def _auto_place_gpu_devices(
+        self, lane_id: str, lane_config: LaneConfig, busy_gpus: frozenset[int] = frozenset()
+    ) -> LaneConfig:
         """Pick an explicit GPU set for auto-managed vLLM lanes.
+
+        *busy_gpus* are GPUs another load is starting on. They are left out
+        like a calibration slice; a pin that includes one is returned as is
+        for the caller to wait on.
 
         Strategy:
         - Never use a GPU that nvidia-smi reports as faulted; an explicit
@@ -2487,6 +2538,13 @@ class LaneManager:
             held = set(self._calibration_gpu_subset)
             allowed_rows = [row for row in allowed_rows if int(row["index"]) not in held]
         tp_size = lane_config.vllm_config.parallel_gpu_count
+        if busy_gpus:
+            allowed_rows = [row for row in allowed_rows if int(row["index"]) not in busy_gpus]
+            if len(allowed_rows) < tp_size:
+                raise RuntimeError(
+                    f"Auto-placement: GPU(s) {sorted(busy_gpus)} are busy with starting lanes; "
+                    f"too few left for lane '{lane_id}' (tp={tp_size})"
+                )
         if len(allowed_rows) < tp_size:
             if self._calibration_gpu_subset:
                 # Fail fast rather than fall back to cuda:0 (a held slice GPU):
@@ -2797,8 +2855,15 @@ class LaneManager:
             max_attempts,
         )
 
-    async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig) -> None:
-        if self._max_lanes > 0 and len(self._handles) >= self._max_lanes:
+    async def _add_lane_unlocked(self, lane_id: str, lane_config: LaneConfig, claim: Claim | None = None) -> None:
+        """Start a lane.
+
+        The caller holds either the whole lock or, with *claim*, the lane alone;
+        the claim then grows to the GPUs the lane is placed on.
+        """
+        # Loads still starting count too: they hold a slot already.
+        starting = sum(1 for lid in self._pending_lane_configs if lid != lane_id)
+        if self._max_lanes > 0 and len(self._handles) + starting >= self._max_lanes:
             raise ValueError(f"MAX_LANES limit reached ({self._max_lanes})")
         # The re-plan does not take self._lock, and the handle only lands in
         # _handles after the spawn succeeds — reserve the model before its
@@ -2852,7 +2917,7 @@ class LaneManager:
                     )
             lane_config = self._apply_model_vllm_overrides(lane_config)
             lane_config = self._auto_tensor_parallel(lane_config)
-            lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
+            lane_config = await self._place_for_spawn(lane_id, lane_config, claim)
             # Last line of defence at the resource itself: an operator-explicit
             # gpu_devices pin that lands on the calibration's held slice is
             # refused (auto-placement already avoids the slice). Leftover
@@ -2868,6 +2933,9 @@ class LaneManager:
                     "Placement is refused until the session ends; leftover GPU(s) remain available."
                 )
             await self._wait_for_vram_headroom(lane_id, lane_config)
+            finalizing = self._finalizing.get(lane_id)
+            if finalizing is not None:
+                await finalizing.wait()
             port = self._port_alloc.allocate(lane_id)
             self._note_lane_spawn(lane_id, lane_config.model)
             handle = _create_handle(
@@ -2926,6 +2994,48 @@ class LaneManager:
             # entry behind.
             self._pending_lane_configs.pop(lane_id, None)
             self.release_model_startup(starting_model)
+            self._finish_loading(lane_id)
+
+    def _finish_loading(self, lane_id: str) -> None:
+        """Free the GPUs a starting load held for placement and wake loads waiting on them."""
+        if self._loading_gpus.pop(lane_id, _NOT_LOADING) is not _NOT_LOADING:
+            self._load_finished.set()
+            self._load_finished = asyncio.Event()
+
+    async def _place_for_spawn(self, lane_id: str, lane_config: LaneConfig, claim: Claim | None) -> LaneConfig:
+        """Pick the lane's GPUs; with *claim*, also take them for the start.
+
+        A holder of the whole lock places as before: no other load is starting.
+        Otherwise the GPUs of loads still starting are left out, as if they
+        were full, so two loads never start on one GPU. When nothing else
+        fits, the lane waits until one of them has started and places again.
+        """
+        if claim is None:
+            return await self._auto_place_gpu_devices(lane_id, lane_config)
+        while True:
+            async with self._placement_lock:
+                others = [gpus for lid, gpus in self._loading_gpus.items() if lid != lane_id]
+                busy = None if None in others else frozenset().union(*others)
+                placed: LaneConfig | None = None
+                try:
+                    if busy == frozenset():
+                        placed = await self._auto_place_gpu_devices(lane_id, lane_config)
+                    elif busy is not None:
+                        placed = await self._auto_place_gpu_devices(lane_id, lane_config, busy_gpus=busy)
+                except RuntimeError:
+                    if not busy:
+                        raise
+                gpus = self._lane_gpu_set(placed.gpu_devices) if placed is not None else None
+                clear = placed is not None and (not others or (gpus is not None and not gpus & busy))
+                if clear:
+                    self._loading_gpus[lane_id] = gpus
+                    break
+                finished = self._load_finished
+            logger.info("Lane '%s' waits for a load on the same GPU(s) to start before it is placed", lane_id)
+            await finished.wait()
+        # A wake on those GPUs grows memory there; let it finish first.
+        await claim.widen(gpus)
+        return placed
 
     async def _remove_lane_unlocked(self, lane_id: str) -> None:
         handle, port = self._detach_lane_unlocked(lane_id)
