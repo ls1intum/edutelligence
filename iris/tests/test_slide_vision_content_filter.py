@@ -17,7 +17,9 @@ from iris.domain.data.slide_vision_dto import SlideVisionDTO
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
+from iris.llm import CompletionArguments
 from iris.llm.external.openai_chat import is_content_filter_error
+from iris.llm.request_handler.request_handler_interface import RequestHandler
 from iris.pipeline.ingestion_audit import IngestionAudit
 from iris.pipeline.ingestion_quality import assess_page_chunks
 from iris.pipeline.lecture_ingestion_pipeline import (
@@ -193,6 +195,53 @@ def test_a_slide_without_description_keeps_its_extracted_text():
 
     assert (number, text) == (-1, "raw slide text")
     pipeline.merge_page_content_and_image_interpretation.assert_not_called()
+
+
+class _RejectingRequestHandler(RequestHandler):
+    """A request handler whose provider rejects every chat request with a content filter 400."""
+
+    calls: int = 0
+
+    def complete(self, prompt, arguments, image=None):
+        raise NotImplementedError
+
+    def chat(self, messages, arguments, tools):
+        self.calls += 1
+        raise _bad_request("content_filter")
+
+    def embed(self, text):
+        raise NotImplementedError
+
+    def bind_tools(self, tools):
+        raise NotImplementedError
+
+
+def test_a_rejected_merge_appends_the_description_to_the_slide_text():
+    pipeline = _pipeline(MagicMock(return_value=_answer()))
+    merge_handler = _RejectingRequestHandler()
+    pipeline.llm = SimpleNamespace(
+        request_handler=merge_handler, completion_args=CompletionArguments()
+    )
+
+    number, text = pipeline._interpret_and_merge_page(
+        "aW1n", "• Verbs\n• Nouns", PREVIOUS_SLIDE, "Lecture", 7
+    )
+
+    # The rejection comes through the real langchain merge chain.
+    assert merge_handler.calls == 1
+    assert (number, text) == (4, "Verbs Nouns A UML class diagram.")
+
+
+def test_other_merge_errors_still_fail_the_page():
+    pipeline = _pipeline(MagicMock(return_value=_answer()))
+    pipeline.merge_page_content_and_image_interpretation = MagicMock(
+        side_effect=_bad_request("invalid_prompt")
+    )
+
+    with pytest.raises(BadRequestError):
+        pipeline._interpret_and_merge_page(
+            "aW1n", "raw slide text", PREVIOUS_SLIDE, "Lecture", 7
+        )
 
 
 def test_a_rejected_image_only_slide_gets_a_placeholder_instead_of_no_text():

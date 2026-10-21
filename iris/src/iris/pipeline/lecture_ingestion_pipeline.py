@@ -1043,9 +1043,25 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             text = page_text if page_text.strip() else NO_SLIDE_CONTENT_PLACEHOLDER
             return vision_result.display_page_number, text
         raise_if_cancelled(self.cancel_event, unit_id, "before lecture page merge")
-        merged = self.merge_page_content_and_image_interpretation(
-            page_text, vision_result.academic_description
-        )
+        try:
+            merged = self.merge_page_content_and_image_interpretation(
+                page_text, vision_result.academic_description
+            )
+        except Exception as error:
+            if not is_content_filter_error(error):
+                raise
+            # The merge prompt carries the slide text too, so the filter can reject it as well.
+            # The merge only appends the description to the text, so do that without the model.
+            logger.warning(
+                "Lecture page merge rejected by the content filter, appending the description "
+                "to the slide text instead: %s",
+                error,
+            )
+            merged = clean_text(
+                f"{page_text}\n{vision_result.academic_description}",
+                bullets=True,
+                extra_whitespace=True,
+            )
         return vision_result.display_page_number, merged
 
     def interpret_image(
