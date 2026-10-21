@@ -1674,7 +1674,7 @@ class LaneManager:
             )
 
     async def get_lane_status(self, lane_id: str) -> LaneStatus:
-        async with self._lock:
+        async with self._lock.scoped([lane_id]):
             return await self._get_status_unlocked(lane_id)
 
     def get_current_lane_configs(self) -> list[LaneConfig]:
@@ -1717,7 +1717,9 @@ class LaneManager:
         return matches[0][1]
 
     async def increment_active_requests(self, lane_id: str) -> None:
-        async with self._lock:
+        # Only a sleep or unload of this lane must see the count, and both
+        # hold the lane; a load of another lane does not hold up requests.
+        async with self._lock.scoped([lane_id]):
             if lane_id not in self._handles:
                 raise KeyError(f"Lane '{lane_id}' not found")
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
@@ -1735,7 +1737,7 @@ class LaneManager:
 
     async def acquire_lane_for_infer(self, lane_id: str) -> LaneStatus:
         """Atomically verify the lane is routable AND count the request under a
-        SINGLE lock acquisition, returning its status.
+        SINGLE lock acquisition (of this lane), returning its status.
 
         This closes the dispatch-to-sleep race at the worker: previously the
         bridge resolved the lane (one lock) and then incremented (another lock),
@@ -1750,7 +1752,7 @@ class LaneManager:
         """
         if not lane_id:
             raise LaneNotServingError("lane_id is required")
-        async with self._lock:
+        async with self._lock.scoped([lane_id]):
             if lane_id not in self._handles:
                 raise LaneNotServingError(f"Lane '{lane_id}' not found")
             status = await self._get_status_unlocked(lane_id)
@@ -1771,7 +1773,7 @@ class LaneManager:
             return status
 
     async def decrement_active_requests(self, lane_id: str) -> None:
-        async with self._lock:
+        async with self._lock.scoped([lane_id]):
             if lane_id not in self._handles:
                 return
             current = self._active_requests.get(lane_id, 0)
@@ -1781,18 +1783,20 @@ class LaneManager:
             self._status_event.set()
 
     async def total_active_requests(self) -> int:
-        """Total in-flight requests across all lanes (lock-protected)."""
-        async with self._lock:
-            return sum(self._active_requests.values())
+        """Total in-flight requests across all lanes.
+
+        Read without the lock: no other coroutine runs during the sum.
+        """
+        return sum(self._active_requests.values())
 
     async def active_requests_snapshot(self) -> dict[str, int]:
         """Per-lane in-flight counts (lock-protected copy).
 
         Used by the bridge refresh loop to patch the last pushed runtime
-        payload after a count change without rebuilding the status .
+        payload after a count change without rebuilding the status. Copied
+        without the lock: no other coroutine runs during the copy.
         """
-        async with self._lock:
-            return dict(self._active_requests)
+        return dict(self._active_requests)
 
     @property
     def lane_ids(self) -> list[str]:

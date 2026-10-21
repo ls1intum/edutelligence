@@ -469,7 +469,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
                 if (
                     provider_type == "logosnode"
-                    and ettft.tier != ReadinessTier.WARM
+                    and ettft.tier not in (ReadinessTier.WARM, ReadinessTier.BUSY)
                     and self._worker_locked(provider_id)
                 ):
                     logger.debug(

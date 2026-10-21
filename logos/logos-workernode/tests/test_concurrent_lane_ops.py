@@ -172,6 +172,15 @@ async def test_unload_runs_while_another_lane_is_loading() -> None:
 
 
 @pytest.mark.asyncio
+async def test_requests_to_a_lane_are_counted_while_another_lane_loads() -> None:
+    manager = _manager_with({"b": _Handle(LaneConfig(model="m-b", gpu_devices="1"))})
+    async with manager._lock.scoped(["a"], [0]):  # noqa: SLF001
+        await asyncio.wait_for(manager.increment_active_requests("b"), timeout=2)
+        await asyncio.wait_for(manager.decrement_active_requests("b"), timeout=2)
+    assert manager._active_requests["b"] == 0  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_unload_waits_for_a_holder_of_the_whole_lock() -> None:
     manager = _manager_with({"b": _Handle(LaneConfig(model="m-b"))})
     async with manager._lock:  # noqa: SLF001
