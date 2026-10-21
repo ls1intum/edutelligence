@@ -140,7 +140,7 @@ The confirmation dialog shows the time window and the effect on production traff
 
 ![Confirmation dialog to enable nightly benchmarks](../static/img/roles/logos-admin-nightly-enable.png)
 
-The card then shows **Nightly runs activated**.
+The card then shows **Enabled · in nightly rotation**.
 The schedule stays active after a page reload.
 Each night, Logos selects up to 2 eligible pairs, with new or older attempts first.
 The card shows possible parameter values for this pair, not a guaranteed place for tonight.
@@ -155,7 +155,7 @@ To remove the pair from the nightly rotation:
 
 1. Select **Disable nightly runs…**.
 2. Read the dialog and select **Disable nightly runs**.
-3. Check that the card shows **Nightly runs deactivated**.
+3. Check that the card shows **Disabled · not scheduled**.
 
 Select **Cancel** to keep the schedule active.
 Deactivation stops an active benchmark and restores the worker configuration before production resumes.

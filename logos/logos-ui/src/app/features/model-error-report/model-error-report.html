@@ -572,6 +572,11 @@
           }
 
           <div [hidden]="performanceView() !== 'run'">
+          @for (pair of benchmarkPairs(); track pair.model_provider_id) {
+            @if (pair.provider_type === 'logosnode') {
+              <app-nightly-benchmarks [pairId]="pair.model_provider_id" [providerName]="pair.provider_name" [modelName]="model.name" />
+            }
+          }
           @if (selectedBenchmarkPair(); as pair) {
             <section class="benchmark-runner" id="benchmark-runner" aria-label="Benchmark setup">
               <header class="benchmark-runner__header">
@@ -646,11 +651,6 @@
             </section>
           } @else {
             <div class="empty-state"><h3>No provider available</h3><p>Add a provider for this model to run a benchmark.</p></div>
-          }
-          @for (pair of benchmarkPairs(); track pair.model_provider_id) {
-            @if (pair.provider_type === 'logosnode') {
-              <app-nightly-benchmarks [pairId]="pair.model_provider_id" [providerName]="pair.provider_name" [modelName]="model.name" />
-            }
           }
 
           </div>

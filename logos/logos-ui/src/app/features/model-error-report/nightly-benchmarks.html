@@ -1,8 +1,12 @@
 <section class="nightly" [class.nightly--active]="state()?.enabled" aria-label="Nightly benchmarks">
   <div class="nightly__heading">
-    <div>
+    <div class="nightly__title">
       <strong><i class="pi pi-moon" aria-hidden="true"></i> Nightly benchmarks · {{ providerName }}</strong>
-      <p role="status">{{ state() ? (state()!.enabled ? 'Nightly runs activated' : 'Nightly runs deactivated') : 'Loading nightly status…' }}</p>
+      <p class="nightly__status" role="status" [class.nightly__status--enabled]="state()?.enabled && !state()?.recovery_required"
+        [class.nightly__status--blocked]="state()?.recovery_required">
+        <i [class]="!state() ? 'pi pi-spin pi-spinner' : state()!.recovery_required ? 'pi pi-exclamation-circle' : state()!.enabled ? 'pi pi-calendar' : 'pi pi-pause-circle'" aria-hidden="true"></i>
+        {{ !state() ? 'Loading nightly status…' : state()!.recovery_required ? 'Recovery pending' : state()!.enabled ? 'Enabled · in nightly rotation' : 'Disabled · not scheduled' }}
+      </p>
     </div>
     <button type="button" (click)="review()" [disabled]="!state() || saving() || (!state()!.enabled && (!window || state()!.recovery_required))">
       {{ state()?.enabled ? 'Disable nightly runs…' : 'Enable nightly runs…' }}
