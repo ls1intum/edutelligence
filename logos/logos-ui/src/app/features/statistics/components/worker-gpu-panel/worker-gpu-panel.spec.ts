@@ -247,6 +247,15 @@ describe('WorkerGpuPanel stop calibration', () => {
     expect(panel.canStop).toBe(false);
   });
 
+  it('offers the button after a refused start, even while the worker is idle', () => {
+    switchTo('w-b');
+    expect(panel.canStop).toBe(false);
+    panel.calibrateState.set({ kind: 'error', message: 'busy', refused: true });
+    expect(panel.canStop).toBe(true);
+    panel.calibrateState.set({ kind: 'error', message: 'boom' });
+    expect(panel.canStop).toBe(false);
+  });
+
   it('does not offer the button once the calibrating worker goes offline', () => {
     expect(panel.canStop).toBe(true);
     fixture.componentRef.setInput('providerMeta', {

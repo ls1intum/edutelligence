@@ -24,7 +24,7 @@ type CalibrateState =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'success'; message: string }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string; refused?: boolean };
 
 type StopState =
   | { kind: 'idle' }
@@ -242,7 +242,10 @@ export class WorkerGpuPanel implements OnChanges {
   }
 
   get canStop(): boolean {
-    return this.activeProviderId != null && this.isCalibrating && !this.isOffline;
+    if (this.activeProviderId == null || this.isOffline) return false;
+    const state = this.calibrateState();
+    // A refused start can come from a stale claim, which only a stop releases.
+    return this.isCalibrating || (state.kind === 'error' && state.refused === true);
   }
 
   usedPct(device: DeviceInfo): number {
@@ -338,7 +341,9 @@ export class WorkerGpuPanel implements OnChanges {
         });
       } else {
         const detail = e.error?.error ?? `HTTP ${e.status}`;
-        this.calibrateState.set({ kind: 'error', message: detail });
+        this.calibrateState.set(
+          e.status === 409 ? { kind: 'error', message: detail, refused: true } : { kind: 'error', message: detail }
+        );
       }
     }
   }
