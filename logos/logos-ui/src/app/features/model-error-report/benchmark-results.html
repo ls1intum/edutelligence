@@ -1,3 +1,34 @@
+@if (topRuns().length) {
+  <section class="top-configurations" aria-label="Top configurations so far">
+    <h3><i class="pi pi-trophy" aria-hidden="true"></i> Top configuration so far</h3>
+    <p class="results-note">Highest recorded output tok/s per model/provider from fully successful runs. Workloads can differ; this is an observed best, not a controlled improvement.</p>
+    @for (top of topRuns(); track top.run.model_provider_id) {
+      <article class="top-configuration">
+        <div class="results-heading">
+          <div><strong>{{ top.run.provider_name }}</strong><small>{{ top.run.model_name }} · Run #{{ top.run.id }} · {{ top.run.recorded_at | date:'dd MMM yyyy, HH:mm Z' }}</small></div>
+          <strong class="top-configuration__rate">{{ top.rate | number:'1.1-1' }} <small>tok/s</small></strong>
+        </div>
+        <p class="results-note">{{ top.run.dataset }} · {{ top.run.sample_size }} requests
+          @for (setting of top.workload; track setting.key) {
+            @if (setting.captured && (setting.key === 'profile' || setting.key === 'max_concurrency' || setting.key === 'max_output_tokens')) { · {{ setting.label }}: {{ setting.value }} }
+          }
+        </p>
+        <div class="top-configuration__parameters">
+          @for (parameter of top.parameters; track parameter.key) {
+            @if (parameter.captured && ['max_num_seqs', 'max_num_batched_tokens', 'tensor_parallel_size', 'kv_cache_dtype'].includes(parameter.key)) { <span>{{ parameter.label }} <strong>{{ parameter.value }}</strong></span> }
+          }
+        </div>
+        <details>
+          <summary>Measured configuration</summary>
+          <div class="top-configuration__details">
+            <div><h4>Benchmark settings</h4><dl>@for (item of top.workload; track item.key) { <dt>{{ item.label }}</dt><dd>{{ item.value }}</dd> }</dl></div>
+            <div><h4>Serving parameters</h4><dl>@for (item of top.parameters; track item.key) { <dt>{{ item.label }}</dt><dd>{{ item.value }}</dd> }</dl></div>
+          </div>
+        </details>
+      </article>
+    }
+  </section>
+}
 <section aria-label="Benchmark results">
   <div class="results-heading"><h3>Benchmark runs</h3><span>{{ rows().length }} results · output tok/s</span></div>
   <p class="results-note">Before compares a nightly variant with its own current-settings baseline. Missing historical values appear as —.</p>

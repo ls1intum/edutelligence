@@ -37,3 +37,27 @@ describe('Benchmark result baseline', () => {
     expect(fixture.componentInstance.rows()[0].measurement).toBeUndefined();
   });
 });
+
+
+describe('Top measured configuration', () => {
+  it('keeps independent provider records and rejects partial or invalid measurements', () => {
+    const fixture = TestBed.createComponent(BenchmarkResults);
+    const partial = run(4, 999);
+    partial.metrics.request_totals.successful = 49;
+    const failed = run(5, 1000);
+    failed.metrics.request_totals.errored = 1;
+    fixture.componentRef.setInput('runs', [run(1, 40), run(2, 50), run(3, 30, undefined, 2), partial, failed, run(6, NaN)]);
+    expect(fixture.componentInstance.topRuns().map(top => top.run.id)).toEqual([2, 3]);
+  });
+
+  it('shows the winning saved parameters and recalculates after removal', () => {
+    const fixture = TestBed.createComponent(BenchmarkResults);
+    const winner = run(2, 50);
+    winner.configuration = { serving: { max_num_seqs: 20, enable_prefix_caching: false } };
+    fixture.componentRef.setInput('runs', [run(1, 40), winner]);
+    expect(fixture.componentInstance.topRuns()[0].parameters.find(item => item.key === 'max_num_seqs')?.value).toBe('20');
+    expect(fixture.componentInstance.topRuns()[0].parameters.find(item => item.key === 'enable_prefix_caching')?.value).toBe('Disabled');
+    fixture.componentRef.setInput('runs', [run(1, 40)]);
+    expect(fixture.componentInstance.topRuns()[0].run.id).toBe(1);
+  });
+});

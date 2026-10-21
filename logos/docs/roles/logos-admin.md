@@ -119,6 +119,14 @@ Open the model's **Performance** tab to configure and start a benchmark.
 The orchestrator reserves the selected model lanes during a worker benchmark.
 The [Model Benchmarks guide](../admin/model-benchmarks.md) explains the confirmation dialog, single-run charts, batches and failed-model retries.
 
+The **Results** tab shows **Top configuration so far** for each model/provider.
+This is the highest recorded output throughput among fully successful runs.
+Select **Measured configuration** to see the saved benchmark settings and serving parameters.
+Runs can use different workloads. This record does not prove an improvement under identical conditions.
+The application does not apply these parameters automatically.
+
+![Best recorded benchmark and its saved parameters](../static/img/benchmarks/results-desktop.png)
+
 ### Nightly benchmarks
 
 The **Performance** tab provides nightly benchmarks for each model/worker pair.

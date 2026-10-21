@@ -777,6 +777,7 @@ WITH baseline AS (
   INSERT INTO model_provider_benchmarks(model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
   SELECT model_provider_id, jsonb_build_object('tool', 'guidellm', 'metadata', jsonb_build_object('purpose', 'docs-role-screenshots'),
     'measurement', jsonb_build_object('started_at', (CURRENT_DATE + time '05:06:00') AT TIME ZONE 'Europe/Berlin', 'ended_at', (CURRENT_DATE + time '05:09:30') AT TIME ZONE 'Europe/Berlin'),
+    'serving', jsonb_build_object('max_num_seqs',20,'max_num_batched_tokens',4096),
     'nightly', jsonb_build_object('baseline_id', id, 'original', jsonb_build_object('max_num_seqs',16), 'parameters', jsonb_build_object('max_num_seqs',20))),
     'openai/gsm8k', 50,
     '{"request_totals":{"total":50,"successful":50,"errored":0,"incomplete":0},"output_tokens_per_second":{"successful":{"mean":48,"percentiles":{"p50":48,"p95":50,"p99":51}}}}'::jsonb,

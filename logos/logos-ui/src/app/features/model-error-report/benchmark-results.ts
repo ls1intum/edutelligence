@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { ModelProviderBenchmark } from '../../shared/models/provider.model';
+import { benchmarkConfigurationItems, servingConfigurationItems } from './benchmark-configuration';
 import { comparisonValue } from './benchmark-comparison';
 
 @Component({
@@ -13,6 +14,24 @@ import { comparisonValue } from './benchmark-comparison';
 })
 export class BenchmarkResults {
   readonly runs = input.required<readonly ModelProviderBenchmark[]>();
+  readonly topRuns = computed(() => {
+    const best = new Map<number, ModelProviderBenchmark>();
+    for (const run of this.runs()) {
+      const totals = run.metrics.request_totals;
+      const rate = comparisonValue(run, 'throughput');
+      if (rate === null || run.sample_size <= 0 || totals?.successful !== run.sample_size
+        || totals.total !== run.sample_size || totals.errored !== 0 || totals.incomplete !== 0) continue;
+      const previous = best.get(run.model_provider_id);
+      if (!previous || rate > comparisonValue(previous, 'throughput')!
+        || (rate === comparisonValue(previous, 'throughput') && run.id > previous.id)) {
+        best.set(run.model_provider_id, run);
+      }
+    }
+    return [...best.values()].sort((a, b) => a.provider_name.localeCompare(b.provider_name)).map(run => ({
+      run, rate: comparisonValue(run, 'throughput'),
+      workload: benchmarkConfigurationItems(run), parameters: servingConfigurationItems(run),
+    }));
+  });
   readonly rows = computed(() => [...this.runs()].sort((a, b) => b.id - a.id).map(run => {
     const nightly = run.configuration['nightly'] as {
       baseline_id?: number; parameters?: Record<string, unknown>; original?: Record<string, unknown>;
