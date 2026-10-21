@@ -791,6 +791,24 @@ class CapacityPlanner:
     # Restoring locked lanes after a worker restart (see lane_restore)
     # ------------------------------------------------------------------
 
+    # How long a lane an operator unloaded stays out of the records while the
+    # worker still reports it. The unload usually lands within seconds; a lane
+    # still reported after this is one whose unload failed, and is recorded again.
+    FORGOTTEN_LANE_TTL_S = 120.0
+
+    def _restore_record_lock(self, provider_id: int) -> asyncio.Lock:
+        """Serializes every change to one worker's restore records.
+
+        A record is rewritten whole, so two changes that read it at the same
+        time would each drop what the other wrote.
+        """
+        locks = self.__dict__.setdefault("_restore_record_locks", {})
+        return locks.setdefault(int(provider_id), asyncio.Lock())
+
+    def _forgotten_lanes(self) -> dict[tuple[int, str], float]:
+        """Lanes an operator unloaded, by when: not recorded while the worker still reports them."""
+        return self.__dict__.setdefault("_forgotten_lane_times", {})
+
     def _restore_sleep_pending(self) -> set[tuple[int, str]]:
         """Lanes of locked workers put back awake that slept before the restart."""
         pending = self.__dict__.get("_restore_sleep_pending_lanes")
@@ -817,25 +835,52 @@ class CapacityPlanner:
         runtime_lanes = (snapshot.get("runtime") or {}).get("lanes") or []
         if not isinstance(runtime_lanes, list):
             return []
-        locks = [
-            (lane_id, revision, record)
-            for (pid, lane_id), (locked, revision, record) in self._lock_cache().peek().items()
-            if pid == provider_id and locked
-        ]
-        if not locks:
+        if not any(pid == provider_id and entry[0] for (pid, _), entry in self._lock_cache().peek().items()):
             return []
-        observed = observed_lanes(runtime_lanes)
         present = {str(lane.get("lane_id")) for lane in runtime_lanes if isinstance(lane, dict)}
+        forgotten = self._forgotten_lanes()
+        now = time.time()
+        for key, since in list(forgotten.items()):
+            if key[0] == provider_id and (key[1] not in present or now - since > self.FORGOTTEN_LANE_TTL_S):
+                del forgotten[key]
+        observed = {
+            lane_id: entry
+            for lane_id, entry in observed_lanes(runtime_lanes).items()
+            if (provider_id, lane_id) not in forgotten
+        }
+        async with self._restore_record_lock(provider_id):
+            # Read under the lock: a change waited for may have rewritten a record.
+            locks = [
+                (lane_id, revision, record)
+                for (pid, lane_id), (locked, revision, record) in self._lock_cache().peek().items()
+                if pid == provider_id and locked
+            ]
+            records = []
+            for lock_id, revision, record in locks:
+                new_record = updated_record(record, observed, lock_id, self._kept_asleep(provider_id))
+                if new_record != (record or {}):
+                    await self._save_restore_record(provider_id, lock_id, revision, new_record)
+                records.append((lock_id, new_record))
+        return self._plan_restore(provider_id, records, observed, present, cycle_reserved_lane_ids)
+
+    def _kept_asleep(self, provider_id: int) -> set[str]:
+        return {lane_id for pid, lane_id in self._restore_sleep_pending() if pid == provider_id}
+
+    def _plan_restore(
+        self,
+        provider_id: int,
+        records: list[tuple[str, dict]],
+        observed: dict[str, dict],
+        present: set[str],
+        cycle_reserved_lane_ids: Optional[dict[int, set[str]]],
+    ) -> List[CapacityPlanAction]:
+        """Loads for recorded lanes the worker does not report, then sleeps for those put back that slept."""
         pending = self._restore_sleep_pending()
-        keep_sleeping = {lane_id for pid, lane_id in pending if pid == provider_id}
         busy = self._claimed_load_lane_ids(provider_id)
         actions: List[CapacityPlanAction] = []
         planned: set[str] = set()
         worker = self._facade.get_provider_name(provider_id) or provider_id
-        for lock_id, revision, record in locks:
-            new_record = updated_record(record, observed, lock_id, keep_sleeping)
-            if new_record != (record or {}):
-                await self._save_restore_record(provider_id, lock_id, revision, new_record)
+        for lock_id, new_record in records:
             for lane_id, entry in missing_lanes(new_record, present):
                 if lane_id in planned or lane_id in busy:
                     continue
@@ -917,13 +962,17 @@ class CapacityPlanner:
         Called before the unload goes out, so no cycle puts the lane back in
         between. When the unload fails, the next cycle records the lane again.
         """
-        self._restore_sleep_pending().discard((int(provider_id), lane_id))
-        for (pid, lock_id), (locked, revision, record) in list(self._lock_cache().peek().items()):
-            if pid != int(provider_id) or not locked or not record or lane_id not in record:
-                continue
-            await self._save_restore_record(
-                pid, lock_id, revision, {key: value for key, value in record.items() if key != lane_id}
-            )
+        key = (int(provider_id), lane_id)
+        self._restore_sleep_pending().discard(key)
+        # The worker reports the lane until the unload lands: do not record it again meanwhile.
+        self._forgotten_lanes()[key] = time.time()
+        async with self._restore_record_lock(provider_id):
+            for (pid, lock_id), (locked, revision, record) in list(self._lock_cache().peek().items()):
+                if pid != key[0] or not locked or not record or lane_id not in record:
+                    continue
+                await self._save_restore_record(
+                    pid, lock_id, revision, {k: value for k, value in record.items() if k != lane_id}
+                )
 
     def _compute_lock_wake_actions(
         self,

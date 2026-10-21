@@ -175,6 +175,34 @@ def test_an_operator_unload_is_not_undone():
     assert _restore(planner) == []
 
 
+def test_two_unloads_at_once_both_stay_unloaded():
+    """Each unload rewrites the record it reads; two at once must not put the other lane back."""
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1"), _runtime_lane(EMBED_LANE, EMBED, "2")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+
+    async def unload_both():
+        await asyncio.gather(
+            planner.forget_restored_lane(PROVIDER, LANE), planner.forget_restored_lane(PROVIDER, EMBED_LANE)
+        )
+
+    asyncio.run(unload_both())
+    registry.lanes = []
+    assert _restore(planner) == []
+
+
+def test_a_lane_still_reported_while_it_unloads_is_not_recorded_again():
+    """Found on the e2e stack: the report after an unload still showed the lane, which was recorded and put back."""
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+
+    asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
+    assert _restore(planner) == []  # the report still shows the lane being unloaded
+    registry.lanes = []
+    assert _restore(planner) == []
+
+
 def test_an_unlocked_lane_is_not_put_back():
     registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
     planner = _planner(registry, _Table([(PROVIDER, LANE, True, 5, None)]))
