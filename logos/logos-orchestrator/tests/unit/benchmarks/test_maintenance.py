@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,7 +26,9 @@ def coordinator(monkeypatch):
 
     def claim(pid, token, automatic=False):
         assert state["claim"] is None
-        state["claim"] = dict(provider_id=pid, token=token, confirmed=False, automatic=automatic)
+        state["claim"] = dict(
+            provider_id=pid, token=token, confirmed=False, automatic=automatic, created_at=datetime.now(UTC)
+        )
 
     def confirm(token):
         assert state["claim"]["token"] == token
@@ -125,6 +128,23 @@ async def test_uncertain_dispatch_retains_claim_until_explicit_stop(coordinator,
         service.registry.send_command.assert_not_awaited()
         await service.stop_calibration(1, AsyncMock())
         assert state["claim"] is None
+
+
+@pytest.mark.parametrize("result", [{"calibrating": False}, {"calibrating": True}])
+async def test_lost_start_reply_is_reconciled_after_grace(coordinator, result):
+    service, state = coordinator
+
+    async def timeout(callback):
+        callback(None)
+        raise TimeoutError()
+
+    with pytest.raises(TimeoutError):
+        await service.start_calibration(1, timeout)
+    state["claim"]["created_at"] -= module.UNCONFIRMED_CLAIM_GRACE
+    service.registry.send_command.return_value = result
+    assert await service.reconcile() == ([] if result["calibrating"] else [1])
+    service.registry.send_command.assert_awaited_once_with(1, "get_calibration_status", {}, timeout_seconds=20)
+    assert (state["claim"] is None) == (not result["calibrating"])
 
 
 async def test_stop_ack_alone_does_not_release_calibration(coordinator):
