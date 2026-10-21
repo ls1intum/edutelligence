@@ -430,6 +430,14 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
     // positionally (domain omitted), same as cuda-oom.
     needle: 'CUDA error:',
   },
+  'repeated-ready-timeout': {
+    label: 'Repeated ready timeout (observed)',
+    description:
+      'vLLM did not become ready within the ready timeout on consecutive ' +
+      'probes, so the KV-cache search was stopped. A later session retries.',
+    domain: DOMAIN_SERVER_START,
+    needle: 'ready timeout:',
+  },
   'engine-warmup-stalled': {
     label: 'Engine warmup stalled (observed)',
     description:

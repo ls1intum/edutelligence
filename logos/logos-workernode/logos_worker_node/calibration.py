@@ -85,6 +85,10 @@ _STALL_REPEATS = 3
 # While a JIT compiler runs, the ready deadline may slip by up to this much.
 _COMPILE_EXTENSION_S = 1200.0
 _COMPILER_PROCESSES = frozenset({"nvcc", "cicc", "ptxas", "cc1plus", "ninja"})
+# A model whose probes hit the ready timeout this often in a row is stuck, not
+# slow: another KV size would only wait out the same timeout again.
+_MAX_CONSECUTIVE_READY_TIMEOUTS = 2
+_READY_TIMEOUT_MARKER = "ready timeout:"
 _SLEEP_TIMEOUT_S = 120.0
 _VLLM_STOP_TIMEOUT_S = 30.0
 _VRAM_SETTLE_S = 4.0
@@ -638,6 +642,26 @@ _OBSERVED_TRANSIENT_PATTERNS: tuple[ObservedTransientErrorPattern, ...] = (
         ),
         domain=_DOMAIN_SERVER_START,
     ),
+)
+
+
+_REPEATED_READY_TIMEOUT_DESCRIPTION = (
+    "vLLM did not become ready within the ready timeout on consecutive "
+    "probes, so the KV-cache search was stopped: another KV size would only "
+    "wait out the same timeout. A later calibration session retries."
+)
+_REPEATED_READY_TIMEOUT_OBSERVED = ObservedTransientErrorPattern(
+    needle=_READY_TIMEOUT_MARKER,
+    reason_code="repeated-ready-timeout",
+    description=_REPEATED_READY_TIMEOUT_DESCRIPTION,
+    domain=_DOMAIN_SERVER_START,
+)
+_REPEATED_READY_TIMEOUT_FATAL = FatalLoadErrorPattern(
+    needle=_READY_TIMEOUT_MARKER,
+    reason_code="repeated-ready-timeout",
+    description=_REPEATED_READY_TIMEOUT_DESCRIPTION,
+    domain=_DOMAIN_SERVER_START,
+    persist=False,
 )
 
 
@@ -1490,6 +1514,10 @@ def stop_vllm(proc: subprocess.Popen[str] | None) -> None:
         pass
 
 
+class VllmReadyTimeout(TimeoutError):
+    """vLLM did not answer /health before the ready deadline."""
+
+
 def _compiler_running() -> bool:
     proc_root = Path("/proc")
     if not proc_root.exists():
@@ -1519,13 +1547,16 @@ def _probe_stalled(log_path: Path) -> bool:
     return not _compiler_running()
 
 
-def _mark_stalled(log_path: Path) -> None:
-    minutes = _STALL_REPEATS
+def _append_log_marker(log_path: Path, text: str) -> None:
     try:
         with log_path.open("a") as f:
-            f.write(f"\n[logos] {_STALL_MARKER}: no vLLM output for ~{minutes} min and no compiler running\n")
+            f.write(f"\n[logos] {text}\n")
     except OSError:
-        logger.debug("Could not write the stall marker to %s", log_path, exc_info=True)
+        logger.debug("Could not write a marker to %s", log_path, exc_info=True)
+
+
+def _mark_stalled(log_path: Path) -> None:
+    _append_log_marker(log_path, f"{_STALL_MARKER}: no vLLM output for ~{_STALL_REPEATS} min and no compiler running")
 
 
 def wait_ready(
@@ -1573,7 +1604,7 @@ def wait_ready(
             )
             last_log = now
         time.sleep(2.0)
-    raise TimeoutError(f"vLLM not ready after {timeout_s:.0f}s")
+    raise VllmReadyTimeout(f"vLLM not ready after {timeout_s:.0f}s")
 
 
 def probe_generative(base_url: str, model: str, timeout_s: float) -> bool:
@@ -2556,6 +2587,9 @@ def _calibrate_model_probe(
     # same-run retry isn't blocked by its own side effect.
     _retryable_fatal_box: list[FatalLoadErrorPattern] = []
 
+    # Consecutive probes that ended in the ready timeout; any other outcome resets it.
+    _ready_timeouts = [0]
+
     # Sibling latch for a genuine CUDA/torch OOM. Once set, the kv_lo scan
     # below stops climbing to ever-larger (and therefore hungrier) kv sizes
     # — a real capacity shortfall at this tp can't be fixed by asking for
@@ -2748,6 +2782,7 @@ def _calibrate_model_probe(
                 _remove_failed_command(failed_path, fingerprint)
                 failed_commands.discard(fingerprint)
                 logger.info("        Removed stale blacklist entry for kv_cache=%s", kv_str)
+            _ready_timeouts[0] = 0
             return proc
         except (RuntimeError, TimeoutError) as exc:
             # Cancellation path: kill the probe immediately, do not blacklist.
@@ -2761,6 +2796,11 @@ def _calibrate_model_probe(
                 stop_vllm(proc)
                 time.sleep(_VRAM_SETTLE_S)
                 return None
+            if isinstance(exc, VllmReadyTimeout):
+                _ready_timeouts[0] += 1
+                _append_log_marker(log_path, f"{_READY_TIMEOUT_MARKER} {exc} (in a row: {_ready_timeouts[0]})")
+            else:
+                _ready_timeouts[0] = 0
             # Parse the COMPLETE probe segment; echo only its tail to the logs.
             probe_log = _read_log_since(log_path, _spawn_log_offset)
             logger.warning(
@@ -2933,6 +2973,9 @@ def _calibrate_model_probe(
             # without spawning vLLM again; the session then marks the model
             # unsupported in its profile.
             fatal_pattern = _classify_fatal_load_error(probe_log)
+            if fatal_pattern is None and _ready_timeouts[0] >= _MAX_CONSECUTIVE_READY_TIMEOUTS:
+                fatal_pattern = _REPEATED_READY_TIMEOUT_FATAL
+                _observed_reason_box[:] = [_REPEATED_READY_TIMEOUT_OBSERVED]
             if fatal_pattern is not None and not _unsupported_box and not _retryable_fatal_box:
                 if fatal_pattern.persist:
                     _unsupported_box.append(fatal_pattern)

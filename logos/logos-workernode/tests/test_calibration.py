@@ -3749,3 +3749,61 @@ def test_a_single_shared_memory_warning_is_not_classified_as_a_stall():
 
     assert _classify_observed_transient_error(_SHM_LINE.format(minute=22)) is None
     assert _classify_fatal_load_error(_SHM_LINE.format(minute=22)) is None
+
+
+def _search_with_ready_timeouts(tmp_path: Path, side_effect):
+    log_dir = tmp_path / "calibration_logs"
+    log_dir.mkdir()
+    log_path = log_dir / "org__stuck-model.log"
+    patches = _patch_calibration_infra(wait_ready_side_effect=side_effect, gpu_vram_total_mb=24000.0)
+    patches["spawn"] = _spawn_writing_log(log_path, "Warming up FlashInfer attention.\n")
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model(
+            {"model": "org/stuck-model"},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+    return result, managers, log_path
+
+
+def test_two_ready_timeouts_in_a_row_stop_the_kv_search(tmp_path: Path):
+    from logos_worker_node.calibration import VllmReadyTimeout
+
+    result, managers, log_path = _search_with_ready_timeouts(tmp_path, VllmReadyTimeout("vLLM not ready after 600s"))
+
+    assert not result.success
+    assert result.observed_reason == "repeated-ready-timeout"
+    assert result.unsupported_reason is None
+    assert "repeated-ready-timeout" in result.error
+    assert managers["spawn"].call_count == 2
+    assert log_path.read_text().count("[logos] ready timeout:") == 2
+
+
+def test_a_different_failure_between_timeouts_resets_the_count(tmp_path: Path):
+    from logos_worker_node.calibration import VllmReadyTimeout
+
+    calls = []
+
+    def alternate(*args, **kwargs):
+        calls.append(1)
+        if len(calls) % 2:
+            raise VllmReadyTimeout("vLLM not ready after 600s")
+        raise RuntimeError("vLLM exited (code=1)")
+
+    result, managers, _ = _search_with_ready_timeouts(tmp_path, alternate)
+
+    assert result.observed_reason != "repeated-ready-timeout"
+    assert managers["spawn"].call_count > 2
+
+
+def test_a_stall_abort_is_not_counted_as_a_ready_timeout(tmp_path: Path):
+    result, managers, _ = _search_with_ready_timeouts(tmp_path, TimeoutError("vLLM engine warmup stalled after 180s"))
+
+    assert result.observed_reason != "repeated-ready-timeout"
