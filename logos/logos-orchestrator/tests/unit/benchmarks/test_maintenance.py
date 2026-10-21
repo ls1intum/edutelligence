@@ -142,7 +142,8 @@ async def test_lost_start_reply_is_reconciled_after_grace(coordinator, result):
         await service.start_calibration(1, timeout)
     state["claim"]["created_at"] -= module.UNCONFIRMED_CLAIM_GRACE
     service.registry.send_command.return_value = result
-    assert await service.reconcile() == ([] if result["calibrating"] else [1])
+    # Released, but not reported as completed: the start may never have run.
+    assert await service.reconcile() == []
     service.registry.send_command.assert_awaited_once_with(1, "get_calibration_status", {}, timeout_seconds=20)
     assert (state["claim"] is None) == (not result["calibrating"])
 

@@ -95,7 +95,9 @@ class MaintenanceCoordinator:
                 if not claim["confirmed"] and not _past_grace(claim):
                     continue
                 try:
-                    if await self._release_if_finished(claim):
+                    # A start never confirmed may not have run: free the slot,
+                    # but leave the worker due for calibration this window.
+                    if await self._release_if_finished(claim) and claim["confirmed"]:
                         completed.append(claim["provider_id"])
                 except (LogosNodeOfflineError, LogosNodeCommandError, TimeoutError) as exc:
                     logger.warning(
