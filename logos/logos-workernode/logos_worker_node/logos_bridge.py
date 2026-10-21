@@ -2537,6 +2537,7 @@ class LogosBridgeClient:
         # abort the sequence. stop() closes the client itself.
         client = self._relay_client
         upstream = None
+        terminal_frame = None
         try:
             request_path = params.get("request_path")
             target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
@@ -2570,15 +2571,12 @@ class LogosBridgeClient:
                             "chunk_b64": base64.b64encode(raw).decode("ascii"),
                         },
                     )
-                await self._send_json(
-                    ws,
-                    {
-                        "type": "stream_end",
-                        "cmd_id": cmd_id,
-                        "success": False,
-                        "error": f"Lane '{lane_id}' returned HTTP {upstream.status_code}",
-                    },
-                )
+                terminal_frame = {
+                    "type": "stream_end",
+                    "cmd_id": cmd_id,
+                    "success": False,
+                    "error": f"Lane '{lane_id}' returned HTTP {upstream.status_code}",
+                }
                 return
 
             # 2xx: DEFER stream_start until the FIRST real token byte. vLLM returns
@@ -2609,17 +2607,14 @@ class LogosBridgeClient:
                 # 2xx but the upstream produced ZERO bytes (engine not ready / lane
                 # re-slept mid-request). Fail cleanly BEFORE any stream_start so the
                 # request is reroutable rather than a client-visible 200-then-drop.
-                await self._send_json(
-                    ws,
-                    {
-                        "type": "stream_end",
-                        "cmd_id": cmd_id,
-                        "success": False,
-                        "error": f"Lane '{lane_id}' returned 200 but produced no output (not ready / re-slept)",
-                    },
-                )
+                terminal_frame = {
+                    "type": "stream_end",
+                    "cmd_id": cmd_id,
+                    "success": False,
+                    "error": f"Lane '{lane_id}' returned 200 but produced no output (not ready / re-slept)",
+                }
                 return
-            await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": True})
+            terminal_frame = {"type": "stream_end", "cmd_id": cmd_id, "success": True}
         except asyncio.CancelledError:
             # The server cancelled this stream because its client went away.
             # No terminal frame: nobody is reading, and the server already
@@ -2637,37 +2632,51 @@ class LogosBridgeClient:
             )
             raise
         except Exception as exc:  # noqa: BLE001
-            await self._send_json(
-                ws,
-                {
-                    "type": "stream_end",
-                    "cmd_id": cmd_id,
-                    "success": False,
-                    "error": str(exc),
-                },
-            )
+            terminal_frame = {
+                "type": "stream_end",
+                "cmd_id": cmd_id,
+                "success": False,
+                "error": str(exc),
+            }
         finally:
-            # Decrement before the response is closed so that a client-side
-            # disconnect that leaves httpx draining the upstream stream does
-            # not keep worker_active > 0 and falsely trigger proxy_stuck
-            # detection.
-            #
-            # Guarded so a lane-manager failure cannot skip the close below:
-            # on the cancellation path that close is the whole point — it is
-            # what makes vLLM abort the sequence and release its KV blocks.
-            # Only the streamed response is closed; the pooled client is
-            # shared with every other command and outlives this one.
-            try:
-                await lane_manager.decrement_active_requests(lane_id)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Failed to decrement in-flight count for lane=%s (cmd_id=%s)",
-                    lane_id,
-                    cmd_id[:8],
-                    exc_info=True,
-                )
-            if upstream is not None:
+            # A late (or repeated) cancellation must not interrupt the decrement
+            # while it waits for the lane lock. Own and await the shielded task
+            # so command completion never leaves detached cleanup behind.
+            cleanup = asyncio.create_task(self._cleanup_stream(lane_manager, lane_id, cmd_id, upstream))
+            cancelled = False
+            while not cleanup.done():
                 try:
-                    await asyncio.wait_for(upstream.aclose(), timeout=5.0)
-                except Exception:  # noqa: BLE001
-                    pass
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    cancelled = True
+            cleanup.result()
+            if cancelled:
+                raise asyncio.CancelledError
+            if terminal_frame is not None:
+                await self._send_json(ws, terminal_frame)
+
+    async def _cleanup_stream(self, lane_manager, lane_id: str, cmd_id: str, upstream) -> None:
+        # Decrement before the response is closed so that a client-side
+        # disconnect that leaves httpx draining the upstream stream does
+        # not keep worker_active > 0 and falsely trigger proxy_stuck
+        # detection.
+        #
+        # Guarded so a lane-manager failure cannot skip the close below:
+        # on the cancellation path that close is the whole point — it is
+        # what makes vLLM abort the sequence and release its KV blocks.
+        # Only the streamed response is closed; the pooled client is
+        # shared with every other command and outlives this one.
+        try:
+            await lane_manager.decrement_active_requests(lane_id)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to decrement in-flight count for lane=%s (cmd_id=%s)",
+                lane_id,
+                cmd_id[:8],
+                exc_info=True,
+            )
+        if upstream is not None:
+            try:
+                await asyncio.wait_for(upstream.aclose(), timeout=5.0)
+            except Exception:  # noqa: BLE001
+                pass
