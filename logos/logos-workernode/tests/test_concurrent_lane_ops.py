@@ -550,3 +550,50 @@ async def test_a_whole_lock_load_tells_calibration_where_it_starts() -> None:
     manager = _placement_manager({0: 20000.0, 1: 15000.0})
     placed = await manager._place_for_spawn("a", _lane(), None)  # noqa: SLF001
     assert manager._loading_gpus["a"] == frozenset({int(placed.gpu_devices)})  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_a_load_that_finishes_during_placement_still_wakes_the_waiter() -> None:
+    manager = _placement_manager({0: 20000.0, 1: 1000.0})
+    manager._loading_gpus["a"] = frozenset({0})  # noqa: SLF001
+    original = manager._auto_place_gpu_devices  # noqa: SLF001
+
+    async def place_while_a_finishes(lane_id, lane_config, **kwargs):
+        manager._finish_loading("a")  # noqa: SLF001
+        return await original(lane_id, lane_config, **kwargs)
+
+    manager._auto_place_gpu_devices = place_while_a_finishes  # noqa: SLF001
+    async with manager._lock.scoped(["b"]) as claim:  # noqa: SLF001
+        placed = await asyncio.wait_for(manager._place_for_spawn("b", _lane(), claim), timeout=2)  # noqa: SLF001
+    assert placed.gpu_devices == "0"
+
+
+@pytest.mark.asyncio
+async def test_bridge_orders_a_worker_wide_change_after_earlier_lane_commands() -> None:
+    lanes = _SlowLoads()
+    order: list[str] = []
+    release_delete = asyncio.Event()
+
+    async def remove_lane(lane_id: str) -> None:
+        await release_delete.wait()
+        order.append(f"delete {lane_id}")
+
+    async def apply_lanes(desired) -> object:
+        order.append("apply")
+        return _Status()
+
+    lanes.remove_lane = remove_lane
+    lanes.apply_lanes = apply_lanes
+    lanes.release.set()
+    client = LogosBridgeClient(_App(lanes), LogosConfig(enabled=True, logos_url="https://logos.example"))
+    ws = _WS()
+    await client._handle_message(ws, _command("unload", "delete_lane", {"lane_id": "a"}))  # noqa: SLF001
+    await client._handle_message(ws, _command("apply", "apply_lanes", {"lanes": []}))  # noqa: SLF001
+    await client._handle_message(ws, _command("load", "add_lane", {"lane_id": "b", "model": MODEL}))  # noqa: SLF001
+    await _settle()
+    assert order == [] and lanes.calls == []  # the apply waits for the unload, the load for the apply
+
+    release_delete.set()
+    await asyncio.gather(*client._lifecycle_tasks)  # noqa: SLF001
+    assert order == ["delete a", "apply"]
+    assert lanes.calls == ["add b"]

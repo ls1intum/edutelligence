@@ -400,3 +400,38 @@ def test_nightly_recovery_may_prepare_its_lane_on_a_locked_worker():
         planner._refuse_benchmark_on_locked_worker(PROVIDER)
     finally:
         MAINTENANCE_RECOVERY.reset(token)
+
+
+def test_a_re_sleep_survives_an_orchestrator_restart():
+    record = {EMBED_LANE: _entry(EMBED_LANE, EMBED, "0", True)}
+    registry = _Registry([])
+    table = _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, record)])
+    _restore(_planner(registry, table))  # plans the load and marks the re-sleep in the table
+    assert table.rows[(PROVIDER, WORKER_LOCK_ID)][4][EMBED_LANE].get("resleep") is True
+
+    restarted = _planner(registry, table)  # a new orchestrator reads the table
+    registry.lanes = [_runtime_lane(EMBED_LANE, EMBED, "0")]
+    assert [(a.action, a.lane_id) for a in _restore(restarted)] == [("sleep_l1", EMBED_LANE)]
+    assert "resleep" not in table.rows[(PROVIDER, WORKER_LOCK_ID)][4][EMBED_LANE]
+
+
+def test_an_unload_waiting_on_the_worker_stays_forgotten_until_the_lane_is_gone():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+    asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
+    planner._forgotten_lanes()[(PROVIDER, LANE)] -= 3600  # an hour behind other work
+    assert _restore(planner) == []
+    registry.lanes = []
+    assert _restore(planner) == []
+
+
+def test_a_refused_unload_records_the_lane_again():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+    asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
+    planner.unload_refused(PROVIDER, LANE)
+    _restore(planner)
+    registry.lanes = []
+    assert [a.lane_id for a in _restore(planner)] == [LANE]

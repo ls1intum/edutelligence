@@ -3066,6 +3066,9 @@ class LaneManager:
             return placed
         while True:
             async with self._placement_lock:
+                # Taken before the placement awaits: a load that finishes
+                # meanwhile must still wake this one.
+                finished = self._load_finished
                 others = [gpus for lid, gpus in self._loading_gpus.items() if lid != lane_id]
                 busy = None if None in others else frozenset().union(*others)
                 placed: LaneConfig | None = None
@@ -3082,7 +3085,6 @@ class LaneManager:
                 if clear:
                     self._loading_gpus[lane_id] = gpus
                     break
-                finished = self._load_finished
             logger.info("Lane '%s' waits for a load on the same GPU(s) to start before it is placed", lane_id)
             await finished.wait()
         # A wake on those GPUs grows memory there; let it finish first.
@@ -3143,6 +3145,9 @@ class LaneManager:
                     await self._gpu_force_poll()
                 await self._wait_for_vram_headroom(lane_id, new_config)
                 new_config = await self._auto_place_gpu_devices(lane_id, new_config)
+                # A calibration slice is picked without the lock: it must see
+                # where the replacement starts, not where the old process ran.
+                self._loading_gpus[lane_id] = self._launch_gpu_set(new_config)
 
                 # Spawn new process on the same port
                 self._note_lane_spawn(lane_id, new_config.model)
@@ -3241,6 +3246,7 @@ class LaneManager:
             # its re-plan; this keeps the release for the spawn-failure
             # branch (idempotent — see _add_lane_unlocked).
             self.release_model_startup(starting_model)
+            self._finish_loading(lane_id)
 
     def _detach_lane_unlocked(self, lane_id: str) -> tuple[ProcessHandle | None, int | None]:
         handle = self._handles.pop(lane_id, None)

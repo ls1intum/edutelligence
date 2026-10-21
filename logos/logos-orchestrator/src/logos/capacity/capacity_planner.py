@@ -44,7 +44,7 @@ from logos.terminal_logging import (
 from .demand_tracker import DemandTracker
 from .host_ram_ledger import HostRamLedger
 from .lane_comparator import best_lane
-from .lane_restore import WORKER_LOCK_ID, missing_lanes, observed_lanes, updated_record
+from .lane_restore import RESLEEP, WORKER_LOCK_ID, missing_lanes, observed_lanes, updated_record
 from .vram_ledger import VRAMLedger
 
 # Lane locks per (provider_id, lane_id): (locked, revision of the last change,
@@ -807,11 +807,6 @@ class CapacityPlanner:
     # Restoring locked lanes after a worker restart (see lane_restore)
     # ------------------------------------------------------------------
 
-    # How long a lane an operator unloaded stays out of the records while the
-    # worker still reports it. The unload usually lands within seconds; a lane
-    # still reported after this is one whose unload failed, and is recorded again.
-    FORGOTTEN_LANE_TTL_S = 120.0
-
     def _restore_record_lock(self, provider_id: int) -> asyncio.Lock:
         """Serializes every change to one worker's restore records.
 
@@ -822,7 +817,11 @@ class CapacityPlanner:
         return locks.setdefault(int(provider_id), asyncio.Lock())
 
     def _forgotten_lanes(self) -> dict[tuple[int, str], float]:
-        """Lanes an operator unloaded, by when: not recorded while the worker still reports them."""
+        """Lanes an operator unloaded, by when: not recorded while the worker still reports them.
+
+        An unload can wait behind other work on the worker for minutes, so
+        the mark stays until the lane is gone or the worker refused the unload.
+        """
         return self.__dict__.setdefault("_forgotten_lane_times", {})
 
     def _restore_sleep_pending(self) -> set[tuple[int, str]]:
@@ -855,15 +854,23 @@ class CapacityPlanner:
             return []
         present = {str(lane.get("lane_id")) for lane in runtime_lanes if isinstance(lane, dict)}
         forgotten = self._forgotten_lanes()
-        now = time.time()
-        for key, since in list(forgotten.items()):
-            if key[0] == provider_id and (key[1] not in present or now - since > self.FORGOTTEN_LANE_TTL_S):
+        for key in list(forgotten):
+            if key[0] == provider_id and key[1] not in present:
                 del forgotten[key]
         observed = {
             lane_id: entry
             for lane_id, entry in observed_lanes(runtime_lanes).items()
             if (provider_id, lane_id) not in forgotten
         }
+        pending = self._restore_sleep_pending()
+        for (pid, lock_id), (locked, _revision, record) in self._lock_cache().peek().items():
+            if pid == provider_id and locked and lock_id == WORKER_LOCK_ID:
+                # A re-sleep planned before an orchestrator restart.
+                pending.update(
+                    (provider_id, lid)
+                    for lid, entry in (record or {}).items()
+                    if isinstance(entry, dict) and entry.get(RESLEEP)
+                )
         async with self._restore_record_lock(provider_id):
             # Read under the lock: a change waited for may have rewritten a record.
             locks = [
@@ -882,7 +889,26 @@ class CapacityPlanner:
             for lane in runtime_lanes
             if isinstance(lane, dict) and str(lane.get("runtime_state") or "") in {"loaded", "running"}
         }
-        return self._plan_restore(provider_id, records, observed, present, cycle_reserved_lane_ids, ready)
+        before = self._kept_asleep(provider_id)
+        actions = self._plan_restore(provider_id, records, observed, present, cycle_reserved_lane_ids, ready)
+        after = self._kept_asleep(provider_id)
+        if before != after:
+            await self._mark_resleep(provider_id, set_on=after - before, set_off=before - after)
+        return actions
+
+    async def _mark_resleep(self, provider_id: int, set_on: set[str], set_off: set[str]) -> None:
+        """Persist which lanes of a locked worker still go back to sleep, before their loads go out."""
+        async with self._restore_record_lock(provider_id):
+            entry = self._lock_cache().peek().get((int(provider_id), WORKER_LOCK_ID))
+            if entry is None or not entry[0] or not entry[2]:
+                return
+            record = {lane_id: dict(value) for lane_id, value in entry[2].items() if isinstance(value, dict)}
+            for lane_id in set_on & set(record):
+                record[lane_id][RESLEEP] = True
+            for lane_id in set_off & set(record):
+                record[lane_id].pop(RESLEEP, None)
+            if record != entry[2]:
+                await self._save_restore_record(provider_id, WORKER_LOCK_ID, entry[1], record)
 
     def _kept_asleep(self, provider_id: int) -> set[str]:
         return {lane_id for pid, lane_id in self._restore_sleep_pending() if pid == provider_id}
@@ -1019,6 +1045,10 @@ class CapacityPlanner:
 
         self._lock_cache().update(apply)
         return True
+
+    def unload_refused(self, provider_id: int, lane_id: str) -> None:
+        """The worker refused an unload: the lane stays, so record it again."""
+        self._forgotten_lanes().pop((int(provider_id), lane_id), None)
 
     async def forget_restored_lane(self, provider_id: int, lane_id: str) -> None:
         """Drop a lane from the restore records: an operator unloads it on purpose.

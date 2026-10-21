@@ -19,6 +19,10 @@ from typing import Any, Iterable
 # The lane id of a lock on a whole worker. No worker lane has this id.
 WORKER_LOCK_ID = "*"
 
+# Marks a lane put back awake that slept before the restart and is still to
+# be put to sleep. Kept in the record, so it survives an orchestrator restart.
+RESLEEP = "resleep"
+
 # A lane in these states, or in a transition, is not recorded: it is not in a
 # state to put back.
 _UNRECORDED_STATES = frozenset({"stopped", "error", "cold"})
@@ -60,6 +64,8 @@ def updated_record(
     for seen_id, entry in seen.items():
         if seen_id in keep_sleeping and seen_id in record:
             entry = {**entry, "sleeping": record[seen_id].get("sleeping", False)}
+            if record[seen_id].get(RESLEEP):
+                entry[RESLEEP] = True
         record[seen_id] = entry
     return record
 

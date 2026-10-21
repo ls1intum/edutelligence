@@ -148,10 +148,13 @@ class LogosBridgeClient:
         # disconnect does not cancel them, since a lane change half done is
         # worse than one whose answer is lost.
         self._lifecycle_tasks: set[asyncio.Task] = set()
-        # Commands on one lane keep their arrival order: a sleep then a wake,
-        # or an unload then a load, must not overtake each other. Keyed by
-        # lane id; worker-wide changes share one key.
-        self._target_locks: dict[str, asyncio.Lock] = {}
+        # Lifecycle commands keep their arrival order per lane: a sleep then a
+        # wake, or an unload then a load, must not overtake each other. A
+        # worker-wide change (apply_lanes) waits for every earlier lane
+        # command, and every later one waits for it. Each entry is the
+        # completion of the newest command of that lane.
+        self._lane_tails: dict[str, asyncio.Future] = {}
+        self._worker_tail: asyncio.Future | None = None
         # One pooled relay client shared by every infer/stream command instead
         # of a fresh AsyncClient (and a fresh TCP connection to the lane) per
         # request. It outlives individual commands, so command finally-blocks
@@ -966,11 +969,26 @@ class LogosBridgeClient:
         if target is None:
             await self._execute_command_and_respond(ws, cmd_id, action, params)
             return
-        # Tasks start in arrival order and take the lock before anything else,
-        # and asyncio.Lock wakes its waiters first in, first out.
-        lock = self._target_locks.setdefault(target, asyncio.Lock())
-        async with lock:
+        # Registered before the first await: tasks start in arrival order, so
+        # each command finds exactly the commands that arrived before it.
+        done: asyncio.Future = asyncio.get_running_loop().create_future()
+        if target == "*":
+            earlier = [*self._lane_tails.values(), *([self._worker_tail] if self._worker_tail else [])]
+            self._lane_tails = {}
+            self._worker_tail = done
+        else:
+            earlier = [tail for tail in (self._lane_tails.get(target), self._worker_tail) if tail is not None]
+            self._lane_tails[target] = done
+        try:
+            if earlier:
+                await asyncio.wait(earlier)
             await self._execute_command_and_respond(ws, cmd_id, action, params)
+        finally:
+            done.set_result(None)
+            if self._lane_tails.get(target) is done:
+                del self._lane_tails[target]
+            if self._worker_tail is done:
+                self._worker_tail = None
 
     def _start_lifecycle_task(self, coro: Any, action: str, cmd_id: str) -> None:
         task = asyncio.create_task(coro, name=f"logos-bridge-{action}-{cmd_id[:8]}")
