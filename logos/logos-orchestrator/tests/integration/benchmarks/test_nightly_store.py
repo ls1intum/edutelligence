@@ -308,3 +308,17 @@ def test_manual_job_and_cleanup_claim_count_once(database, monkeypatch):
         assert store.manual_admission(db, 21)
     with Database() as db:
         assert not store.manual_admission(db, 20)
+
+
+def test_comparison_metadata_survives_database_session_close(database):
+    engine, _ = database
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE model_provider_benchmarks (id integer PRIMARY KEY, configuration jsonb)"))
+        connection.execute(text('INSERT INTO model_provider_benchmarks VALUES (1, \'{"tool":"guidellm"}\')'))
+    store.record_comparison(1, 1, {"max_num_seqs": 16}, {"max_num_seqs": 16})
+    with engine.connect() as connection:
+        config = connection.execute(
+            text("SELECT configuration FROM model_provider_benchmarks WHERE id = 1")
+        ).scalar_one()
+        assert config["nightly"]["baseline_id"] == 1
+        assert config["tool"] == "guidellm"

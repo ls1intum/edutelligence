@@ -208,12 +208,13 @@ capturing.
 Use the isolated screenshots stack for these images. After the seed, start
 `node logos/docs/seed/nightly-worker.mjs` with Node.js 22 or later.
 This example worker supplies telemetry for **Docs Local Worker** and
-`llama-3.1-8b-instruct`. It uses sequence limit 16 and batch-token limit 4096.
+the 3 example models. It uses sequence limit 16 and batch-token limit 4096.
+The seed adds illustrative baseline and variant measurements. These are not GPU measurements.
 It rejects inference and control commands. Authentication, schedule changes,
 parameter plans and dataset previews use the local application services.
 
 Open this model's **Performance** tab as `tobias.wasner`.
-Select **Run benchmark** and expand **Dataset preview** before capture. Capture the activation dialog,
+Select **Run benchmark** before capture. Capture the activation dialog,
 confirm activation, then capture the active card and deactivation dialog.
 These images show the state before the first benchmark; the results section is empty.
 Disable the schedule after capture and stop the example worker with Ctrl+C.
@@ -232,7 +233,7 @@ flows use a **concept** name (no role prefix); role-only list pages keep the
 | `logos-admin-statistics-requesters.png` | `tobias.wasner` | `/statistics?tab=requests` — **Requesters** list open | `roles/logos-admin.md` |
 | `logos-admin-models.png` | `tobias.wasner` | `/models` | `roles/logos-admin.md` |
 | `logos-admin-nightly-enable.png` | `tobias.wasner` | `/models/<id>/details?tab=performance` — activation dialog | `roles/logos-admin.md#nightly-benchmarks` |
-| `logos-admin-nightly-benchmarks.png` | `tobias.wasner` | `/models/<id>/details?tab=performance` — active schedule, plan and dataset preview | `roles/logos-admin.md#nightly-benchmarks` |
+| `logos-admin-nightly-benchmarks.png` | `tobias.wasner` | `/models/<id>/details?tab=performance` — manual benchmark controls and active nightly plan | `roles/logos-admin.md#nightly-benchmarks` |
 | `logos-admin-nightly-disable.png` | `tobias.wasner` | `/models/<id>/details?tab=performance` — deactivation dialog | `roles/logos-admin.md#nightly-benchmarks` |
 | `logos-admin-model-details-delays.png` | `tobias.wasner` | `/models/<id>/details` — **Delays** tab of a model with requests at more than one reasoning effort (local or cloud provider) | `roles/logos-admin.md#models` |
 | `logos-admin-providers.png` | `tobias.wasner` | `/providers` | `roles/logos-admin.md` |

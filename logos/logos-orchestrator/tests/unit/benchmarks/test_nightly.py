@@ -141,8 +141,16 @@ def test_parameter_plan_changes_only_one_known_parameter_and_fixes_workload():
     assert plan[0].max_output_tokens == 512
 
 
-def test_unknown_batching_settings_only_run_baseline():
-    assert len(nightly.parameter_plan({})) == 1
+def test_auto_batching_starts_unchanged_then_sets_both_limits():
+    plan = nightly.parameter_plan({"max_num_seqs": 0})
+    assert plan[0].serving_overrides.model_dump(exclude_none=True) == {}
+    assert len(plan) == 5
+    assert {(run.serving_overrides.max_num_seqs, run.serving_overrides.max_num_batched_tokens) for run in plan[1:]} == {
+        (4, 2048),
+        (4, 4096),
+        (8, 2048),
+        (8, 4096),
+    }
 
 
 async def test_unfinished_run_is_not_stopped_before_shared_cutoff(monkeypatch):

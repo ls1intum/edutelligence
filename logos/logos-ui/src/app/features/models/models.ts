@@ -6,6 +6,10 @@ import {
   OnInit,
   ChangeDetectionStrategy,
 } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { DestroyRef } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { timer, switchMap, catchError, of } from 'rxjs';
 import { FormsModule } from '@angular/forms';
 import { TitleCasePipe } from '@angular/common';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
@@ -24,6 +28,12 @@ import {
   formatLastUsedParts,
   type LastUsedParts,
 } from '../../shared/utils/date';
+
+interface NightlySchedule {
+  model_id: number; model_provider_id: number; provider_name: string;
+  state: 'next' | 'queued' | 'recent' | 'blocked' | 'disabled' | 'waiting' | 'busy';
+  reason: string; last_run_date: string | null; recent_success: boolean;
+}
 
 const PROFILE_AXES = ['latency', 'quality', 'price'] as const;
 
@@ -46,6 +56,27 @@ const PROFILE_AXES = ['latency', 'quality', 'price'] as const;
   styleUrl: './models.scss',
 })
 export class Models implements OnInit {
+  private http = inject(HttpClient);
+  private destroyRef = inject(DestroyRef);
+  nightly = signal<{ schedules: NightlySchedule[]; next_date: string } | null>(null);
+  nightlyError = signal(false);
+  readonly nightlyLabels = { next: 'Next night', queued: 'In rotation', recent: 'Tested recently',
+    busy: 'In progress', blocked: 'Blocked', disabled: 'Off', waiting: 'Waiting' };
+
+  nightlyFor(modelId: number): NightlySchedule[] {
+    return this.nightly()?.schedules.filter(row => row.model_id === modelId) ?? [];
+  }
+
+  openPerformance(model: Model): void {
+    this.router.navigate(['/models', model.id, 'details'], { queryParams: { tab: 'performance' } });
+  }
+
+  nightlyDetail(row: NightlySchedule): string {
+    return `${row.provider_name}: ${row.reason}${row.state === 'next' ? ' · ' + this.nightly()?.next_date : ''}`
+      + (row.last_run_date ? ` · Last attempt: ${row.last_run_date}` : '')
+      + (row.recent_success ? ' · Successful measurement in the last 7 days' : '');
+  }
+
   private modelService = inject(ModelManagementService);
   readonly role = inject(AuthService).role;
   private router = inject(Router);
@@ -179,6 +210,13 @@ export class Models implements OnInit {
 
   ngOnInit(): void {
     this.fetchModels();
+    if (this.role() === 'logos_admin') {
+      timer(0, 30000).pipe(
+        switchMap(() => this.http.post<{ schedules: NightlySchedule[]; next_date: string }>(
+          '/api/logosdb/model_benchmarks/nightly/overview', {}).pipe(catchError(() => of(null)))),
+        takeUntilDestroyed(this.destroyRef),
+      ).subscribe(value => { this.nightly.set(value); this.nightlyError.set(value === null); });
+    }
   }
 
   async fetchModels(): Promise<void> {

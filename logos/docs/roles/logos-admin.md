@@ -75,6 +75,12 @@ capabilities and scheduling weights for each model. It also shows the Likert
 model to open its **Model Details** view. This view shows the request history,
 the error reports and the scheduling statistics of the model.
 
+The **Nightly** column shows the planned rotation for each model/worker pair.
+Blue means a candidate for the next window. Yellow means a later place in the rotation.
+Green marks a successful measurement within 7 days. Red means the pair is blocked.
+Point to a status for the worker and date. Select it to open **Performance**.
+The preview depends on current worker availability. It does not reserve a worker.
+
 ![Models page](/img/roles/logos-admin-models.png)
 
 The **Delays** tab of the **Model Details** view shows where the time of a
@@ -121,13 +127,13 @@ See the [nightly benchmark guide](../admin/nightly-benchmarks.md) for rotation, 
 
 1. Open a model from **Models**.
 2. Select **Performance**.
-3. Find the **Nightly benchmarks** card for the intended worker.
-4. Check **Model** and **Parameters to be tested**.
+3. Select **Run benchmark** and find **Nightly benchmarks** for the intended worker.
+4. Expand **Schedule and test plan**.
 5. Select **Enable nightly runs…**.
 6. Read the dialog and select **Enable nightly runs**.
 
 Select **Cancel** to keep the current schedule state.
-The confirmation dialog shows the time window and the rules for incomplete runs.
+The confirmation dialog shows the time window and the effect on production traffic.
 
 ![Confirmation dialog to enable nightly benchmarks](../static/img/roles/logos-admin-nightly-enable.png)
 
@@ -136,11 +142,11 @@ The schedule stays active after a page reload.
 Each night, Logos selects up to 2 eligible pairs, with new or older attempts first.
 The card shows possible parameter values for this pair, not a guaranteed place for tonight.
 
-The example shows the state before the first benchmark, so the results section is empty.
-Select **Run benchmark** below the card to open the dataset editor and question previews for manual benchmarks.
+The example uses illustrative measurements and an active nightly schedule.
+Use **Manual benchmark** to configure a run during the day.
 These controls do not change the nightly workload.
 
-![Active schedule with the model, parameter values and dataset previews](../static/img/roles/logos-admin-nightly-benchmarks.png)
+![Manual benchmark controls and active nightly test plan](../static/img/roles/logos-admin-nightly-benchmarks.png)
 
 To remove the pair from the nightly rotation:
 

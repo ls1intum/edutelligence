@@ -752,6 +752,40 @@ UPDATE ai_llm_call_recommendations cur
    AND cur.recommended_slo = prev.confirmed_slo
    AND cur.objective_priority = prev.confirmed_objective_priority;
 
+-- Illustrative measurements for the isolated documentation database, not GPU results.
+INSERT INTO nightly_benchmarks(model_provider_id, enabled, status, last_run_date, report)
+SELECT mp.id, true, CASE WHEN m.name = 'llama-3.1-8b-instruct' THEN 'completed' ELSE 'scheduled' END,
+       CASE WHEN m.name = 'llama-3.1-8b-instruct' THEN CURRENT_DATE END,
+       CASE WHEN m.name = 'llama-3.1-8b-instruct' THEN '[{"status":"success"}]'::jsonb ELSE '[]'::jsonb END
+FROM model_provider mp JOIN models m ON m.id = mp.model_id JOIN providers p ON p.id = mp.provider_id
+WHERE p.name = 'Docs Local Worker'
+ON CONFLICT (model_provider_id) DO UPDATE SET enabled = EXCLUDED.enabled, status = EXCLUDED.status,
+last_run_date = EXCLUDED.last_run_date, report = EXCLUDED.report;
+
+WITH baseline AS (
+  INSERT INTO model_provider_benchmarks(model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
+  SELECT mp.id, jsonb_build_object('tool', 'guidellm', 'metadata', jsonb_build_object('purpose', 'docs-role-screenshots'),
+    'measurement', jsonb_build_object('started_at', (CURRENT_DATE + time '05:00:00') AT TIME ZONE 'Europe/Berlin', 'ended_at', (CURRENT_DATE + time '05:04:00') AT TIME ZONE 'Europe/Berlin'),
+    'serving', jsonb_build_object('max_num_seqs', 16, 'max_num_batched_tokens', 4096)),
+    'openai/gsm8k', 50,
+    '{"request_totals":{"total":50,"successful":50,"errored":0,"incomplete":0},"output_tokens_per_second":{"successful":{"mean":42,"percentiles":{"p50":42,"p95":44,"p99":45}}}}'::jsonb,
+    (CURRENT_DATE + time '05:04:00') AT TIME ZONE 'Europe/Berlin'
+  FROM model_provider mp JOIN models m ON m.id = mp.model_id JOIN providers p ON p.id = mp.provider_id
+  WHERE p.name = 'Docs Local Worker' AND m.name = 'llama-3.1-8b-instruct'
+  RETURNING id, model_provider_id
+), variant AS (
+  INSERT INTO model_provider_benchmarks(model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
+  SELECT model_provider_id, jsonb_build_object('tool', 'guidellm', 'metadata', jsonb_build_object('purpose', 'docs-role-screenshots'),
+    'measurement', jsonb_build_object('started_at', (CURRENT_DATE + time '05:06:00') AT TIME ZONE 'Europe/Berlin', 'ended_at', (CURRENT_DATE + time '05:09:30') AT TIME ZONE 'Europe/Berlin'),
+    'nightly', jsonb_build_object('baseline_id', id, 'original', jsonb_build_object('max_num_seqs',16), 'parameters', jsonb_build_object('max_num_seqs',20))),
+    'openai/gsm8k', 50,
+    '{"request_totals":{"total":50,"successful":50,"errored":0,"incomplete":0},"output_tokens_per_second":{"successful":{"mean":48,"percentiles":{"p50":48,"p95":50,"p99":51}}}}'::jsonb,
+    (CURRENT_DATE + time '05:09:30') AT TIME ZONE 'Europe/Berlin' FROM baseline RETURNING id
+)
+SELECT count(*) FROM variant;
+UPDATE model_provider_benchmarks SET configuration = configuration || jsonb_build_object('nightly',jsonb_build_object('baseline_id',id))
+WHERE configuration->'metadata'->>'purpose' = 'docs-role-screenshots' AND NOT configuration ? 'nightly';
+
 COMMIT;
 
 SELECT 'docs role-screenshots seed applied' AS status,

@@ -17,11 +17,9 @@ describe('Nightly benchmark confirmation', () => {
   });
   afterEach(() => { control.ngOnDestroy(); http.verify(); });
 
-  it('explains the effective maintenance limit and serving impact', () => {
-    expect(control.confirmationMessage).toContain('maintenance worker limit is 1');
-    control.state.update(state => ({ ...state!, max_maintenance_nodes: 2 }));
-    expect(control.confirmationMessage).toContain('maintenance worker limit is 2');
-    expect(control.confirmationMessage).toContain('cannot serve normal requests during benchmarks');
+  it('explains worker reservation and restoration', () => {
+    expect(control.confirmationMessage).toContain('cannot serve production requests');
+    expect(control.confirmationMessage).toContain('Original settings are restored');
   });
 
   it('does not activate with missing server window settings', () => {
@@ -90,8 +88,7 @@ describe('Shared maintenance window display', () => {
       window: { start: '06:00', end: '09:00', benchmark_start_cutoff: '08:50', timezone: 'UTC' } });
     control.review();
     expect(control.confirmationMessage).toContain('06:00–09:00 UTC');
-    expect(control.confirmationMessage).toContain('Calibration runs first');
-    expect(control.confirmationMessage).toContain('until 08:50');
+    expect(control.statusLabel('window_closed')).toContain('08:50');
     expect(control.statusLabel('window_closed_below_half')).toContain('09:00');
     control.ngOnDestroy();
   });

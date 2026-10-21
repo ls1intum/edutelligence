@@ -6,9 +6,8 @@ title: Nightly Benchmarks
 
 Logos admins enable or disable a nightly schedule for each model/worker pair on
 **Model Details → Performance**. Both actions require confirmation. Schedules
-show the model and concrete parameter values to be tested, above the existing
-**Run benchmark** view with its dataset editor and question previews. Unknown serving limits show a
-current-configuration-only plan. The preview reflects the worker's current
+show the model and concrete parameter values to be tested, in the
+**Run benchmark** view with its manual benchmark editor. Automatic serving limits use explicit trial configurations. The preview reflects the worker's current
 settings; the scheduler builds the plan again when the nightly run starts.
 
 Schedules are off by default and persist in PostgreSQL. The nightly plan is independent
@@ -20,12 +19,12 @@ restores the worker before it returns to production.
 See the [illustrated admin walkthrough](../roles/logos-admin.md#nightly-benchmarks)
 for screenshots of the plan and both confirmation dialogs.
 
-![Example schedule with the model, parameter values and dataset previews](../static/img/roles/logos-admin-nightly-benchmarks.png)
+![Manual benchmark controls and active nightly test plan](../static/img/roles/logos-admin-nightly-benchmarks.png)
 
 1. Sign in as a Logos Admin and open **Models**.
 2. Open the model's **Model Details → Performance** tab.
-3. Find the **Nightly benchmarks** card for the intended worker.
-4. Review **Model** and **Parameters to be tested**.
+3. Select **Run benchmark** and find **Nightly benchmarks** for the intended worker.
+4. Expand **Schedule and test plan**.
 5. Select **Enable nightly runs…**, then confirm **Enable nightly runs**.
 6. Check that the card shows **Nightly runs activated**.
 
@@ -36,13 +35,21 @@ an updated, connected worker. Run admission also checks the lane and the other
 available workers.
 
 The card shows a plan for this pair, not a guaranteed reservation for tonight.
-The scheduler selects eligible pairs at runtime. Select **Run benchmark** below the card for the dataset editor and question previews.
+The scheduler selects eligible pairs at runtime. Use **Manual benchmark** for the dataset editor and question previews.
 These controls configure manual runs. They do not alter the nightly workload.
 
 The next day, expand **Latest nightly results** and inspect each configuration's
 outcome, attempt and benchmark ID. Use the performance comparison below for
 successful measurements. A finished plan can contain failed configurations;
 review individual outcomes before comparing throughput.
+
+## Results
+
+**Results** shows the run, model, changed parameters, measurement times and output throughput.
+New nightly variants link to their own baseline from the same plan.
+**Before** shows this baseline. **After** shows the measured result. **Change** shows the percentage difference.
+A dash means the value or baseline is unavailable. Historical timestamps are not reconstructed.
+Expand **Charts and comparison** or **Run details and saved configurations** for more information.
 
 ## Automatic pair rotation
 
@@ -100,8 +107,11 @@ limit 4096, the candidate configurations are:
 | Lower batch-token limit | 16 | 3072 |
 | Higher batch-token limit | 16 | 5120 |
 
-Invalid combinations are skipped. If these values are unknown, only the
-reference configuration runs.
+Invalid combinations are skipped. Automatic sequence limits use trial values 4 and 8.
+Automatic batch-token limits use trial values 2048 and 4096.
+Each trial sets both limits explicitly. A known limit remains fixed when the other limit is automatic.
+These values are test candidates, not inferred production defaults.
+The unchanged production configuration always runs first.
 
 Every configuration uses GSM8K `main/test`, the `question` column, 50 requests,
 512 maximum output tokens, concurrent profile with concurrency 4, and seed 42.
@@ -234,7 +244,7 @@ Two pairs on the same worker run sequentially.
 Use the same limit on all orchestrators. Invalid values prevent startup.
 The old `LOGOS_NIGHTLY_ALLOW_SINGLE_WORKER` variable no longer controls admission.
 
-The activation dialog shows the effective limit.
+The configured maintenance limit applies to manual and nightly runs.
 The selected worker must still be online, healthy and free of calibration.
 Existing requests drain first. New normal requests cannot enter a reserved worker.
 If all workers are reserved, normal requests must wait.
@@ -291,13 +301,14 @@ to restore its worker. Schedules whose deployment no longer exists are disabled.
 
 ## Status and activation API
 
-The webservice requires the `logos_admin` role for both endpoints. The web
+The webservice requires the `logos_admin` role for these endpoints. The web
 application uses the `/api` prefix; the webservice paths below omit that prefix.
 The orchestrator's corresponding `/internal/model_benchmarks/nightly/*` routes
 require the shared internal secret.
 
 | Webservice endpoint | Request |
 |---|---|
+| `POST /logosdb/model_benchmarks/nightly/overview` | No request body. Returns the next-window candidates and rotation states. |
 | `POST /logosdb/model_benchmarks/nightly/status` | `{ "model_provider_id": 31 }` |
 | `POST /logosdb/model_benchmarks/nightly/configure` | `{ "model_provider_id": 31, "enabled": true, "expected_enabled": false }` |
 

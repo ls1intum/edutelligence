@@ -29,11 +29,11 @@
     ...(role() === 'logos_admin' ? ['TAGS', 'ALIASES'] : []),
     'CAPABILITIES',
     'PROFILE',
-    ...(role() === 'logos_admin' ? ['LAST USED', 'WEIGHTS', ''] : [])
+    ...(role() === 'logos_admin' ? ['LAST USED', 'NIGHTLY', 'WEIGHTS', ''] : [])
   ]"
   [gridCols]="
     role() === 'logos_admin'
-      ? '180fr 180fr 110fr 120fr 100fr 110fr 120fr 150fr 72px'
+      ? '180fr 180fr 110fr 120fr 100fr 110fr 120fr 140fr 150fr 72px'
       : '200fr 240fr 180fr 140fr'
   "
   [loading]="loading()"
@@ -203,6 +203,26 @@
                 <span class="last-used__age">{{ lastUsed.age }}</span>
               }
             </span>
+          }
+        </div>
+      }
+
+      @if (role() === 'logos_admin') {
+        <div role="cell" data-label="Nightly" class="nightly-cell">
+          @if (nightlyError()) { <span title="Nightly status could not be loaded">Unavailable</span> }
+          @else if (!nightly()) { <span>Loading…</span> }
+          @else {
+            @for (schedule of nightlyFor(model.id); track schedule.model_provider_id) {
+              <button type="button" class="nightly-status" [attr.data-state]="schedule.state"
+                [title]="nightlyDetail(schedule)" [attr.aria-label]="nightlyDetail(schedule)"
+                (click)="openPerformance(model)">
+                <i [class]="schedule.state === 'recent' ? 'pi pi-check-circle' : 'pi pi-circle-fill'" aria-hidden="true"></i>
+                {{ nightlyLabels[schedule.state] }}
+                @if (schedule.recent_success && schedule.state !== 'recent') {
+                  <i class="pi pi-check-circle nightly-recent" aria-label="Successful benchmark in the last 7 days"></i>
+                }
+              </button>
+            } @empty { <span class="nightly-off">Off</span> }
           }
         </div>
       }

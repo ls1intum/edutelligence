@@ -46,6 +46,18 @@ class ProviderPerformanceControllerTest {
     @MockitoBean OrchestratorWorkerAdminClient orchestratorWorkerAdminClient;
 
     @Test
+    void nightlyOverview_requiresLogosAdmin() throws Exception {
+        when(orchestratorWorkerAdminClient.nightlyBenchmark("overview", Map.of()))
+            .thenReturn(ResponseEntity.ok(Map.of("next_date", "2026-10-22", "schedules", java.util.List.of())));
+        mvc.perform(post("/logosdb/model_benchmarks/nightly/overview"))
+            .andExpect(status().isUnauthorized());
+        mvc.perform(post("/logosdb/model_benchmarks/nightly/overview").with(TestJwt.testUser()))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/logosdb/model_benchmarks/nightly/overview").with(TestJwt.logosAdmin()))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.next_date").value("2026-10-22"));
+    }
+
+    @Test
     void nightlyToggle_requiresLogosAdminAndForwardsExplicitState() throws Exception {
         Map<String, Object> body = Map.of("model_provider_id", 31, "enabled", true, "expected_enabled", false);
         when(orchestratorWorkerAdminClient.nightlyBenchmark("configure", body))

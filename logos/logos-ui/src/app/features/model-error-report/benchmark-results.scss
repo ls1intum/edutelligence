@@ -1,0 +1,18 @@
+:host { display: block; margin-bottom: 1.5rem; }
+.results-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+h3 { font-size: 1rem; margin: 0; color: rgb(var(--color-typography-0)); }
+.results-heading span, .results-note, small { color: rgb(var(--color-typography-500)); font-size: .8125rem; }
+.results-note { margin: .5rem 0 1rem; line-height: 1.5; }
+table { width: 100%; border-collapse: collapse; font-size: .8125rem; color: rgb(var(--color-typography-100)); }
+th { text-align: left; color: rgb(var(--color-typography-500)); font-weight: 500; }
+th, td { padding: 1rem .75rem; border-bottom: 1px solid rgb(var(--color-outline-200)); vertical-align: top; }
+td span, td small { display: block; margin-top: .25rem; overflow-wrap: anywhere; }
+.numeric { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dates { font-variant-numeric: tabular-nums; }
+@media (max-width: 767px) {
+  table, tbody, tr, td { display: block; }
+  thead { display: none; }
+  tr { padding: .75rem 0; border-bottom: 1px solid rgb(var(--color-outline-300)); }
+  td { border: 0; padding: .5rem 0; }
+  td::before { content: attr(data-label); display: block; color: rgb(var(--color-typography-500)); margin-bottom: .3rem; }
+}

@@ -62,6 +62,7 @@ def scheduler(monkeypatch):
     planner._facade.reserve_worker_for_drain.side_effect = lambda pid, owner: benchmark_reservations.reserve(
         pid, "*", owner
     )
+    monkeypatch.setattr(module.store, "record_comparison", MagicMock())
     service.saved = []
     monkeypatch.setattr(module.store, "save", lambda *args: service.saved.append(args))
     yield service
