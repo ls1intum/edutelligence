@@ -84,6 +84,8 @@ Your own actions in the lane list still work: **Load lane**, **Unload**,
 loads all lanes again on the same GPUs. A lane that was asleep before the
 restart goes to sleep again. To release the worker, click **Worker locked**.
 
+![A locked worker with two lanes](/img/roles/logos-admin-statistics-worker-lock.png)
+
 ### Parallel lane actions
 
 A worker unloads a lane at once, also while it loads or wakes another lane. It
