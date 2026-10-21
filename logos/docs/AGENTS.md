@@ -213,10 +213,11 @@ The seed adds illustrative baseline and variant measurements. These are not GPU 
 It rejects inference and control commands. Authentication, schedule changes,
 parameter plans and dataset previews use the local application services.
 
-Open this model's **Performance** tab as `tobias.wasner`.
+Open **llama-3.1-8b-instruct → Performance** as `tobias.wasner`.
+Capture **Results**, which shows the seeded baseline and variant measurements.
 Select **Run benchmark** before capture. Capture the activation dialog,
 confirm activation, then capture the active card and deactivation dialog.
-These images show the state before the first benchmark; the results section is empty.
+The example results are illustrative measurements, not a live GPU benchmark.
 Disable the schedule after capture and stop the example worker with Ctrl+C.
 Then stop the screenshots stack.
 

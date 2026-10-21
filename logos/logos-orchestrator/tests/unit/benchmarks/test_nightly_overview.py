@@ -70,3 +70,17 @@ def test_running_journal_is_reserved_not_reported_as_failed_recovery():
     schedule = {**row(1, recovery={"provider_id": 1}), "status": "running"}
     result = overview([schedule], Mock(), datetime.fromisoformat("2026-10-21T05:30:00+02:00"))
     assert result["schedules"][0]["state"] == "busy"
+
+
+def test_disabled_schedule_keeps_recent_success_without_entering_rotation():
+    scheduler = Mock()
+    result = overview(
+        [row(1, enabled=False, success=True, last=date(2026, 10, 21))],
+        scheduler,
+        datetime.fromisoformat("2026-10-21T12:00:00+02:00"),
+    )
+    schedule = result["schedules"][0]
+    assert schedule["state"] == "disabled"
+    assert schedule["reason"] == "Nightly runs are disabled"
+    assert schedule["recent_success"] is True
+    scheduler.target_lane.assert_not_called()

@@ -2679,4 +2679,9 @@ class LogosBridgeClient:
             try:
                 await asyncio.wait_for(upstream.aclose(), timeout=5.0)
             except Exception:  # noqa: BLE001
-                pass
+                logger.debug(
+                    "Failed to close upstream stream for lane=%s (cmd_id=%s)",
+                    lane_id,
+                    cmd_id[:8],
+                    exc_info=True,
+                )

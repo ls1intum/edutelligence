@@ -25,7 +25,7 @@ def overview(schedules, scheduler, now, *, recovery_pending=False, claimed_count
         state, reason = "disabled", "Nightly runs are disabled"
         recent = row["last_run_date"] is not None and 0 <= (now.date() - row["last_run_date"]).days <= 7
         success = recent and any(item.get("status") == "success" for item in row.get("report", []))
-        if success:
+        if success and row["enabled"]:
             state, reason = "recent", "Successful benchmark within the last 7 days"
         if row.get("recovery"):
             state, reason = "blocked", "Worker recovery is pending"
