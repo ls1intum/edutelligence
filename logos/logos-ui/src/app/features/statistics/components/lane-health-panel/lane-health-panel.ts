@@ -272,6 +272,8 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
   lockedLanes = signal<Set<string>>(new Set());
   lockingLaneId = signal<string | null>(null);
   lockError = signal<string | null>(null);
+  /** Bumped by every lock toggle and provider switch; only the current toggle may settle its state. */
+  private lockAttempt = 0;
   private locksRequested = false;
 
   // ── Load-lane state ──────────────────────────────────────────────────────
@@ -663,9 +665,11 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       this.drainingLaneId.set(null);
       this.wakingLaneId.set(null);
       this.lockError.set(null);
+      this.lockingLaneId.set(null);
       // The in-flight calls are abandoned as well: when they settle later,
       // their counters no longer match, so they cannot touch the shared
       // signal or error of the worker the operator is on now.
+      this.lockAttempt++;
       this.unloadAttempt++;
       this.sleepAttempt++;
       this.drainAttempt++;
@@ -718,6 +722,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     const pid = this.providerId;
     if (pid == null || this.lockingLaneId() !== null) return;
     const locked = this.isWorkerLocked();
+    const attempt = ++this.lockAttempt;
     this.lockingLaneId.set(WORKER_LOCK_LANE_ID);
     this.lockError.set(null);
     try {
@@ -728,9 +733,11 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       }
       await this.refreshLocks();
     } catch (err: unknown) {
-      this.lockError.set(`${locked ? 'Unlock' : 'Lock'} of the worker failed: ${this.failureDetail(err)}`);
+      if (attempt === this.lockAttempt) {
+        this.lockError.set(`${locked ? 'Unlock' : 'Lock'} of the worker failed: ${this.failureDetail(err)}`);
+      }
     } finally {
-      this.lockingLaneId.set(null);
+      if (attempt === this.lockAttempt) this.lockingLaneId.set(null);
     }
   }
 
@@ -763,6 +770,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     const pid = this.providerId;
     if (pid == null || this.lockingLaneId() !== null) return;
     const locked = this.isLocked(row.laneId);
+    const attempt = ++this.lockAttempt;
     this.lockingLaneId.set(row.laneId);
     this.lockError.set(null);
     try {
@@ -773,9 +781,11 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       }
       await this.refreshLocks();
     } catch (err: unknown) {
-      this.lockError.set(`${locked ? 'Unlock' : 'Lock'} of ${row.laneId} failed: ${this.failureDetail(err)}`);
+      if (attempt === this.lockAttempt) {
+        this.lockError.set(`${locked ? 'Unlock' : 'Lock'} of ${row.laneId} failed: ${this.failureDetail(err)}`);
+      }
     } finally {
-      this.lockingLaneId.set(null);
+      if (attempt === this.lockAttempt) this.lockingLaneId.set(null);
     }
   }
 

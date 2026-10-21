@@ -41,6 +41,7 @@ from logos.benchmarks.nightly import (
 from logos.benchmarks.progress import observe_response
 from logos.benchmarks.reservations import benchmark_reservations
 from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
+from logos.capacity.capacity_planner import RestoreRecordError
 from logos.client_tags import cancel as cancel_client_tag
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
@@ -1044,7 +1045,10 @@ async def internal_logosnode_delete_lane(data: InternalDeleteLaneRequest, reques
     _require_internal_secret(request)
     if _main._capacity_planner is not None:
         # An operator unloads on purpose: a locked lane must not come back.
-        await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
+        try:
+            await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
+        except RestoreRecordError as exc:
+            return JSONResponse(status_code=503, content={"error": str(exc)})
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="delete_lane",

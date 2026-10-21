@@ -492,3 +492,61 @@ async def test_placement_survives_an_unload_during_its_sleep_probes() -> None:
     manager._handles["y"] = _ProbedHandle(LaneConfig(model=MODEL, gpu_devices="1", vllm_config=vllm))  # noqa: SLF001
     placed = await manager._auto_place_gpu_devices("new", _lane())  # noqa: SLF001
     assert placed.gpu_devices in {"0", "1"}
+
+
+@pytest.mark.asyncio
+async def test_bridge_keeps_commands_on_one_lane_in_order_and_others_alongside() -> None:
+    lanes = _SlowLoads()
+    order: list[str] = []
+    release_delete = asyncio.Event()
+
+    async def remove_lane(lane_id: str) -> None:
+        order.append(f"delete {lane_id} start")
+        await release_delete.wait()
+        order.append(f"delete {lane_id} done")
+
+    lanes.remove_lane = remove_lane
+    lanes.release.set()
+    client = LogosBridgeClient(_App(lanes), LogosConfig(enabled=True, logos_url="https://logos.example"))
+    ws = _WS()
+    await client._handle_message(ws, _command("unload", "delete_lane", {"lane_id": "a"}))  # noqa: SLF001
+    await client._handle_message(ws, _command("reload", "add_lane", {"lane_id": "a", "model": MODEL}))  # noqa: SLF001
+    await client._handle_message(ws, _command("other", "add_lane", {"lane_id": "b", "model": MODEL}))  # noqa: SLF001
+    await _settle()
+    assert lanes.calls == ["add b"]  # lane a's load waits for its unload; lane b does not
+
+    release_delete.set()
+    await asyncio.gather(*client._lifecycle_tasks)  # noqa: SLF001
+    assert lanes.calls == ["add b", "add a"]
+    assert order == ["delete a start", "delete a done"]
+
+
+@pytest.mark.asyncio
+async def test_bridge_stop_ends_running_lane_commands() -> None:
+    lanes = _SlowLoads()
+    client = LogosBridgeClient(_App(lanes), LogosConfig(enabled=True, logos_url="https://logos.example"))
+    await client._handle_message(_WS(), _command("load", "add_lane", {"lane_id": "a", "model": MODEL}))  # noqa: SLF001
+    await _settle()
+    await asyncio.wait_for(client.stop(), timeout=2)
+    assert not client._lifecycle_tasks  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_calibration_teardown_waits_for_an_unloaded_process_on_the_slice() -> None:
+    handle = _Handle(LaneConfig(model="m-s", gpu_devices="2"))
+    handle.release.clear()
+    manager = _manager_with({"slice": handle})
+    unload = asyncio.create_task(manager.remove_lane("slice"))
+    await _settle()
+    teardown = asyncio.create_task(manager.destroy_lanes_on_gpus({2}))
+    await _settle()
+    assert not teardown.done()  # the process still holds GPU 2
+    handle.release.set()
+    await asyncio.gather(unload, teardown)
+
+
+@pytest.mark.asyncio
+async def test_a_whole_lock_load_tells_calibration_where_it_starts() -> None:
+    manager = _placement_manager({0: 20000.0, 1: 15000.0})
+    placed = await manager._place_for_spawn("a", _lane(), None)  # noqa: SLF001
+    assert manager._loading_gpus["a"] == frozenset({int(placed.gpu_devices)})  # noqa: SLF001

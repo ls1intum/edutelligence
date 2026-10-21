@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from fastapi.responses import JSONResponse
 
 import logos.main as _main
+from logos.capacity.capacity_planner import RestoreRecordError
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import (
     LogosKeyModel,
@@ -1091,7 +1092,10 @@ async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
     await asyncio.to_thread(_require_root_access, data.logos_key)
     if _main._capacity_planner is not None:
         # An operator unloads on purpose: a locked lane must not come back.
-        await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
+        try:
+            await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
+        except RestoreRecordError as exc:
+            return JSONResponse(status_code=503, content={"error": str(exc)})
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="delete_lane",

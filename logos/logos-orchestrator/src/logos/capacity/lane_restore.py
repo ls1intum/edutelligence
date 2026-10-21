@@ -53,7 +53,9 @@ def updated_record(
     in *keep_sleeping* keep their recorded sleep state: they were just put
     back awake and are about to be put to sleep again.
     """
-    record = dict(previous or {})
+    # A record is read back from the table: drop entries that cannot be put
+    # back rather than fail the planner cycle on them. The rewrite repairs it.
+    record = {lane_id: entry for lane_id, entry in (previous or {}).items() if _restorable(entry)}
     seen = observed if lane_id == WORKER_LOCK_ID else {k: v for k, v in observed.items() if k == lane_id}
     for seen_id, entry in seen.items():
         if seen_id in keep_sleeping and seen_id in record:
@@ -62,10 +64,20 @@ def updated_record(
     return record
 
 
+def _restorable(entry: Any) -> bool:
+    return (
+        isinstance(entry, dict)
+        and isinstance(entry.get("lane_config"), dict)
+        and bool(entry["lane_config"].get("model"))
+    )
+
+
 def missing_lanes(
     record: dict[str, dict[str, Any]] | None,
     present_lane_ids: Iterable[str],
 ) -> list[tuple[str, dict[str, Any]]]:
     """Recorded lanes the worker does not report, in record order."""
     present = set(present_lane_ids)
-    return [(lane_id, entry) for lane_id, entry in (record or {}).items() if lane_id not in present]
+    return [
+        (lane_id, entry) for lane_id, entry in (record or {}).items() if lane_id not in present and _restorable(entry)
+    ]

@@ -31,6 +31,7 @@ except Exception:  # noqa: BLE001
 
 from logos_worker_node import perf_trace as worker_perf
 from logos_worker_node import prometheus_metrics as prom
+from logos_worker_node.lane_manager import _lane_id_from_config, _normalize_lane_id
 from logos_worker_node.metal import is_metal_backend
 from logos_worker_node.models import (
     LaneConfig,
@@ -147,6 +148,10 @@ class LogosBridgeClient:
         # disconnect does not cancel them, since a lane change half done is
         # worse than one whose answer is lost.
         self._lifecycle_tasks: set[asyncio.Task] = set()
+        # Commands on one lane keep their arrival order: a sleep then a wake,
+        # or an unload then a load, must not overtake each other. Keyed by
+        # lane id; worker-wide changes share one key.
+        self._target_locks: dict[str, asyncio.Lock] = {}
         # One pooled relay client shared by every infer/stream command instead
         # of a fresh AsyncClient (and a fresh TCP connection to the lane) per
         # request. It outlives individual commands, so command finally-blocks
@@ -235,6 +240,13 @@ class LogosBridgeClient:
                 await task
             except asyncio.CancelledError:
                 pass
+        # No command is read any more. Shutdown, unlike a disconnect, ends the
+        # lane commands still running, before the lane manager cleans up.
+        lifecycle = tuple(self._lifecycle_tasks)
+        for running in lifecycle:
+            running.cancel()
+        if lifecycle:
+            await asyncio.gather(*lifecycle, return_exceptions=True)
         await self._relay_client.aclose()
         self._connected = False
         logger.info("Logos bridge stopped")
@@ -932,7 +944,33 @@ class LogosBridgeClient:
         # Awaited here, a load blocked every later command for as long as it
         # started, up to 15 minutes: a calibration start sent meanwhile timed
         # out on the server although the worker ran it afterwards.
-        self._start_lifecycle_task(self._execute_command_and_respond(ws, cmd_id, action, params), action, cmd_id)
+        self._start_lifecycle_task(self._execute_in_order(ws, cmd_id, action, params), action, cmd_id)
+
+    @staticmethod
+    def _command_target(action: str, params: dict[str, Any]) -> str | None:
+        """The lane a lifecycle command changes, ``*`` for the whole worker, or None for a read."""
+        if action in {"add_lane", "delete_lane", "sleep_lane", "wake_lane", "reconfigure_lane"}:
+            try:
+                if action == "add_lane":
+                    return _lane_id_from_config(LaneConfig(**params))
+                lane_id = str(params.get("lane_id") or "").strip()
+                return _normalize_lane_id(lane_id) if lane_id else "*"
+            except Exception:  # noqa: BLE001 — the command itself reports a bad config
+                return "*"
+        if action == "apply_lanes":
+            return "*"
+        return None
+
+    async def _execute_in_order(self, ws, cmd_id: str, action: str, params: dict[str, Any]) -> None:
+        target = self._command_target(action, params)
+        if target is None:
+            await self._execute_command_and_respond(ws, cmd_id, action, params)
+            return
+        # Tasks start in arrival order and take the lock before anything else,
+        # and asyncio.Lock wakes its waiters first in, first out.
+        lock = self._target_locks.setdefault(target, asyncio.Lock())
+        async with lock:
+            await self._execute_command_and_respond(ws, cmd_id, action, params)
 
     def _start_lifecycle_task(self, coro: Any, action: str, cmd_id: str) -> None:
         task = asyncio.create_task(coro, name=f"logos-bridge-{action}-{cmd_id[:8]}")

@@ -354,3 +354,49 @@ def test_a_locked_worker_does_not_hold_nightly_benchmarks_back_for_its_calibrati
     service._provider_is_unhealthy = lambda _: False
     service._provider_has_uncalibrated_models = lambda _: True
     assert not service.benchmarks_must_wait()
+
+
+def test_an_unload_is_refused_when_its_lane_cannot_be_forgotten():
+    import pytest
+
+    from logos.capacity.capacity_planner import RestoreRecordError
+
+    table = _Table([(PROVIDER, LANE, True, 5, None)])
+    planner = _planner(_Registry([_runtime_lane(LANE, MODEL, "0,1")]), table)
+    _restore(planner)
+
+    def broken(*args):
+        raise RuntimeError("database down")
+
+    planner._lane_restore_writer = broken
+    with pytest.raises(RestoreRecordError):
+        asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
+    assert (PROVIDER, LANE) not in planner._forgotten_lanes()
+
+
+def test_a_restored_sleeper_is_put_to_sleep_only_once_it_serves():
+    record = {EMBED_LANE: _entry(EMBED_LANE, EMBED, "0", True)}
+    registry = _Registry([])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, record)]))
+    _restore(planner)
+    registry.lanes = [_runtime_lane(EMBED_LANE, EMBED, "0", runtime_state="starting")]
+    assert _restore(planner) == []
+    registry.lanes = [_runtime_lane(EMBED_LANE, EMBED, "0")]
+    assert [(a.action, a.lane_id) for a in _restore(planner)] == [("sleep_l1", EMBED_LANE)]
+
+
+def test_a_malformed_record_does_not_break_the_cycle():
+    record = {"broken": {"sleeping": True}, "worse": "text", LANE: _entry(LANE, MODEL, "0", False)}
+    planner = _planner(_Registry([]), _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, record)]))
+    assert [a.lane_id for a in _restore(planner)] == [LANE]
+
+
+def test_nightly_recovery_may_prepare_its_lane_on_a_locked_worker():
+    from logos.capacity.capacity_planner import MAINTENANCE_RECOVERY
+
+    planner = _planner(_Registry([]), _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    token = MAINTENANCE_RECOVERY.set(True)
+    try:
+        planner._refuse_benchmark_on_locked_worker(PROVIDER)
+    finally:
+        MAINTENANCE_RECOVERY.reset(token)

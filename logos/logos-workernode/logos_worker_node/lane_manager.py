@@ -388,6 +388,8 @@ class LaneManager:
         # Lanes detached by an unload whose process is still exiting. A new
         # lane with the same id waits for the event before it takes the port.
         self._finalizing: dict[str, asyncio.Event] = {}
+        # Their GPUs, so a calibration slice waits for the process to exit.
+        self._finalizing_gpus: dict[str, frozenset[int] | None] = {}
         self._event_log: list[LaneEvent] = []
         self._active_requests: dict[str, int] = {}
         # The lifecycle step a lane is in the middle of ("draining",
@@ -1002,6 +1004,7 @@ class LaneManager:
             await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
         handle, port = detached
         finalized = self._finalizing[lane_id] = asyncio.Event()
+        self._finalizing_gpus[lane_id] = self._launch_gpu_set(handle.lane_config) if handle.lane_config else None
         try:
             await self._finalize_detached_lane(lane_id, handle, port)
         finally:
@@ -1009,6 +1012,7 @@ class LaneManager:
             # binds it while the old one still listens.
             self._port_alloc.release(lane_id)
             self._finalizing.pop(lane_id, None)
+            self._finalizing_gpus.pop(lane_id, None)
             finalized.set()
         # Refresh GPU snapshot immediately after the process exits so the next
         # status heartbeat to logos-orchestrator carries accurate free-VRAM numbers.
@@ -1299,15 +1303,14 @@ class LaneManager:
     async def _wake_lane(self, lane_id: str) -> LaneStatus:
         cleanup: tuple[ProcessHandle, int | None, str] | None = None
         status: LaneStatus | None = None
-        # Waking grows the lane on its GPUs, so no load may start there meanwhile.
-        current = self._handles.get(lane_id)
-        lc = current.lane_config if current is not None else None
-        gpus = self._launch_gpu_set(lc) if lc is not None else None
-        async with self._lock.scoped([lane_id], gpus):
+        async with self._lock.scoped([lane_id]) as claim:
             handle = self._handles.get(lane_id)
             if handle is None:
                 raise KeyError(f"Lane '{lane_id}' not found")
             lc = handle.lane_config
+            # Waking grows the lane on its GPUs, so no load may start there
+            # meanwhile. Read under the lane: a reconfigure may have moved it.
+            await claim.widen(self._launch_gpu_set(lc) if lc is not None else None)
             if lc is None:
                 raise ValueError(f"Lane '{lane_id}' has no lane config")
             try:
@@ -1869,6 +1872,15 @@ class LaneManager:
                         detached.append((lid, h, port))
             break
 
+        # Lanes an unload detached are not in _handles any more, but their
+        # processes may still hold the slice's memory.
+        exiting = [
+            self._finalizing[lid]
+            for lid, gpus in list(self._finalizing_gpus.items())
+            if lid in self._finalizing and (gpus is None or gpus & set(gpu_set))
+        ]
+        if exiting:
+            await asyncio.gather(*(event.wait() for event in exiting))
         if not detached:
             return 0
 
@@ -3047,7 +3059,11 @@ class LaneManager:
         fits, the lane waits until one of them has started and places again.
         """
         if claim is None:
-            return await self._auto_place_gpu_devices(lane_id, lane_config)
+            placed = await self._auto_place_gpu_devices(lane_id, lane_config)
+            # Others cannot start meanwhile, but a calibration slice is picked
+            # without the lock and must see where this lane starts.
+            self._loading_gpus[lane_id] = self._launch_gpu_set(placed)
+            return placed
         while True:
             async with self._placement_lock:
                 others = [gpus for lid, gpus in self._loading_gpus.items() if lid != lane_id]

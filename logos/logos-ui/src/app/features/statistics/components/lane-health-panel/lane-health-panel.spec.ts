@@ -1163,6 +1163,23 @@ describe('LaneHealthPanel worker lock', () => {
     expect(lockLane).toHaveBeenCalledWith(1, WORKER_LOCK_LANE_ID, null);
   });
 
+  it('drops a worker lock request when the operator switches workers', async () => {
+    let reject!: (reason: unknown) => void;
+    lockLane.mockImplementationOnce(() => new Promise((_, r) => (reject = r)));
+    const pending = panel.handleToggleWorkerLock();
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-embed': lane({ model: 'org/embed', runtime_state: 'loaded' }) },
+      'gpu-02': {},
+    });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1 }, 'gpu-02': { provider_id: 2 } });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-02');
+    fixture.detectChanges();
+    expect(panel.lockingLaneId()).toBeNull();
+    reject({ status: 500, error: { error: 'boom' } });
+    await pending;
+    expect(panel.lockError()).toBeNull();
+  });
+
   it('reports a failed worker lock', async () => {
     lockLane.mockImplementationOnce(() => Promise.reject({ status: 500, error: { error: 'boom' } }));
     await panel.handleToggleWorkerLock();
