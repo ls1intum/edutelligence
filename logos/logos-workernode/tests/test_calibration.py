@@ -3638,3 +3638,114 @@ def test_spawn_vllm_expands_model_path_with_plan_cache_token_and_revision(monkey
     assert seen["popen_env"]["HF_HOME"] == str(tmp_path / "hf")
     # The probe's slice is chosen by nvidia-smi index, so CUDA must count the same way.
     assert seen["popen_env"]["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+
+
+_SHM_LINE = (
+    "(EngineCore pid=1916738) INFO 10-21 04:{minute:02d}:34 [shm_broadcast.py:871] No available shared "
+    "memory broadcast block found in 60 seconds. This typically happens when some processes are hanging."
+)
+
+
+def _write_log(path, lines):
+    path.write_text("\n".join(lines) + "\n")
+
+
+def test_probe_stalled_needs_only_warnings_at_the_end_of_the_log(tmp_path):
+    from logos_worker_node.calibration import _probe_stalled
+
+    log = tmp_path / "probe.log"
+    warmup = "(Worker_TP0 pid=1) INFO 10-21 04:21:34 [kernel_warmup.py:291] Warming up FlashInfer attention."
+    _write_log(log, [warmup, _SHM_LINE.format(minute=22), _SHM_LINE.format(minute=23)])
+    assert not _probe_stalled(log)
+    _write_log(log, [warmup] + [_SHM_LINE.format(minute=m) for m in (22, 23, 24)])
+    assert _probe_stalled(log)
+    _write_log(log, [_SHM_LINE.format(minute=m) for m in (22, 23, 24)] + ["INFO: Application startup complete."])
+    assert not _probe_stalled(log)
+
+
+def test_probe_stalled_is_false_while_a_compiler_runs(tmp_path, monkeypatch):
+    from logos_worker_node import calibration
+
+    log = tmp_path / "probe.log"
+    _write_log(log, [_SHM_LINE.format(minute=m) for m in (22, 23, 24)])
+    monkeypatch.setattr(calibration, "_compiler_running", lambda: True)
+    assert not calibration._probe_stalled(log)
+    monkeypatch.setattr(calibration, "_compiler_running", lambda: False)
+    assert calibration._probe_stalled(log)
+
+
+def test_probe_stalled_without_a_log_file_is_false(tmp_path):
+    from logos_worker_node.calibration import _probe_stalled
+
+    assert not _probe_stalled(tmp_path / "missing.log")
+
+
+def test_wait_ready_aborts_early_when_the_stall_check_fires(monkeypatch):
+    from logos_worker_node import calibration
+
+    proc = MagicMock()
+    proc.poll.return_value = None
+    monkeypatch.setattr(calibration, "_get", lambda *a, **k: (503, None))
+    monkeypatch.setattr(calibration.time, "sleep", lambda _: None)
+    with pytest.raises(TimeoutError, match="engine warmup stalled"):
+        calibration.wait_ready("http://x", 600.0, proc, stall_check=lambda: True)
+
+
+def test_wait_ready_keeps_waiting_past_the_deadline_while_busy(monkeypatch):
+    from logos_worker_node import calibration
+
+    proc = MagicMock()
+    proc.poll.return_value = None
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(calibration.time, "perf_counter", lambda: clock["now"])
+
+    def sleep(seconds):
+        clock["now"] += seconds
+
+    busy = {"left": 3}
+
+    def busy_check():
+        busy["left"] -= 1
+        return busy["left"] >= 0
+
+    monkeypatch.setattr(calibration.time, "sleep", sleep)
+    monkeypatch.setattr(calibration, "_get", lambda *a, **k: (503, None))
+    with pytest.raises(TimeoutError, match="not ready after"):
+        calibration.wait_ready("http://x", 4.0, proc, busy_check=busy_check)
+    assert clock["now"] > 1000.0 + 4.0
+    assert busy["left"] < 0
+
+
+def test_wait_ready_deadline_is_hard_even_when_always_busy(monkeypatch):
+    from logos_worker_node import calibration
+
+    proc = MagicMock()
+    proc.poll.return_value = None
+    clock = {"now": 0.0}
+    monkeypatch.setattr(calibration.time, "perf_counter", lambda: clock["now"])
+    monkeypatch.setattr(calibration.time, "sleep", lambda s: clock.update(now=clock["now"] + s))
+    monkeypatch.setattr(calibration, "_get", lambda *a, **k: (503, None))
+    with pytest.raises(TimeoutError):
+        calibration.wait_ready("http://x", 10.0, proc, busy_check=lambda: True)
+    assert clock["now"] <= 10.0 + calibration._COMPILE_EXTENSION_S + 5.0
+
+
+def test_stall_marker_is_classified_as_retryable_and_observed(tmp_path):
+    from logos_worker_node.calibration import _classify_observed_transient_error, _mark_stalled
+
+    log = tmp_path / "probe.log"
+    _write_log(log, [_SHM_LINE.format(minute=22)])
+    _mark_stalled(log)
+    text = log.read_text()
+    observed = _classify_observed_transient_error(text)
+    assert observed is not None and observed.reason_code == "engine-warmup-stalled"
+    fatal = _classify_fatal_load_error(text)
+    assert fatal is not None and fatal.reason_code == "engine-warmup-stalled"
+    assert fatal.persist is False
+
+
+def test_a_single_shared_memory_warning_is_not_classified_as_a_stall():
+    from logos_worker_node.calibration import _classify_observed_transient_error
+
+    assert _classify_observed_transient_error(_SHM_LINE.format(minute=22)) is None
+    assert _classify_fatal_load_error(_SHM_LINE.format(minute=22)) is None

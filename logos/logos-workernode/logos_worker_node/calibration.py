@@ -77,6 +77,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _READY_TIMEOUT_S = 600.0
+# A probe that only logs vLLM's "no shared memory block" warning for this many
+# polls in a row, with no compiler running, is hung rather than busy.
+_STALL_NEEDLE = "No available shared memory broadcast block found"
+_STALL_MARKER = "engine warmup stalled"
+_STALL_REPEATS = 3
+# While a JIT compiler runs, the ready deadline may slip by up to this much.
+_COMPILE_EXTENSION_S = 1200.0
+_COMPILER_PROCESSES = frozenset({"nvcc", "cicc", "ptxas", "cc1plus", "ninja"})
 _SLEEP_TIMEOUT_S = 120.0
 _VLLM_STOP_TIMEOUT_S = 30.0
 _VRAM_SETTLE_S = 4.0
@@ -528,6 +536,19 @@ class ObservedTransientErrorPattern:
 
 
 _OBSERVED_TRANSIENT_PATTERNS: tuple[ObservedTransientErrorPattern, ...] = (
+    ObservedTransientErrorPattern(
+        # Written by wait_ready's stall check, so it never matches a probe
+        # that merely logged the warning once and went on.
+        needle=_STALL_MARKER,
+        reason_code="engine-warmup-stalled",
+        description=(
+            "vLLM stopped producing output during engine warmup and no "
+            "compiler was running, so the probe was aborted instead of "
+            "waiting out the full ready timeout. A larger KV cache cannot "
+            "fix this."
+        ),
+        domain=_DOMAIN_SERVER_START,
+    ),
     ObservedTransientErrorPattern(
         # Can happen while loading weights onto the GPU OR while
         # reserving KV cache — genuinely two different domains depending
@@ -1469,17 +1490,61 @@ def stop_vllm(proc: subprocess.Popen[str] | None) -> None:
         pass
 
 
+def _compiler_running() -> bool:
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return False
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if (entry / "comm").read_text().strip() in _COMPILER_PROCESSES:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _probe_stalled(log_path: Path) -> bool:
+    """True once the log's last lines are only the shared-memory warning."""
+    try:
+        with log_path.open("rb") as f:
+            f.seek(max(0, f.seek(0, os.SEEK_END) - 16384))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    lines = [line for line in tail.splitlines() if line.strip()]
+    if len(lines) < _STALL_REPEATS or not all(_STALL_NEEDLE in line for line in lines[-_STALL_REPEATS:]):
+        return False
+    return not _compiler_running()
+
+
+def _mark_stalled(log_path: Path) -> None:
+    minutes = _STALL_REPEATS
+    try:
+        with log_path.open("a") as f:
+            f.write(f"\n[logos] {_STALL_MARKER}: no vLLM output for ~{minutes} min and no compiler running\n")
+    except OSError:
+        logger.debug("Could not write the stall marker to %s", log_path, exc_info=True)
+
+
 def wait_ready(
     base_url: str,
     timeout_s: float,
     proc: subprocess.Popen[str],
     gpu_indices: list[int] | None = None,
     cancel_event: threading.Event | None = None,
+    stall_check: Callable[[], bool] | None = None,
+    busy_check: Callable[[], bool] | None = None,
 ) -> None:
     deadline = time.perf_counter() + timeout_s
+    hard_deadline = deadline + (_COMPILE_EXTENSION_S if busy_check is not None else 0.0)
     t_start = time.perf_counter()
     last_log = t_start - 25.0  # log at ~5 s, then every 30 s
-    while time.perf_counter() < deadline:
+    while True:
+        now = time.perf_counter()
+        if now >= deadline and (now >= hard_deadline or busy_check is None or not busy_check()):
+            break
         # Honor mid-probe cancellation: the calibration session sets this
         # when the maintenance window closes (or operator calls stop). Bail
         # within ~2s instead of waiting out the full ready_timeout.
@@ -1487,6 +1552,8 @@ def wait_ready(
             raise RuntimeError("cancelled")
         if proc.poll() is not None:
             raise RuntimeError(f"vLLM exited before becoming ready (code={proc.poll()})")
+        if stall_check is not None and stall_check():
+            raise TimeoutError(f"vLLM {_STALL_MARKER} after {time.perf_counter() - t_start:.0f}s")
         status, _ = _get(f"{base_url}/health", timeout_s=5.0)
         if status == 200:
             return
@@ -2643,7 +2710,22 @@ def _calibrate_model_probe(
         )
         t0 = time.perf_counter()
         try:
-            wait_ready(base_url, ready_timeout_s, proc, gpu_indices, cancel_event=cancel_event)
+
+            def _stall_check() -> bool:
+                if not _probe_stalled(log_path):
+                    return False
+                _mark_stalled(log_path)
+                return True
+
+            wait_ready(
+                base_url,
+                ready_timeout_s,
+                proc,
+                gpu_indices,
+                cancel_event=cancel_event,
+                stall_check=_stall_check,
+                busy_check=_compiler_running,
+            )
             # This attempt actually came up — anchor the cold-load
             # measurement at ITS spawn, not before the outer call: the
             # retry attempts that recursed into this one each cost a

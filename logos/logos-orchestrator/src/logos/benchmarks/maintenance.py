@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 
 from logos.benchmarks import nightly_store as store
-from logos.maintenance_window import maintenance_node_limit
+from logos.maintenance_window import maintenance_claim_max_age_s, maintenance_node_limit
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,18 @@ SESSION_ALREADY_RUNNING = "calibration session already in progress"
 
 # How a worker answers a command its build does not implement.
 UNSUPPORTED_COMMAND = "Unsupported bridge command"
+
+
+def _age_s(claim):
+    age_s = claim.get("age_s")
+    if age_s is not None:
+        return float(age_s)
+    created = claim.get("created_at")
+    if not isinstance(created, datetime):
+        return None
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - created).total_seconds()
 
 
 def _when(moment):
@@ -168,6 +180,7 @@ class MaintenanceCoordinator:
             if connection is None:
                 return completed
             for claim in store.calibration_claims():
+                age = _age_s(claim)
                 if not claim["confirmed"] and not _past_grace(claim):
                     continue
                 try:
@@ -176,6 +189,16 @@ class MaintenanceCoordinator:
                     if await self._release_if_finished(claim) and claim["confirmed"]:
                         completed.append(claim["provider_id"])
                 except (LogosNodeOfflineError, LogosNodeCommandError, TimeoutError) as exc:
+                    if age is not None and age > maintenance_claim_max_age_s():
+                        logger.warning(
+                            "Releasing calibration claim %s of provider %s after %.0f min without an answer (%s)",
+                            claim["token"],
+                            claim["provider_id"],
+                            age / 60,
+                            exc,
+                        )
+                        store.release_calibration(claim["token"])
+                        continue
                     logger.warning(
                         "Calibration status unavailable for provider %s (%s); claim %s remains reserved. "
                         "Reconnect and stop calibration, or follow the offline calibration recovery procedure.",

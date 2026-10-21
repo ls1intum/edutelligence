@@ -336,6 +336,20 @@ _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
         persist=False,
     ),
     FatalLoadErrorPattern(
+        # Written by calibration.wait_ready's stall check. Retrying with
+        # another KV size would hang the same way, but a later session may
+        # succeed (e.g. once the JIT cache is warm), so it is never persisted.
+        needle="engine warmup stalled",
+        reason_code="engine-warmup-stalled",
+        description=(
+            "vLLM stopped producing output during engine warmup and no "
+            "compiler was running. The KV-cache search was aborted; a "
+            "later calibration session retries."
+        ),
+        domain="server_start",
+        persist=False,
+    ),
+    FatalLoadErrorPattern(
         needle="is not supported for quantization method",
         reason_code="unsupported-quantization",
         description=(

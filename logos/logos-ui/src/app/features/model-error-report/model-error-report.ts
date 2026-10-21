@@ -430,6 +430,15 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
     // positionally (domain omitted), same as cuda-oom.
     needle: 'CUDA error:',
   },
+  'engine-warmup-stalled': {
+    label: 'Engine warmup stalled (observed)',
+    description:
+      'vLLM stopped producing output during engine warmup and no compiler ' +
+      'was running, so the probe was aborted early. A larger KV cache ' +
+      'cannot fix this; a later session retries.',
+    domain: DOMAIN_SERVER_START,
+    needle: 'engine warmup stalled',
+  },
   'hf-network-timeout': {
     label: 'Hugging Face network timeout (observed)',
     description:

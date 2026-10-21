@@ -807,3 +807,64 @@ async def test_refusal_pluralizes_a_larger_node_limit(coordinator, monkeypatch):
         claims[pid] = dict(provider_id=pid, token=str(pid), automatic=False, confirmed=True)
     with pytest.raises(MaintenanceBusyError, match="Only 2 nodes may run maintenance at a time."):
         await service.start_calibration(3, dispatch)
+
+
+def _aged(state, minutes):
+    from datetime import datetime, timedelta, timezone
+
+    state["claim"]["created_at"] = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+
+async def _lost_reply(callback):
+    callback(None)
+    raise TimeoutError()
+
+
+async def test_old_unconfirmed_claim_is_released_once_the_worker_is_idle(coordinator):
+    service, state = coordinator
+    with pytest.raises(TimeoutError):
+        await service.start_calibration(1, _lost_reply)
+    _aged(state, 1)
+    assert await service.reconcile() == []
+    assert state["claim"] is not None
+    _aged(state, 25)
+    assert await service.reconcile() == []
+    assert state["claim"] is None
+
+
+async def test_old_unconfirmed_claim_stays_while_the_worker_still_calibrates(coordinator):
+    service, state = coordinator
+    with pytest.raises(TimeoutError):
+        await service.start_calibration(1, _lost_reply)
+    _aged(state, 600)
+    service.registry.send_command.return_value = {"calibrating": True}
+    assert await service.reconcile() == []
+    assert state["claim"] is not None
+
+
+@pytest.mark.parametrize("confirmed", [True, False])
+async def test_unreachable_worker_keeps_a_young_claim_and_releases_an_old_one(coordinator, confirmed):
+    service, state = coordinator
+    with pytest.raises(TimeoutError):
+        await service.start_calibration(1, _lost_reply)
+    state["claim"]["confirmed"] = confirmed
+    service.registry.send_command.side_effect = TimeoutError()
+    _aged(state, 200)
+    await service.reconcile()
+    assert state["claim"] is not None
+    _aged(state, 400)
+    assert await service.reconcile() == []
+    assert state["claim"] is None
+
+
+async def test_claim_max_age_is_configurable(coordinator, monkeypatch):
+    service, state = coordinator
+    monkeypatch.setenv("LOGOS_MAINTENANCE_CLAIM_MAX_AGE_MINUTES", "30")
+    await service.start_calibration(1, dispatch)
+    service.registry.send_command.side_effect = TimeoutError()
+    _aged(state, 20)
+    await service.reconcile()
+    assert state["claim"] is not None
+    _aged(state, 40)
+    await service.reconcile()
+    assert state["claim"] is None
