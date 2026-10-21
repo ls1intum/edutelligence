@@ -1151,6 +1151,18 @@ describe('LaneHealthPanel worker lock', () => {
     expect(bar.textContent).toContain('on the same GPUs');
   });
 
+  it('can lock an offline worker that reports no lanes', async () => {
+    fixture.componentRef.setInput('lanesByProvider', { 'gpu-01': {} });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1, connection_state: 'offline' } });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('app-stats-empty-state')).not.toBeNull();
+    const button: HTMLButtonElement = fixture.nativeElement.querySelector('.btn-worker-lock');
+    expect(button).not.toBeNull();
+    button.click();
+    await fixture.whenStable();
+    expect(lockLane).toHaveBeenCalledWith(1, WORKER_LOCK_LANE_ID, null);
+  });
+
   it('reports a failed worker lock', async () => {
     lockLane.mockImplementationOnce(() => Promise.reject({ status: 500, error: { error: 'boom' } }));
     await panel.handleToggleWorkerLock();

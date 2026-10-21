@@ -50,6 +50,8 @@ from .vram_ledger import VRAMLedger
 # restore record). The lane id WORKER_LOCK_ID locks the whole worker. The
 # restore record is what lane_restore puts back after a worker restart.
 LaneLockState = Dict[tuple[int, str], tuple[bool, int, Optional[dict]]]
+# apply_lane_lock without a record from the push: keep the one held.
+_KEEP_RECORD = object()
 
 logger = logging.getLogger(__name__)
 
@@ -748,7 +750,9 @@ class CapacityPlanner:
         """Whether an operator locked the whole worker: no automatic load, wake, sleep or unload there."""
         return self.is_lane_locked(provider_id, WORKER_LOCK_ID)
 
-    def apply_lane_lock(self, provider_id: int, lane_id: str, locked: bool, revision: int) -> None:
+    def apply_lane_lock(
+        self, provider_id: int, lane_id: str, locked: bool, revision: int, record: Any = _KEEP_RECORD
+    ) -> None:
         """Apply a lock change the webservice just committed, without waiting for a re-read.
 
         The pushes can arrive out of order: a change older than the one held
@@ -760,10 +764,14 @@ class CapacityPlanner:
             held = locks.get(key)
             if held is not None and held[1] >= revision:
                 return locks
-            # Locking a locked lane again keeps its record; a new lock starts
+            # The push carries the record as committed. Without it, locking a
+            # locked lane again keeps the held record; a new lock starts
             # without one, as the webservice clears it in the table.
-            record = held[2] if held is not None and held[0] and locked else None
-            return {**locks, key: (bool(locked), int(revision), record)}
+            if record is not _KEEP_RECORD:
+                kept = record if locked else None
+            else:
+                kept = held[2] if held is not None and held[0] and locked else None
+            return {**locks, key: (bool(locked), int(revision), kept)}
 
         applied = self._lock_cache().update(apply).get(key, (None, None))[:2] == (bool(locked), int(revision))
         logger.info(
@@ -880,9 +888,29 @@ class CapacityPlanner:
         actions: List[CapacityPlanAction] = []
         planned: set[str] = set()
         worker = self._facade.get_provider_name(provider_id) or provider_id
+        # Lanes that slept go first, and awake lanes on their GPUs wait until
+        # they sleep again: before the restart they fit side by side only
+        # because the sleepers held little memory, and an awake lane loaded
+        # first could leave no room for a sleeper's full start.
+        unsettled_gpus: set[int] | None = set()
         for lock_id, new_record in records:
-            for lane_id, entry in missing_lanes(new_record, present):
+            if lock_id != WORKER_LOCK_ID:
+                continue
+            for lane_id, entry in new_record.items():
+                if not entry.get("sleeping"):
+                    continue
+                if lane_id in present and (provider_id, lane_id) not in pending:
+                    continue  # back and asleep, or awake for good
+                if lane_id not in present and self._lane_is_in_load_failure_cooldown(provider_id, lane_id):
+                    continue  # its load failed: do not hold the awake lanes back for it
+                gpus = self._parse_restore_gpus(entry)
+                unsettled_gpus = None if gpus is None or unsettled_gpus is None else unsettled_gpus | gpus
+        for lock_id, new_record in sorted(records, key=lambda item: item[0] != WORKER_LOCK_ID):
+            missing = sorted(missing_lanes(new_record, present), key=lambda item: not item[1].get("sleeping"))
+            for lane_id, entry in missing:
                 if lane_id in planned or lane_id in busy:
+                    continue
+                if not entry.get("sleeping") and self._overlaps(self._parse_restore_gpus(entry), unsettled_gpus):
                     continue
                 if self._lane_is_in_load_failure_cooldown(provider_id, lane_id):
                     continue
@@ -933,6 +961,22 @@ class CapacityPlanner:
                 )
             )
         return actions
+
+    @staticmethod
+    def _parse_restore_gpus(entry: dict) -> Optional[set[int]]:
+        """GPUs of a recorded lane; None when it may use every GPU."""
+        lane_config = entry.get("lane_config") or {}
+        overrides = (lane_config.get("vllm_config") or {}).get("env_overrides") or {}
+        raw = str(lane_config.get("gpu_devices") or "").replace(" ", "")
+        if "CUDA_VISIBLE_DEVICES" in overrides or raw.lower() in {"", "all"}:
+            return None
+        return {int(part) for part in raw.split(",") if part.isdigit()}
+
+    @staticmethod
+    def _overlaps(gpus: Optional[set[int]], others: Optional[set[int]]) -> bool:
+        if others is not None and not others:
+            return False
+        return gpus is None or others is None or bool(gpus & others)
 
     async def _save_restore_record(self, provider_id: int, lock_id: str, revision: int, record: dict) -> None:
         """Store a lock's record, in the table and then in memory, unless the lock changed meanwhile."""
@@ -1033,6 +1077,14 @@ class CapacityPlanner:
         """
         if action.operator_initiated:
             return False
+        if self.is_worker_locked(action.provider_id) and not action.restore:
+            logger.info(
+                "Aborting %s of lane %s on worker=%s: the worker was locked while the lane drained",
+                action.action,
+                action.lane_id,
+                self._facade.get_provider_name(action.provider_id) or action.provider_id,
+            )
+            return True
         if not self.is_lane_locked(action.provider_id, action.lane_id):
             return False
         logger.info(

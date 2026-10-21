@@ -91,7 +91,8 @@ public class LaneLockService {
             INSERT INTO lane_locks (provider_id, lane_id, model_name, locked_by, locked, revision)
             VALUES (:providerId, :laneId, :modelName, :lockedBy, TRUE, nextval('lane_lock_revision_seq'))
             ON CONFLICT (provider_id, lane_id) DO NOTHING
-            RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision
+            RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision,
+                CAST(restore_lanes AS TEXT) AS restore_lanes
             """, params);
         if (!inserted.isEmpty()) {
             after = inserted.get(0);
@@ -116,16 +117,19 @@ public class LaneLockService {
                     locked = TRUE,
                     revision = nextval('lane_lock_revision_seq')
                 WHERE provider_id = :providerId AND lane_id = :laneId
-                RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision
+                RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision,
+                    CAST(restore_lanes AS TEXT) AS restore_lanes
                 """, params).get(0);
         }
         // record() drops a transition whose two states are equal, so a repeat
         // lock that changes nothing leaves no entry.
         auditLog.record(auditAction(laneId, "locked"), auditTarget(laneId), auditId(providerId, laneId), null,
             auditState(before), auditState(after));
-        orchestratorNotification.notifyLaneLock(providerId, laneId, true, revisionOf(after));
+        orchestratorNotification.notifyLaneLock(providerId, laneId, true, revisionOf(after),
+            (String) after.get("restore_lanes"));
         Map<String, Object> stored = new LinkedHashMap<>(after);
         stored.remove("revision");
+        stored.remove("restore_lanes");
         return stored;
     }
 

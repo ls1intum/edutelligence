@@ -288,3 +288,69 @@ def test_requests_reach_a_locked_worker_only_through_an_awake_lane():
     scheduler.set_worker_lock_check(lambda provider_id: provider_id in {worker_a, worker_b})
     # The sleeping lane on the locked worker would never be woken; the awake one still serves.
     assert providers() == {worker_b}
+
+
+# ── Review follow-ups ──────────────────────────────────────────────────────
+
+
+def test_a_relock_that_overtakes_its_unlock_does_not_keep_the_old_record():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, LANE, True, 5, None)]))
+    _restore(planner)
+    planner.apply_lane_lock(PROVIDER, LANE, True, 7, record=None)  # relock, as committed: no record
+    planner.apply_lane_lock(PROVIDER, LANE, False, 6)  # the unlock arrives late and is ignored
+    planner._lane_restore_writer = None  # the table no longer holds revision 5
+    registry.lanes = []
+    assert _restore(planner) == []
+
+
+def _entry(lane_id, model, gpus, sleeping):
+    return {
+        "lane_config": {"lane_id": lane_id, "model": model, "gpu_devices": gpus, "vllm": True},
+        "sleeping": sleeping,
+    }
+
+
+def test_a_lane_that_slept_is_put_back_before_an_awake_lane_on_its_gpu():
+    record = {LANE: _entry(LANE, MODEL, "0", False), EMBED_LANE: _entry(EMBED_LANE, EMBED, "0", True)}
+    registry = _Registry([])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, record)]))
+
+    assert [(a.action, a.lane_id) for a in _restore(planner)] == [("load", EMBED_LANE)]
+    registry.lanes = [_runtime_lane(EMBED_LANE, EMBED, "0")]  # back, still awake
+    assert [(a.action, a.lane_id) for a in _restore(planner)] == [("sleep_l1", EMBED_LANE)]
+    registry.lanes = [_runtime_lane(EMBED_LANE, EMBED, "0", sleep_state="sleeping")]
+    assert [(a.action, a.lane_id) for a in _restore(planner)] == [("load", LANE)]
+
+
+def test_an_awake_lane_on_other_gpus_does_not_wait_for_a_sleeper():
+    record = {LANE: _entry(LANE, MODEL, "1", False), EMBED_LANE: _entry(EMBED_LANE, EMBED, "0", True)}
+    planner = _planner(_Registry([]), _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, record)]))
+    assert {a.lane_id for a in _restore(planner)} == {LANE, EMBED_LANE}
+
+
+def test_a_worker_locked_while_a_lane_drains_stops_the_automatic_sleep():
+    planner = _planner(_Registry([]), _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+
+    def locked_since(**flags):
+        action = CapacityPlanAction(action="sleep_l1", provider_id=PROVIDER, lane_id=LANE, model_name=MODEL, **flags)
+        return asyncio.run(planner._locked_since_planning(action))
+
+    assert locked_since() is True
+    assert locked_since(restore=True) is False
+    assert locked_since(operator_initiated=True) is False
+
+
+def test_a_locked_worker_does_not_hold_nightly_benchmarks_back_for_its_calibration():
+    from unittest.mock import MagicMock
+
+    from logos.capacity.calibration_orchestrator import CalibrationOrchestrator
+
+    registry, facade = MagicMock(), MagicMock()
+    facade.provider_ids.return_value = [PROVIDER]
+    service = CalibrationOrchestrator(registry, facade, worker_locked=lambda pid: pid == PROVIDER)
+    service._is_in_window = lambda: True
+    service._was_in_window = True
+    service._provider_is_unhealthy = lambda _: False
+    service._provider_has_uncalibrated_models = lambda _: True
+    assert not service.benchmarks_must_wait()

@@ -1115,14 +1115,16 @@ class LaneManager:
         can be ~15s old and therefore miss a request admitted moments earlier
         (the TOCTOU race that drops ~2/1000 requests under model-swap pressure).
 
-        Polls WITHOUT holding ``self._lock`` so ``decrement_active_requests`` can
+        Polls WITHOUT holding the lane so ``decrement_active_requests`` can
         make progress. Best-effort: if the drain times out, the caller proceeds
         (logged) rather than blocking sleep forever.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _LANE_SLEEP_DRAIN_TIMEOUT_S
         while True:
-            async with self._lock:
+            # This lane only: a whole-lock waiter would queue every request on
+            # other lanes behind a load still starting.
+            async with self._lock.scoped([lane_id]):
                 if lane_id not in self._handles:
                     return
                 active = self._active_requests.get(lane_id, 0)
@@ -1300,7 +1302,7 @@ class LaneManager:
         # Waking grows the lane on its GPUs, so no load may start there meanwhile.
         current = self._handles.get(lane_id)
         lc = current.lane_config if current is not None else None
-        gpus = self._lane_gpu_set(getattr(lc, "gpu_devices", None)) if lc is not None else None
+        gpus = self._launch_gpu_set(lc) if lc is not None else None
         async with self._lock.scoped([lane_id], gpus):
             handle = self._handles.get(lane_id)
             if handle is None:
@@ -2669,7 +2671,8 @@ class LaneManager:
         # sleep state, so the subset picker can score which lanes stay
         # loadable alongside the new one.
         resident_lanes: list[tuple[frozenset[int], float]] = []
-        for other_id, h in self._handles.items():
+        # A snapshot: an unload may detach a lane during the awaits below.
+        for other_id, h in list(self._handles.items()):
             if other_id == lane_id:
                 continue  # this lane's own (old) footprint is being replaced
             lc = h.lane_config
@@ -3016,6 +3019,19 @@ class LaneManager:
             self.release_model_startup(starting_model)
             self._finish_loading(lane_id)
 
+    def _launch_gpu_set(self, lane_config: LaneConfig) -> frozenset[int] | None:
+        """The GPUs the lane's engine will open; ``None`` when that cannot be told from its config.
+
+        The model's env_overrides are applied after the selector at launch, so
+        a CUDA_VISIBLE_DEVICES or CUDA_DEVICE_ORDER override there decides
+        which GPUs open: such a lane counts as using every GPU.
+        """
+        vllm_config = getattr(lane_config, "vllm_config", None)
+        overrides = getattr(vllm_config, "env_overrides", None) or {}
+        if "CUDA_VISIBLE_DEVICES" in overrides or overrides.get("CUDA_DEVICE_ORDER", "PCI_BUS_ID") != "PCI_BUS_ID":
+            return None
+        return self._lane_gpu_set(getattr(lane_config, "gpu_devices", None))
+
     def _finish_loading(self, lane_id: str) -> None:
         """Free the GPUs a starting load held for placement and wake loads waiting on them."""
         if self._loading_gpus.pop(lane_id, _NOT_LOADING) is not _NOT_LOADING:
@@ -3045,7 +3061,7 @@ class LaneManager:
                 except RuntimeError:
                     if not busy:
                         raise
-                gpus = self._lane_gpu_set(placed.gpu_devices) if placed is not None else None
+                gpus = self._launch_gpu_set(placed) if placed is not None else None
                 clear = placed is not None and (not others or (gpus is not None and not gpus & busy))
                 if clear:
                     self._loading_gpus[lane_id] = gpus

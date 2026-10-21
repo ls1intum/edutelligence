@@ -198,7 +198,17 @@ async def internal_lane_lock_changed(data: LaneLockChangedRequest, request: Requ
     _require_internal_secret(request, disabled_detail="Internal lane lock endpoint disabled")
     if _main._capacity_planner is None:
         raise HTTPException(status_code=503, detail="Capacity planner not initialized")
-    _main._capacity_planner.apply_lane_lock(data.provider_id, data.lane_id, data.locked, data.revision)
+    if "restore_lanes_json" in data.model_fields_set:
+        record = json.loads(data.restore_lanes_json) if data.restore_lanes_json else None
+        _main._capacity_planner.apply_lane_lock(
+            data.provider_id,
+            data.lane_id,
+            data.locked,
+            data.revision,
+            record=record if isinstance(record, dict) else None,
+        )
+    else:
+        _main._capacity_planner.apply_lane_lock(data.provider_id, data.lane_id, data.locked, data.revision)
     return {"status": "ok"}
 
 

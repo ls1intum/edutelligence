@@ -441,3 +441,54 @@ async def test_calibration_teardown_does_not_wait_for_a_load_on_other_gpus() -> 
     assert await asyncio.wait_for(manager.destroy_lanes_on_gpus({2, 3}), timeout=2) == 1
     release.set()
     await load
+
+
+# ── Review follow-ups ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_sleep_s_drain_does_not_queue_requests_behind_another_lane_s_load() -> None:
+    manager = _manager_with({"b": _Handle(LaneConfig(model="m-b", gpu_devices="1"))})
+    async with manager._lock.scoped(["a"], [0]):  # noqa: SLF001
+        await asyncio.wait_for(manager._drain_lane_inflight("b"), timeout=2)  # noqa: SLF001
+
+
+def test_a_launch_override_of_the_visible_gpus_claims_every_gpu() -> None:
+    manager = _manager_with({})
+    pinned = LaneConfig(model=MODEL, gpu_devices="0", vllm_config=VllmConfig())
+    overridden = LaneConfig(
+        model=MODEL, gpu_devices="0", vllm_config=VllmConfig(env_overrides={"CUDA_VISIBLE_DEVICES": "1"})
+    )
+    assert manager._launch_gpu_set(pinned) == frozenset({0})  # noqa: SLF001
+    assert manager._launch_gpu_set(overridden) is None  # noqa: SLF001
+
+
+class _ProbedHandle:
+    """A running lane whose sleep probe lets an unload detach another lane."""
+
+    def __init__(self, lane_config: LaneConfig, during_probe=None) -> None:
+        self.lane_config = lane_config
+        self._during_probe = during_probe
+
+    def status(self):
+        from logos_worker_node.models import ProcessState, ProcessStatus
+
+        return ProcessStatus(state=ProcessState.RUNNING, pid=1)
+
+    async def is_sleeping(self) -> bool:
+        if self._during_probe is not None:
+            self._during_probe()
+        return False
+
+
+@pytest.mark.asyncio
+async def test_placement_survives_an_unload_during_its_sleep_probes() -> None:
+    manager = _placement_manager({0: 20000.0, 1: 20000.0})
+    vllm = VllmConfig(tensor_parallel_size=1)
+    manager._handles["x"] = _ProbedHandle(  # noqa: SLF001
+        LaneConfig(model=MODEL, gpu_devices="0", vllm_config=vllm),
+        during_probe=lambda: manager._handles.pop("y", None),  # noqa: SLF001
+    )
+    manager._handles["y"] = _ProbedHandle(LaneConfig(model=MODEL, gpu_devices="1", vllm_config=vllm))  # noqa: SLF001
+    placed = await manager._auto_place_gpu_devices("new", _lane())  # noqa: SLF001
+    assert placed.gpu_devices in {"0", "1"}

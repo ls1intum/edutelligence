@@ -227,7 +227,8 @@ class CalibrationOrchestrator:
             pid not in self._completed_this_window
             and self._registry.has_received_first_status(pid)
             and not self._provider_is_unhealthy(pid)
-            and self._provider_has_uncalibrated_models(pid)
+            # A locked worker's calibration cannot start, so it holds up nothing.
+            and not self._worker_locked(pid) and self._provider_has_uncalibrated_models(pid)
             for pid in self._facade.provider_ids()
         )
 
