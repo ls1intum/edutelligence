@@ -23,9 +23,27 @@ from iris.domain.data.context_switch_marker import (
     ContextSwitchTransition,
 )
 from iris.domain.data.json_message_content_dto import JsonMessageContentDTO
+from iris.domain.data.mcq_widget import describe_json_content
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
+
+
+def history_text(iris_message: PyrisMessage) -> str:
+    """The text of a history message: every text part, and every JSON part described as text.
+
+    A quiz widget is JSON content of Iris' message. Reading only text would drop it or, for a message
+    that holds nothing else, fail the run, so structured parts are described, see
+    ``describe_json_content``. Parts of other kinds are left out; a message without any text part
+    yields an empty string.
+    """
+    parts: list[str] = []
+    for content in iris_message.contents:
+        if isinstance(content, TextMessageContentDTO):
+            parts.append(content.text_content)
+        elif isinstance(content, JsonMessageContentDTO):
+            parts.append(describe_json_content(content.json_content))
+    return "\n\n".join(part for part in parts if part)
 
 
 def convert_iris_message_to_langchain_message(
@@ -64,11 +82,12 @@ def convert_iris_message_to_langchain_message(
             content=describe_command_marker(message.json_content or {})
         )
 
-    if not isinstance(message, TextMessageContentDTO):
+    if not isinstance(message, (TextMessageContentDTO, JsonMessageContentDTO)):
         raise ValueError("Message must be of type TextMessageContentDTO")
+    text = history_text(iris_message)
     match iris_message.sender:
         case IrisMessageRole.USER:
-            return HumanMessage(content=message.text_content)
+            return HumanMessage(content=text)
         case IrisMessageRole.ASSISTANT:
             if isinstance(iris_message, PyrisAIMessage):
                 tool_calls = [
@@ -79,12 +98,12 @@ def convert_iris_message_to_langchain_message(
                     )
                     for tc in iris_message.tool_calls
                 ]
-                return AIMessage(content=message.text_content, tool_calls=tool_calls)
-            return AIMessage(content=message.text_content)
+                return AIMessage(content=text, tool_calls=tool_calls)
+            return AIMessage(content=text)
         case IrisMessageRole.SYSTEM:
-            return SystemMessage(content=message.text_content)
+            return SystemMessage(content=text)
         case IrisMessageRole.ARTIFACT:
-            return SystemMessage(content="Previous suggestion: " + message.text_content)
+            return SystemMessage(content="Previous suggestion: " + text)
         case _:
             raise ValueError(f"Unknown message role: {iris_message.sender}")
 
