@@ -1032,6 +1032,9 @@ async def internal_logosnode_stop_calibration(data: InternalStopCalibrationReque
 async def internal_logosnode_delete_lane(data: InternalDeleteLaneRequest, request: Request):
     """Unload a lane on a worker, called by Spring after JWT validation."""
     _require_internal_secret(request)
+    if _main._capacity_planner is not None:
+        # An operator unloads on purpose: a locked lane must not come back.
+        await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="delete_lane",

@@ -1206,10 +1206,16 @@ def _prefer_deployments_with_context_room(
     return fitting or deployments
 
 
-def _read_lane_locks() -> Optional[list[tuple[int, str, bool, int]]]:
+def _read_lane_locks() -> Optional[list[tuple]]:
     """Operator lane locks for the capacity planner; ``None`` when unreadable."""
     with DBManager() as db:
         return db.get_lane_locks()
+
+
+def _write_lane_restore_record(provider_id: int, lane_id: str, revision: int, record: dict) -> bool:
+    """Store a lock's restore record for the capacity planner (see logos.capacity.lane_restore)."""
+    with DBManager() as db:
+        return db.set_lane_restore_record(provider_id, lane_id, revision, record)
 
 
 async def start_pipeline():
@@ -1271,7 +1277,9 @@ async def start_pipeline():
         on_state_change=scheduler.reevaluate_model_queues,
         latency_store=_latency_store,
         lane_lock_reader=_read_lane_locks,
+        lane_restore_writer=_write_lane_restore_record,
     )
+    scheduler.set_worker_lock_check(_capacity_planner.is_worker_locked)
     # Every worker report restores the forwarding gate's budget, so it is
     # also the moment to reconsider requests being held for it.
     _logosnode_registry.set_on_runtime_updated(scheduler.on_worker_report)
@@ -1308,6 +1316,7 @@ async def start_pipeline():
         registry=_logosnode_registry,
         facade=_logosnode_facade,
         config=CalibrationConfig.from_env(),
+        worker_locked=_capacity_planner.is_worker_locked,
     )
     global _nightly_scheduler, _maintenance_coordinator
     _maintenance_coordinator = MaintenanceCoordinator(_logosnode_registry)

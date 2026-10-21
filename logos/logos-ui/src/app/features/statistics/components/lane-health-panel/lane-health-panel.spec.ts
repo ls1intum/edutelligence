@@ -10,6 +10,7 @@ import {
   laneDisplayState,
   laneSleepAction,
   messageIn,
+  WORKER_LOCK_LANE_ID,
 } from './lane-health-panel';
 import { LaneSignalData } from '../../statistics.models';
 import { ProviderModel, StatisticsService } from '../../services/statistics.service';
@@ -1086,5 +1087,74 @@ describe('LaneHealthPanel lane locks', () => {
     releaseStale([]);
     await stale;
     expect(panel.isLocked('planner-embed')).toBe(true);
+  });
+});
+
+/**
+ * A worker lock is a lock with lane id `*`: the capacity planner then leaves
+ * the whole worker as it is. It lives next to the lane locks and never makes a
+ * lane look locked.
+ */
+describe('LaneHealthPanel worker lock', () => {
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let locks: { provider_id: number; lane_id: string; model_name: string | null; locked_by: string | null; locked_at: string }[];
+  let lockLane: ReturnType<typeof vi.fn>;
+  let unlockLane: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    locks = [];
+    lockLane = vi.fn((pid: number, laneId: string, model: string | null) => {
+      locks.push({ provider_id: pid, lane_id: laneId, model_name: model, locked_by: 'admin', locked_at: 'now' });
+      return Promise.resolve(locks[locks.length - 1]);
+    });
+    unlockLane = vi.fn((pid: number, laneId: string) => {
+      locks = locks.filter((l) => !(l.provider_id === pid && l.lane_id === laneId));
+      return Promise.resolve({ unlocked: true });
+    });
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [
+        { provide: StatisticsService, useValue: { getLaneLocks: vi.fn(() => Promise.resolve([...locks])), lockLane, unlockLane } },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-embed': lane({ model: 'org/embed', runtime_state: 'loaded' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1 } });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    fixture.detectChanges();
+    await fixture.whenStable();
+  });
+
+  it('locks and unlocks the worker under lane id *', async () => {
+    await panel.handleToggleWorkerLock();
+    expect(lockLane).toHaveBeenCalledWith(1, WORKER_LOCK_LANE_ID, null);
+    expect(panel.isWorkerLocked()).toBe(true);
+    expect(panel.isLocked('planner-embed')).toBe(false);
+
+    await panel.handleToggleWorkerLock();
+    expect(unlockLane).toHaveBeenCalledWith(1, WORKER_LOCK_LANE_ID);
+    expect(panel.isWorkerLocked()).toBe(false);
+    expect(panel.lockingLaneId()).toBeNull();
+  });
+
+  it('shows what a locked worker means', async () => {
+    await panel.handleToggleWorkerLock();
+    fixture.detectChanges();
+    const bar: HTMLElement = fixture.nativeElement.querySelector('.worker-lock');
+    const button: HTMLButtonElement = bar.querySelector('.btn-worker-lock')!;
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.textContent).toContain('Worker locked');
+    expect(bar.textContent).toContain('on the same GPUs');
+  });
+
+  it('reports a failed worker lock', async () => {
+    lockLane.mockImplementationOnce(() => Promise.reject({ status: 500, error: { error: 'boom' } }));
+    await panel.handleToggleWorkerLock();
+    expect(panel.lockError()).toContain('Lock of the worker failed');
+    expect(panel.isWorkerLocked()).toBe(false);
   });
 });

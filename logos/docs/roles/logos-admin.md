@@ -59,11 +59,37 @@ other models. If a locked lane sleeps, the planner wakes it. To release the
 lane, click the lock icon again. The lock stays after a restart of Logos. Only a
 Logos admin can lock or unlock a lane.
 
+A worker that restarts comes back without lanes. The capacity planner then loads
+each locked lane again. It uses the same model, the same GPUs and the same
+settings as before the restart. If you unload a locked lane, the planner does
+not load it again.
+
 ![Lanes of two workers, the upper lane locked](/img/roles/logos-admin-statistics-lanes.png)
 
 The **Sleep** action on a locked lane still puts the lane to sleep. Use it only
 if you must make memory free at once. The planner then wakes the locked lane
 again.
+
+### Worker locks
+
+To keep all lanes of a worker as they are, lock the worker. Above the lane list
+of the worker, click **Lock worker**. While the worker is locked, the capacity
+planner does not load, wake, put to sleep or unload a lane on that worker.
+Requests go to a lane of the worker only while that lane is awake. Automatic
+calibration and nightly benchmarks skip the worker, and you cannot start a
+benchmark there.
+
+Your own actions in the lane list still work: **Load lane**, **Unload**,
+**Sleep**, **Wake** and **Drain**. After a restart of the worker, the planner
+loads all lanes again on the same GPUs. A lane that was asleep before the
+restart goes to sleep again. To release the worker, click **Worker locked**.
+
+### Parallel lane actions
+
+A worker unloads a lane at once, also while it loads or wakes another lane. It
+loads two lanes at the same time only if they use different GPUs. If the only
+GPUs that fit are in use by a lane that loads, the second lane waits until the
+first lane has started.
 
 ![Statistics page](/img/roles/logos-admin-statistics.png)
 

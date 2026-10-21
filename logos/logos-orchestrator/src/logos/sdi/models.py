@@ -341,6 +341,10 @@ class CapacityPlanAction:
     # planner never sleeps or stops a locked lane on its own, but an operator
     # taking a lane offline explicitly is still honoured.
     operator_initiated: bool = False
+    # True for an action that puts a locked lane back the way it was before
+    # its worker restarted (see logos.capacity.lane_restore). A locked worker
+    # refuses every other automatic action.
+    restore: bool = False
 
     def to_dict(self) -> dict:
         return {

@@ -226,6 +226,9 @@ export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   return null;
 }
 
+/** The lane id of a lock on a whole worker. No worker lane has this id. */
+export const WORKER_LOCK_LANE_ID = '*';
+
 /** Identity of a lane lock: the lane id is only unique within its provider. */
 export function laneLockKey(providerId: number, laneId: string): string {
   return `${providerId}/${laneId}`;
@@ -699,6 +702,36 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
   isLocked(laneId: string): boolean {
     const pid = this.providerId;
     return pid != null && this.lockedLanes().has(laneLockKey(pid, laneId));
+  }
+
+  /** Whether the capacity planner is told to leave this whole worker as it is. */
+  isWorkerLocked(): boolean {
+    return this.isLocked(WORKER_LOCK_LANE_ID);
+  }
+
+  /**
+   * Locks or unlocks the selected worker. While it is locked, the capacity
+   * planner neither loads, wakes, sleeps nor unloads anything there; the
+   * buttons of this panel still work.
+   */
+  async handleToggleWorkerLock(): Promise<void> {
+    const pid = this.providerId;
+    if (pid == null || this.lockingLaneId() !== null) return;
+    const locked = this.isWorkerLocked();
+    this.lockingLaneId.set(WORKER_LOCK_LANE_ID);
+    this.lockError.set(null);
+    try {
+      if (locked) {
+        await this.statisticsService.unlockLane(pid, WORKER_LOCK_LANE_ID);
+      } else {
+        await this.statisticsService.lockLane(pid, WORKER_LOCK_LANE_ID, null);
+      }
+      await this.refreshLocks();
+    } catch (err: unknown) {
+      this.lockError.set(`${locked ? 'Unlock' : 'Lock'} of the worker failed: ${this.failureDetail(err)}`);
+    } finally {
+      this.lockingLaneId.set(null);
+    }
   }
 
   /** Bumped by every lock read; only the newest read may set the locks. */

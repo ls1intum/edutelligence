@@ -131,6 +131,10 @@ class NightlyScheduler:
                         store.save(pair_id, "unavailable", [{"status": "skipped", "reason": str(exc)[:1000]}], None)
                         continue
                     provider_id = int(target["provider_id"])
+                    if self.planner.is_worker_locked(provider_id):
+                        # The run waits for the next night the worker is not locked.
+                        logger.info("Skipping nightly benchmark %s: worker %s is locked", pair_id, provider_id)
+                        continue
                     if provider_id in providers:
                         deferred.append(row)
                         continue
