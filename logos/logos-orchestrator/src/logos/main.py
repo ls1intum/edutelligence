@@ -13,7 +13,7 @@ import threading
 import time
 from contextlib import aclosing, asynccontextmanager, nullcontext, suppress
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 import grpc
 from fastapi import FastAPI, HTTPException, Request
@@ -4806,14 +4806,21 @@ _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
 }
 
 
-async def _dispatch_logosnode_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
+async def _dispatch_logosnode_command(
+    provider_id: int,
+    action: str,
+    params: dict[str, Any] | None = None,
+    on_dispatched: Callable[[asyncio.Future], None] | None = None,
+):
     try:
         timeout = _LOGOSNODE_CMD_TIMEOUTS.get(action, 20)
+        extra = {"on_dispatched": on_dispatched} if on_dispatched is not None else {}
         return await _logosnode_registry.send_command(
             provider_id,
             action=action,
             params=params or {},
             timeout_seconds=timeout,
+            **extra,
         )
     except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})

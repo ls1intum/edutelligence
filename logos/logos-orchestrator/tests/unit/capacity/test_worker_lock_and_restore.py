@@ -561,3 +561,16 @@ def test_a_refused_unload_of_a_lane_never_recorded_drops_its_mark():
     _restore(planner)  # recorded again
     registry.lanes = []
     assert [a.lane_id for a in _restore(planner)] == [LANE]
+
+
+def test_a_re_sleep_of_an_earlier_lock_does_not_carry_over_to_a_new_one():
+    record = {EMBED_LANE: _entry(EMBED_LANE, EMBED, "0", True)}
+    registry = _Registry([])
+    table = _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, record)])
+    planner = _planner(registry, table)
+    _restore(planner)  # the sleeper's load is planned and its re-sleep marked
+    planner.apply_lane_lock(PROVIDER, WORKER_LOCK_ID, False, 10)
+    table.rows[(PROVIDER, WORKER_LOCK_ID)] = [PROVIDER, WORKER_LOCK_ID, True, 11, None]
+    planner.apply_lane_lock(PROVIDER, WORKER_LOCK_ID, True, 11, record=None)  # a new lock
+    registry.lanes = [_runtime_lane(EMBED_LANE, EMBED, "0")]
+    assert _restore(planner) == []

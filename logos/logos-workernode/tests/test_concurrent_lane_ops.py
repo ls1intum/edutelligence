@@ -648,9 +648,13 @@ async def test_a_cancelled_replacement_spawn_stops_its_process() -> None:
             await asyncio.Event().wait()
 
     handle = _Spawning(LaneConfig(model="m-a"))
-    spawn = asyncio.create_task(LaneManager._spawn_or_destroy(handle, handle.lane_config))  # noqa: SLF001
+    manager = _manager_with({})
+    spawn = asyncio.create_task(manager._spawn_or_destroy("a", handle, handle.lane_config))  # noqa: SLF001
+    await _settle()
+    assert "a" in manager._loading_gpus  # noqa: SLF001
     await started.wait()
     spawn.cancel()
     with pytest.raises(asyncio.CancelledError):
         await spawn
     assert handle.destroyed
+    assert "a" not in manager._loading_gpus  # noqa: SLF001

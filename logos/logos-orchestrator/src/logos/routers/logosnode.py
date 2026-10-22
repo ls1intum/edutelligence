@@ -1096,13 +1096,17 @@ async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
             await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
         except RestoreRecordError as exc:
             return JSONResponse(status_code=503, content={"error": str(exc)})
+    dispatched = []
     result = await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="delete_lane",
         params={"lane_id": data.lane_id},
+        on_dispatched=dispatched.append,
     )
-    # 502: the worker refused it. A timeout (503) may still unload the lane.
-    if _main._capacity_planner is not None and getattr(result, "status_code", 200) == 502:
+    # Definitely not unloaded: the worker refused it (502), or it never went
+    # out. A timeout after dispatch may still unload the lane.
+    status = getattr(result, "status_code", 200)
+    if _main._capacity_planner is not None and (status == 502 or (status >= 400 and not dispatched)):
         await _main._capacity_planner.unload_refused(data.provider_id, data.lane_id)
     return result
 

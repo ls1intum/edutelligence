@@ -862,10 +862,12 @@ class CapacityPlanner:
                 if pid == provider_id and locked
             ]
             unloading: dict[str, float] = {}
+            # The re-sleeps due are those the current worker lock marks, also
+            # after an orchestrator restart; an earlier lock's do not carry over.
+            pending.difference_update({key for key in pending if key[0] == provider_id})
             for lock_id, _revision, record in locks:
                 unloading.update(unloading_lanes(record))
                 if lock_id == WORKER_LOCK_ID:
-                    # A re-sleep planned before an orchestrator restart.
                     pending.update(
                         (provider_id, lid)
                         for lid, entry in (record or {}).items()

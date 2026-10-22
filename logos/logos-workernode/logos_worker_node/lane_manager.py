@@ -3400,7 +3400,7 @@ class LaneManager:
                             metal_config=self._metal_config,
                         )
                         await restored.init()
-                        await self._spawn_or_destroy(restored, orig_lc)
+                        await self._spawn_or_destroy(lid, restored, orig_lc)
                         self._handles[lid] = restored
                         self._port_alloc._used[lid] = orig_port
                         self._active_requests[lid] = 0
@@ -3430,7 +3430,7 @@ class LaneManager:
                         metal_config=self._metal_config,
                     )
                     await restored.init()
-                    await self._spawn_or_destroy(restored, lc)
+                    await self._spawn_or_destroy(lid, restored, lc)
                     self._handles[lid] = restored
                     self._port_alloc._used[lid] = port
                     self._active_requests[lid] = 0
@@ -3453,9 +3453,12 @@ class LaneManager:
         profile = self._model_profiles.get_profile(model) if self._model_profiles is not None else None
         return profile.calibration_id if profile is not None else None
 
-    @staticmethod
-    async def _spawn_or_destroy(handle: ProcessHandle, lane_config: LaneConfig) -> None:
-        """Spawn a process that is not tracked yet, and stop it again if the spawn fails or is cancelled."""
+    async def _spawn_or_destroy(self, lane_id: str, handle: ProcessHandle, lane_config: LaneConfig) -> None:
+        """Spawn a process that is not tracked yet, and stop it again if the spawn fails or is cancelled.
+
+        Its GPUs count as starting meanwhile, so a calibration slice avoids them.
+        """
+        self._loading_gpus[lane_id] = self._launch_gpu_set(lane_config)
         try:
             await handle.spawn(lane_config)
         except BaseException:
@@ -3466,6 +3469,8 @@ class LaneManager:
             except asyncio.CancelledError:
                 await teardown
             raise
+        finally:
+            self._finish_loading(lane_id)
 
     def _note_lane_spawn(self, lane_id: str, model: str) -> None:
         self._lane_calibration_at_spawn[lane_id] = self._current_calibration_id(model)
