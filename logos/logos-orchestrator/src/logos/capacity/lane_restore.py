@@ -22,8 +22,9 @@ WORKER_LOCK_ID = "*"
 # Marks a lane put back awake that slept before the restart and is still to
 # be put to sleep. Kept in the record, so it survives an orchestrator restart.
 RESLEEP = "resleep"
-# Marks, with the time it was sent, a lane an operator is unloading: it is
-# neither recorded again nor put back while the worker still reports it.
+# Marks a lane an operator is unloading, with one entry (the time it was
+# sent) per unload still on its way: the lane is neither recorded again nor
+# put back while any of them may still unload it.
 UNLOADING = "unloading"
 
 # A lane in these states, or in a transition, is not recorded: it is not in a
@@ -85,16 +86,22 @@ def _restorable(entry: Any) -> bool:
 
 
 def _keepable(entry: Any) -> bool:
-    return _restorable(entry) or (isinstance(entry, dict) and isinstance(entry.get(UNLOADING), (int, float)))
+    return _restorable(entry) or (isinstance(entry, dict) and bool(unload_attempts(entry)))
 
 
-def unloading_lanes(record: dict[str, dict[str, Any]] | None) -> dict[str, float]:
-    """Lanes of a record an operator is unloading, by when the unload was sent."""
-    return {
-        lane_id: float(entry[UNLOADING])
-        for lane_id, entry in (record or {}).items()
-        if isinstance(entry, dict) and isinstance(entry.get(UNLOADING), (int, float))
-    }
+def unload_attempts(entry: Any) -> list[float]:
+    """The unloads of a lane still on their way, by the time each was sent."""
+    value = entry.get(UNLOADING) if isinstance(entry, dict) else None
+    if isinstance(value, (int, float)):
+        return [float(value)]
+    if isinstance(value, list):
+        return [float(item) for item in value if isinstance(item, (int, float))]
+    return []
+
+
+def unloading_lanes(record: dict[str, dict[str, Any]] | None) -> dict[str, list[float]]:
+    """Lanes of a record an operator is unloading, with their unloads still on their way."""
+    return {lane_id: attempts for lane_id, entry in (record or {}).items() if (attempts := unload_attempts(entry))}
 
 
 def missing_lanes(

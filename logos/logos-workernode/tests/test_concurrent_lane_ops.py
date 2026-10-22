@@ -686,3 +686,14 @@ async def test_a_failed_wake_holds_its_gpu_until_the_process_has_exited() -> Non
     with pytest.raises(RuntimeError):
         await waking
     await asyncio.wait_for(starting, timeout=2)
+
+
+def test_a_model_stays_protected_while_one_of_two_starts_remains() -> None:
+    manager = _manager_with({})
+    manager.reserve_model_startup(MODEL, "a")
+    manager.reserve_model_startup(MODEL, "b")
+    manager.release_model_startup(MODEL, "a")  # one start failed
+    manager.release_model_startup(MODEL, "a")  # released again by its finally
+    assert MODEL in manager.starting_models()
+    manager.release_model_startup(MODEL, "b")
+    assert MODEL not in manager.starting_models()

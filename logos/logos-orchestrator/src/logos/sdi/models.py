@@ -345,6 +345,9 @@ class CapacityPlanAction:
     # its worker restarted (see logos.capacity.lane_restore). A locked worker
     # refuses every other automatic action.
     restore: bool = False
+    # For a restore action: (lock id, revision) of the lock it was planned
+    # for. The executor drops the action when that lock has changed since.
+    restore_lock: Optional[Any] = None
 
     def to_dict(self) -> dict:
         return {

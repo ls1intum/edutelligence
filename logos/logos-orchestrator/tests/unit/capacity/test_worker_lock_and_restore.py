@@ -505,7 +505,7 @@ def test_a_refused_unload_records_the_lane_again():
 def _age_unload(planner, seconds):
     for (pid, _lock_id), (_locked, _revision, record) in planner._lock_cache().peek().items():
         if pid == PROVIDER and record and "unloading" in record.get(LANE, {}):
-            record[LANE]["unloading"] -= seconds
+            record[LANE]["unloading"] = [since - seconds for since in record[LANE]["unloading"]]
 
 
 def test_an_unload_mark_survives_an_orchestrator_restart():
@@ -655,3 +655,34 @@ def test_a_late_refusal_of_an_earlier_unload_keeps_a_retry_suppressed():
 
     asyncio.run(retried())
     assert _unloading_marked(planner)
+
+
+def test_a_refused_retry_keeps_an_earlier_unload_still_on_its_way():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+
+    async def retried():
+        await planner.forget_restored_lane(PROVIDER, LANE)  # A: timed out, still queued on the worker
+        await asyncio.sleep(0.01)
+        retry = await planner.forget_restored_lane(PROVIDER, LANE)  # B: never went out
+        await planner.unload_refused(PROVIDER, LANE, retry)
+
+    asyncio.run(retried())
+    assert _unloading_marked(planner)
+    registry.lanes = []  # A unloads it in the end
+    assert _restore(planner) == []
+
+
+def test_a_planned_restore_is_dropped_when_its_lock_changed_before_dispatch():
+    record = {EMBED_LANE: _entry(EMBED_LANE, EMBED, "0", True)}
+    registry = _Registry([_runtime_lane(EMBED_LANE, EMBED, "0")])
+    table = _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, {EMBED_LANE: {**record[EMBED_LANE], "resleep": True}})])
+    planner = _planner(registry, table)
+    sleeps = _restore(planner)
+    assert [a.action for a in sleeps] == ["sleep_l1"]
+    planner.apply_lane_lock(PROVIDER, WORKER_LOCK_ID, False, 10)
+    planner.apply_lane_lock(PROVIDER, WORKER_LOCK_ID, True, 11, record=None)  # unlocked and locked again
+    planner._execute_action_core = AsyncMock(return_value=True)
+    assert asyncio.run(planner._execute_action_with_confirmation(sleeps[0])) is False
+    planner._execute_action_core.assert_not_awaited()

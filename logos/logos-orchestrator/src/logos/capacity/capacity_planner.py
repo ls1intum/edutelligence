@@ -50,6 +50,7 @@ from .lane_restore import (
     WORKER_LOCK_ID,
     missing_lanes,
     observed_lanes,
+    unload_attempts,
     unloading_lanes,
     updated_record,
 )
@@ -861,7 +862,7 @@ class CapacityPlanner:
                 for (pid, lane_id), (locked, revision, record) in self._lock_cache().peek().items()
                 if pid == provider_id and locked
             ]
-            unloading: dict[str, float] = {}
+            unloading: dict[str, list[float]] = {}
             # The re-sleeps due are those the current worker lock marks, also
             # after an orchestrator restart; an earlier lock's do not carry over.
             pending.difference_update({key for key in pending if key[0] == provider_id})
@@ -893,7 +894,12 @@ class CapacityPlanner:
             if isinstance(lane, dict) and str(lane.get("runtime_state") or "") in {"loaded", "running"}
         }
         before = self._kept_asleep(provider_id)
+        revisions = {lock_id: revision for lock_id, revision, _record in locks}
         actions = self._plan_restore(provider_id, records, observed, present, cycle_reserved_lane_ids, ready)
+        for action in actions:
+            # The lock the action serves: checked again right before dispatch.
+            lock_id = WORKER_LOCK_ID if action.action != "load" else action.restore_lock
+            action.restore_lock = (lock_id, revisions.get(lock_id))
         after = self._kept_asleep(provider_id)
         planned_sleeps = {a.lane_id for a in actions if a.action == "sleep_l1"}
         # A planned sleep keeps its mark until it is attempted (see the executor).
@@ -923,6 +929,14 @@ class CapacityPlanner:
             if record == entry[2]:
                 return True
             return await self._save_restore_record(provider_id, WORKER_LOCK_ID, entry[1], record)
+
+    def _restore_lock_holds(self, action: CapacityPlanAction) -> bool:
+        """Whether the lock a restore action was planned for still holds, unchanged."""
+        if not isinstance(action.restore_lock, tuple):
+            return True
+        lock_id, revision = action.restore_lock
+        held = self._lock_cache().peek().get((int(action.provider_id), lock_id))
+        return held is not None and held[0] and held[1] == revision
 
     def _kept_asleep(self, provider_id: int) -> set[str]:
         return {lane_id for pid, lane_id in self._restore_sleep_pending() if pid == provider_id}
@@ -981,6 +995,7 @@ class CapacityPlanner:
                         params=lane_config,
                         reason="Restoring a locked lane as it was before the worker restarted",
                         restore=True,
+                        restore_lock=lock_id,
                     )
                 )
                 logger.info(
@@ -1091,7 +1106,8 @@ class CapacityPlanner:
     ) -> bool:
         """Set (or, with None, clear) the unloading mark of a lane in every lock that records it.
 
-        Clearing for *attempt* leaves a mark that a later attempt set.
+        Setting adds *since* as one more attempt; clearing removes *attempt*
+        and keeps the mark while another attempt may still unload the lane.
         """
         ok = True
         async with self._restore_record_lock(provider_id):
@@ -1103,11 +1119,18 @@ class CapacityPlanner:
                 if lane_id not in (record or {}) and (since is None or lock_id not in (WORKER_LOCK_ID, lane_id)):
                     continue
                 current = (record or {}).get(lane_id, {})
-                if since is None and attempt is not None and current.get(UNLOADING) != attempt:
-                    continue  # another unload of the lane is still on its way
-                entry = {k: v for k, v in current.items() if k != UNLOADING}
+                attempts = unload_attempts(current)
                 if since is not None:
-                    entry[UNLOADING] = since
+                    attempts = [*attempts, since]
+                elif attempt is not None:
+                    if attempt not in attempts:
+                        continue  # that attempt was settled already
+                    attempts = [a for a in attempts if a != attempt]
+                else:
+                    attempts = []
+                entry = {k: v for k, v in current.items() if k != UNLOADING}
+                if attempts:
+                    entry[UNLOADING] = attempts
                 if entry:
                     new_record = {**(record or {}), lane_id: entry}
                 else:
@@ -1176,6 +1199,14 @@ class CapacityPlanner:
         """
         if action.operator_initiated:
             return False
+        if action.restore and not self._restore_lock_holds(action):
+            logger.info(
+                "Aborting %s of lane %s on worker=%s: the lock that planned it changed while the lane drained",
+                action.action,
+                action.lane_id,
+                self._facade.get_provider_name(action.provider_id) or action.provider_id,
+            )
+            return True
         if self.is_worker_locked(action.provider_id) and not (action.restore or MAINTENANCE_RECOVERY.get()):
             logger.info(
                 "Aborting %s of lane %s on worker=%s: the worker was locked while the lane drained",
@@ -9520,6 +9551,14 @@ class CapacityPlanner:
             action.action in {"stop", "sleep_l1", "sleep_l2", "reconfigure_kv_cache"}
             and benchmark_reservations.owner(action.provider_id, action.model_name) is not None
         ):
+            return False
+        if action.restore and not self._restore_lock_holds(action):
+            logger.info(
+                "Skipping %s of lane %s on worker=%s: the lock that planned it changed",
+                action.action,
+                action.lane_id,
+                self._facade.get_provider_name(action.provider_id) or action.provider_id,
+            )
             return False
         if self.is_worker_locked(action.provider_id) and not (
             action.operator_initiated or action.restore or MAINTENANCE_RECOVERY.get()

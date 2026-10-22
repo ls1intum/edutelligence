@@ -490,7 +490,9 @@ class LaneManager:
         # spawn succeeds. The RAM-cache re-plan does not take self._lock, so
         # from its view the model is unprotected in that window — evicting it
         # would rmtree the directory a live spawn is reading weights from.
-        self._starting_models: set[str] = set()
+        # Startup reservations by lane id: two lanes of one model can start at
+        # once, and the model stays protected until the last of them is done.
+        self._starting_models: dict[str, str] = {}
         # Lanes whose add is in flight (HF_HOME selection, cache copy, spawn):
         # lane_id -> lane_config. They are absent from _handles until the
         # spawn succeeds, so the RAM-cache re-plan reads them here to reserve
@@ -507,23 +509,23 @@ class LaneManager:
         """
         return list(self._pending_lane_configs.items())
 
-    def reserve_model_startup(self, model: str) -> None:
+    def reserve_model_startup(self, model: str, lane_id: str | None = None) -> None:
         """Protect ``model`` against RAM-cache eviction for a lane
         startup/restart — from before its HF_HOME is selected until its
         handle is registered (or the failed startup is cleaned up)."""
-        self._starting_models.add(model)
+        self._starting_models[lane_id if lane_id is not None else model] = model
 
-    def release_model_startup(self, model: str) -> None:
-        """Drop a startup reservation: the handle is registered (the model is
-        protected through _handles now) or startup failed and its cleanup is
-        done."""
-        self._starting_models.discard(model)
+    def release_model_startup(self, model: str, lane_id: str | None = None) -> None:
+        """Drop a lane's startup reservation: the handle is registered (the
+        model is protected through _handles now) or startup failed and its
+        cleanup is done. Idempotent; other lanes of the model keep theirs."""
+        self._starting_models.pop(lane_id if lane_id is not None else model, None)
 
     def starting_models(self) -> frozenset[str]:
         """Models currently in a lane startup/restart transition (see
         :meth:`reserve_model_startup`). The RAM-cache re-plan unions this into
         its protected set."""
-        return frozenset(self._starting_models)
+        return frozenset(self._starting_models.values())
 
     def validate_capabilities(
         self,
@@ -2944,7 +2946,7 @@ class LaneManager:
         # HF_HOME (possibly the tmpfs RAM cache) is selected so the re-plan
         # cannot evict the directory the spawn is about to read from.
         starting_model = lane_config.model
-        self.reserve_model_startup(starting_model)
+        self.reserve_model_startup(starting_model, lane_id)
         # Register the lane as pending BEFORE its cache copy is admitted: while
         # it is absent from _handles, only this view lets the re-plan reserve
         # its future sleeping footprint first. On a tight host the copy could
@@ -3072,7 +3074,7 @@ class LaneManager:
             # failed startup must not leave the reservation or the pending
             # entry behind.
             self._pending_lane_configs.pop(lane_id, None)
-            self.release_model_startup(starting_model)
+            self.release_model_startup(starting_model, lane_id)
             self._finish_loading(lane_id)
 
     def _launch_gpu_set(self, lane_config: LaneConfig) -> frozenset[int] | None:
@@ -3155,7 +3157,7 @@ class LaneManager:
         # succeeds — reserve the model for the whole stop/spawn window so the
         # lock-free re-plan cannot evict it in between.
         starting_model = new_config.model
-        self.reserve_model_startup(starting_model)
+        self.reserve_model_startup(starting_model, lane_id)
         try:
             new_config = self._auto_tensor_parallel(new_config)
             old_handle = self._handles[lane_id]
@@ -3285,13 +3287,13 @@ class LaneManager:
             # Safe under self._lock: the re-plan's lane inspection takes no
             # lock of its own (as in the add loop above). Crash/stuck recovery
             # restarts the same config, so the re-plan is a no-op there.
-            self.release_model_startup(starting_model)
+            self.release_model_startup(starting_model, lane_id)
             await self._notify_lane_added()
         finally:
             # The success path above already released the reservation before
             # its re-plan; this keeps the release for the spawn-failure
             # branch (idempotent — see _add_lane_unlocked).
-            self.release_model_startup(starting_model)
+            self.release_model_startup(starting_model, lane_id)
             self._finish_loading(lane_id)
 
     def _detach_lane_unlocked(self, lane_id: str) -> tuple[ProcessHandle | None, int | None]:
