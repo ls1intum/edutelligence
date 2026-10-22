@@ -19,6 +19,13 @@ AUTOMATIC_CALIBRATION = ContextVar("automatic_calibration", default=False)
 # commands one at a time can run a start that long after it was sent.
 UNCONFIRMED_CLAIM_GRACE = timedelta(minutes=20)
 
+# The worker's only refusal of a start that leaves a session running. Every
+# other refusal is answered before the worker creates a session.
+SESSION_ALREADY_RUNNING = "calibration session already in progress"
+
+# How a worker answers a command its build does not implement.
+UNSUPPORTED_COMMAND = "Unsupported bridge command"
+
 
 class MaintenanceCoordinator:
     def __init__(self, registry):
@@ -54,9 +61,12 @@ class MaintenanceCoordinator:
 
             try:
                 result = await send(on_dispatched)
-            except LogosNodeCommandRejectedError:
-                # A refusal settles the start command. It may mean that another
-                # session is live, so only a fresh idle reply releases the claim.
+            except LogosNodeCommandRejectedError as exc:
+                if SESSION_ALREADY_RUNNING not in str(exc):
+                    # No session was started, and none is running.
+                    store.release_calibration(token)
+                    raise
+                # Another session is live, so only a fresh idle reply releases the claim.
                 store.confirm_calibration(token)
                 try:
                     await self._release_if_finished({"provider_id": provider_id, "token": token})
@@ -111,10 +121,120 @@ class MaintenanceCoordinator:
                     )
         return completed
 
+    async def release_claim(self, provider_id, token):
+        """Release one calibration claim on an operator's request.
+
+        Tries a normal stop first. The claim is released without the worker's
+        confirmation only when the worker cannot answer: it is offline, or the
+        stop or the status query fails. A worker that still reports a session
+        keeps its claim.
+        """
+        from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, MaintenanceBusyError
+
+        with store.cluster_lock() as connection:
+            if connection is None:
+                raise MaintenanceBusyError("Maintenance command is still in progress")
+            claim = next(
+                (c for c in store.calibration_claims() if c["token"] == token and c["provider_id"] == provider_id),
+                None,
+            )
+            if claim is None:
+                raise LookupError("The calibration claim no longer exists")
+            failure = "worker offline"
+            online = self.registry.is_provider_online(provider_id)
+            if online and not claim["confirmed"] and not _past_grace(claim):
+                # The start may still be queued on the worker and run after a stop.
+                raise MaintenanceBusyError("The calibration start may still be running. Try again later.")
+            if online:
+                try:
+                    # Sent directly: send_command would route the stop back here.
+                    await self.registry._send_command(provider_id, "stop_calibration_session", {}, 30)
+                    if await self._release_if_finished(claim):
+                        return {"released": True, "forced": False}
+                    raise MaintenanceBusyError("The worker still reports a calibration session")
+                except MaintenanceBusyError:
+                    raise
+                except (LogosNodeOfflineError, LogosNodeCommandError, TimeoutError) as exc:
+                    failure = str(exc) or type(exc).__name__
+                if self.registry.is_calibrating(provider_id):
+                    raise MaintenanceBusyError("The worker still reports a calibration session")
+            store.release_calibration(token)
+            logger.warning(
+                "Calibration claim %s for provider %s released by an operator without worker confirmation "
+                "(%s; automatic=%s, confirmed=%s, age=%ss)",
+                token,
+                provider_id,
+                failure,
+                claim.get("automatic"),
+                claim.get("confirmed"),
+                int(float(claim.get("age_s") or 0)),
+            )
+            return {"released": True, "forced": True}
+
+    def slot_status(self):
+        """Everything that holds the maintenance slot right now."""
+        holders = store.maintenance_holders()
+        calibrations = []
+        for claim in holders["calibrations"]:
+            pid = claim["provider_id"]
+            calibrations.append(
+                {
+                    "provider_id": pid,
+                    "provider_name": claim.get("provider_name"),
+                    "claim_token": claim["token"],
+                    "automatic": bool(claim["automatic"]),
+                    "confirmed": bool(claim["confirmed"]),
+                    "since": claim["created_at"],
+                    "age_s": _seconds(claim.get("age_s")),
+                    **self._worker_state(pid),
+                }
+            )
+        claimed = {claim["provider_id"] for claim in calibrations}
+        for pid in self.registry.active_provider_ids():
+            # A session without a claim, e.g. started before the coordinator, also holds the slot.
+            if pid not in claimed and self.registry.is_calibrating(pid):
+                calibrations.append(
+                    {
+                        "provider_id": pid,
+                        "provider_name": None,
+                        "claim_token": None,
+                        "automatic": None,
+                        "confirmed": None,
+                        "since": None,
+                        "age_s": None,
+                        **self._worker_state(pid),
+                    }
+                )
+        benchmarks = [{**row, "age_s": _seconds(row.get("age_s"))} for row in holders["benchmarks"]]
+        recoveries = [{**row, "age_s": _seconds(row.get("age_s"))} for row in holders["recoveries"]]
+        return {
+            "limit": maintenance_node_limit(),
+            "free": not (calibrations or benchmarks or recoveries),
+            "calibrations": calibrations,
+            "benchmarks": benchmarks,
+            "recoveries": recoveries,
+        }
+
+    def _worker_state(self, provider_id):
+        return {
+            "online": self.registry.is_provider_online(provider_id),
+            "calibrating": self.registry.is_calibrating(provider_id),
+            "status_supported": self.registry.supports_action(provider_id, "get_calibration_status"),
+        }
+
     async def _release_if_finished(self, claim):
-        result = await self.registry.send_command(
-            claim["provider_id"], "get_calibration_status", {}, timeout_seconds=20
-        )
+        from logos.logosnode_registry import LogosNodeCommandError
+
+        try:
+            result = await self.registry.send_command(
+                claim["provider_id"], "get_calibration_status", {}, timeout_seconds=20
+            )
+        except LogosNodeCommandError as exc:
+            if UNSUPPORTED_COMMAND not in str(exc):
+                raise
+            # The connected worker has no status command, so its status
+            # reports are the only account of its session left.
+            result = {"calibrating": bool(self.registry.is_calibrating(claim["provider_id"]))}
         if result.get("calibrating") is False:
             store.release_calibration(claim["token"])
             return True
@@ -125,6 +245,10 @@ class MaintenanceCoordinator:
         finally:
             # Run only after GuideLLM and its cancellation cleanup have ended.
             store.release_benchmark(job_id)
+
+
+def _seconds(value):
+    return None if value is None else int(float(value))
 
 
 def _past_grace(claim):

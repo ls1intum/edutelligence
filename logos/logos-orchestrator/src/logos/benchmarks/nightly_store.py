@@ -230,6 +230,49 @@ def calibration_claims():
         ]
 
 
+def maintenance_holders():
+    """Calibration claims, maintenance benchmarks and nightly recoveries, with names for display."""
+    with DBManager() as db:
+        calibrations = db.session.execute(
+            text(
+                "SELECT c.*, EXTRACT(EPOCH FROM now() - c.created_at) AS age_s, p.name AS provider_name "
+                "FROM maintenance_calibration c LEFT JOIN providers p ON p.id = c.provider_id ORDER BY c.provider_id"
+            )
+        ).mappings()
+        calibrations = [dict(row) for row in calibrations]
+        # The same jobs and claims has_active_benchmarks counts.
+        benchmarks = db.session.execute(
+            text(
+                "SELECT COALESCE(j.id, b.job_id) AS job_id, j.status, "
+                "COALESCE(b.created_at, j.created_at) AS since, "
+                "EXTRACT(EPOCH FROM now() - COALESCE(b.created_at, j.created_at)) AS age_s, "
+                "COALESCE(b.provider_id, (j.request_payload->>'provider_id')::integer) AS provider_id, "
+                "COALESCE(p.name, j.request_payload->>'provider_name') AS provider_name, "
+                "j.request_payload->>'model_name' AS model_name, "
+                "COALESCE(j.request_payload->>'nightly', 'false') = 'true' AS nightly "
+                "FROM (SELECT * FROM jobs WHERE environment = 'model-provider-benchmark' "
+                "AND status IN ('pending', 'running')) AS j "
+                "FULL OUTER JOIN maintenance_benchmark AS b ON b.job_id = j.id "
+                "LEFT JOIN providers p ON p.id = COALESCE(b.provider_id, (j.request_payload->>'provider_id')::integer) "
+                "ORDER BY since, job_id"
+            )
+        ).mappings()
+        benchmarks = [dict(row) for row in benchmarks]
+        recoveries = db.session.execute(
+            text(
+                "SELECT n.model_provider_id, n.status, n.updated_at AS since, "
+                "EXTRACT(EPOCH FROM now() - n.updated_at) AS age_s, "
+                "COALESCE(mp.provider_id, (n.recovery->>'provider_id')::integer) AS provider_id, "
+                "p.name AS provider_name, COALESCE(m.name, n.recovery->>'model') AS model_name "
+                "FROM nightly_benchmarks n LEFT JOIN model_provider mp ON mp.id = n.model_provider_id "
+                "LEFT JOIN providers p ON p.id = mp.provider_id LEFT JOIN models m ON m.id = mp.model_id "
+                "WHERE n.recovery IS NOT NULL ORDER BY n.model_provider_id"
+            )
+        ).mappings()
+        recoveries = [dict(row) for row in recoveries]
+    return {"calibrations": calibrations, "benchmarks": benchmarks, "recoveries": recoveries}
+
+
 def claim_calibration(provider_id, token, automatic=False):
     with DBManager() as db:
         db.session.execute(

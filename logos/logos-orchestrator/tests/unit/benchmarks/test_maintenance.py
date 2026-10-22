@@ -256,14 +256,14 @@ async def test_busy_admission_does_not_mark_calibration_attempt_completed():
     assert 1 not in service._completed_this_window
 
 
-async def test_explicit_idle_refusal_releases_manual_claim_for_next_start(coordinator):
+async def test_running_session_refusal_releases_claim_after_idle_status(coordinator):
     from logos.logosnode_registry import LogosNodeCommandRejectedError
 
     service, state = coordinator
 
     async def refuse(callback):
         callback(None)
-        raise LogosNodeCommandRejectedError("Node is degraded")
+        raise LogosNodeCommandRejectedError(module.SESSION_ALREADY_RUNNING)
 
     with pytest.raises(LogosNodeCommandRejectedError):
         await service.start_calibration(1, refuse)
@@ -285,7 +285,7 @@ async def test_refused_start_retains_claim_until_fresh_idle_confirmation(coordin
 
     async def refuse(callback):
         callback(None)
-        raise LogosNodeCommandRejectedError("Worker refused calibration")
+        raise LogosNodeCommandRejectedError(module.SESSION_ALREADY_RUNNING)
 
     with pytest.raises(LogosNodeCommandRejectedError):
         await service.start_calibration(1, refuse)
@@ -364,3 +364,197 @@ async def test_automatic_calibration_starts_two_workers_and_stops_both_at_window
     await service._tick()
     assert {c.args[0] for c in registry.send_command.await_args_list} == {1, 2}
     assert all(c.args[1] == "stop_calibration_session" for c in registry.send_command.await_args_list)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "calibration is unavailable on the Metal backend: it measures against nvidia-smi",
+        "node is in a degraded state (reason=gpu_error): GPU 0 ERR",
+    ],
+)
+async def test_refusal_without_running_session_releases_claim_at_once(coordinator, error):
+    from logos.logosnode_registry import LogosNodeCommandRejectedError
+
+    service, state = coordinator
+
+    async def refuse(callback):
+        callback(None)
+        raise LogosNodeCommandRejectedError(error)
+
+    with pytest.raises(LogosNodeCommandRejectedError):
+        await service.start_calibration(1, refuse)
+    assert state["claim"] is None
+    # The refusal itself settles it; the worker may not even know the status command.
+    service.registry.send_command.assert_not_awaited()
+    await service.start_calibration(2, dispatch)
+    assert state["claim"]["provider_id"] == 2
+
+
+@pytest.mark.parametrize("calibrating", [False, True])
+async def test_worker_without_status_command_is_judged_by_its_status_reports(coordinator, calibrating):
+    service, state = coordinator
+    await service.start_calibration(1, dispatch)
+    service.registry.send_command.side_effect = LogosNodeCommandError(
+        "Unsupported bridge command 'get_calibration_status'"
+    )
+    service.registry.is_calibrating.return_value = calibrating
+    assert await service.reconcile() == ([] if calibrating else [1])
+    assert (state["claim"] is not None) == calibrating
+
+
+async def test_other_status_command_errors_keep_the_claim(coordinator):
+    service, state = coordinator
+    await service.start_calibration(1, dispatch)
+    service.registry.send_command.side_effect = LogosNodeCommandError("worker busy")
+    assert await service.reconcile() == []
+    assert state["claim"] is not None
+
+
+async def _claimed(service, state, confirmed=True):
+    await service.start_calibration(1, dispatch)
+    state["claim"]["confirmed"] = confirmed
+    state["claim"]["age_s"] = 5
+    return state["claim"]["token"]
+
+
+async def test_release_claim_of_offline_worker_releases_without_contacting_it(coordinator):
+    service, state = coordinator
+    token = await _claimed(service, state)
+    service.registry.is_provider_online.return_value = False
+    service.registry._send_command = AsyncMock()
+    assert await service.release_claim(1, token) == {"released": True, "forced": True}
+    assert state["claim"] is None
+    service.registry._send_command.assert_not_awaited()
+
+
+async def test_release_claim_stops_an_online_worker_before_releasing(coordinator):
+    service, state = coordinator
+    token = await _claimed(service, state)
+    service.registry.is_provider_online.return_value = True
+    service.registry._send_command = AsyncMock(return_value={"ok": True, "was_active": True})
+    assert await service.release_claim(1, token) == {"released": True, "forced": False}
+    service.registry._send_command.assert_awaited_once_with(1, "stop_calibration_session", {}, 30)
+    assert state["claim"] is None
+
+
+@pytest.mark.parametrize("status", [{"calibrating": True}, LogosNodeCommandError("Unsupported bridge command")])
+async def test_release_claim_refuses_while_the_worker_reports_a_session(coordinator, status):
+    service, state = coordinator
+    token = await _claimed(service, state)
+    service.registry.is_provider_online.return_value = True
+    service.registry.is_calibrating.return_value = True
+    service.registry._send_command = AsyncMock(return_value={"ok": True})
+    if isinstance(status, Exception):
+        service.registry.send_command.side_effect = status
+    else:
+        service.registry.send_command.return_value = status
+    with pytest.raises(MaintenanceBusyError):
+        await service.release_claim(1, token)
+    assert state["claim"] is not None
+
+
+async def test_release_claim_of_unreachable_worker_releases_when_no_session_is_reported(coordinator):
+    service, state = coordinator
+    token = await _claimed(service, state)
+    service.registry.is_provider_online.return_value = True
+    service.registry._send_command = AsyncMock(side_effect=TimeoutError())
+    assert await service.release_claim(1, token) == {"released": True, "forced": True}
+    assert state["claim"] is None
+
+
+async def test_release_claim_waits_for_an_unconfirmed_start_on_an_online_worker(coordinator):
+    service, state = coordinator
+    token = await _claimed(service, state, confirmed=False)
+    service.registry.is_provider_online.return_value = True
+    with pytest.raises(MaintenanceBusyError):
+        await service.release_claim(1, token)
+    assert state["claim"] is not None
+    state["claim"]["age_s"] = module.UNCONFIRMED_CLAIM_GRACE.total_seconds()
+    service.registry._send_command = AsyncMock(return_value={"ok": True})
+    assert (await service.release_claim(1, token))["released"]
+
+
+async def test_release_claim_needs_the_current_token(coordinator):
+    service, state = coordinator
+    await _claimed(service, state)
+    with pytest.raises(LookupError):
+        await service.release_claim(1, "older-token")
+    with pytest.raises(LookupError):
+        await service.release_claim(2, state["claim"]["token"])
+    assert state["claim"] is not None
+
+
+def test_slot_status_lists_claims_live_sessions_benchmarks_and_recoveries(coordinator, monkeypatch):
+    service, _ = coordinator
+    since = datetime(2026, 10, 22, 4, 0, tzinfo=UTC)
+    monkeypatch.setattr(
+        module.store,
+        "maintenance_holders",
+        lambda: {
+            "calibrations": [
+                dict(
+                    provider_id=1,
+                    provider_name="worker-a",
+                    token="t1",
+                    automatic=True,
+                    confirmed=True,
+                    created_at=since,
+                    age_s=61.7,
+                )
+            ],
+            "benchmarks": [dict(job_id=7, status="running", provider_id=2, model_name="m", nightly=False, age_s=3.2)],
+            "recoveries": [],
+        },
+    )
+    service.registry.active_provider_ids.return_value = [1, 2]
+    service.registry.is_calibrating.side_effect = lambda pid: True
+    service.registry.is_provider_online.side_effect = lambda pid: pid == 2
+    service.registry.supports_action.return_value = False
+    status = service.slot_status()
+    assert status["free"] is False
+    assert status["limit"] == 1
+    first, second = status["calibrations"]
+    assert first == dict(
+        provider_id=1,
+        provider_name="worker-a",
+        claim_token="t1",
+        automatic=True,
+        confirmed=True,
+        since=since,
+        age_s=61,
+        online=False,
+        calibrating=True,
+        status_supported=False,
+    )
+    assert second["provider_id"] == 2 and second["claim_token"] is None and second["online"]
+    assert status["benchmarks"][0]["age_s"] == 3
+
+
+def test_slot_status_reports_a_free_slot(coordinator, monkeypatch):
+    service, _ = coordinator
+    monkeypatch.setattr(
+        module.store, "maintenance_holders", lambda: {"calibrations": [], "benchmarks": [], "recoveries": []}
+    )
+    status = service.slot_status()
+    assert status["free"] is True
+    assert status["calibrations"] == status["benchmarks"] == status["recoveries"] == []
+
+
+def test_automatic_calibration_skips_workers_without_the_status_command():
+    from logos.capacity.calibration_orchestrator import CalibrationOrchestrator
+
+    registry, facade = MagicMock(), MagicMock()
+    facade.provider_ids.return_value = [1, 2]
+    registry.supports_action.side_effect = lambda pid, action: pid == 2 or action != "get_calibration_status"
+    service = CalibrationOrchestrator(registry, facade)
+    service._is_in_window = lambda: True
+    service._was_in_window = True
+    service._provider_is_unhealthy = lambda _: False
+    service._provider_has_active_requests = lambda _: False
+    service._provider_has_uncalibrated_models = lambda _: True
+    assert service._pick_next_provider() == 2
+    assert service._pick_next_provider(excluding={2}) is None
+    # A worker that cannot be calibrated automatically does not hold benchmarks back.
+    facade.provider_ids.return_value = [1]
+    assert not service.benchmarks_must_wait()

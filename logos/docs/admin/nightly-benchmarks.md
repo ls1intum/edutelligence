@@ -208,11 +208,17 @@ PostgreSQL stores the active calibration and manual benchmark claims.
 A worker must confirm that calibration ended before the orchestrator releases its claim.
 A timeout or a terminal event alone does not release it.
 Update workers before use: the coordinator requires the `get_calibration_status` command.
+Automatic calibration skips a worker that does not list this command.
 Manual benchmarks retain their claim until process cleanup completes.
 
-If the worker explicitly refuses calibration, the coordinator requests fresh calibration status.
+If the worker refuses calibration because a session is already running, the coordinator requests fresh calibration status.
 It releases the claim only when the worker confirms that no calibration is active.
 If this status request fails, reconciliation retries later and the claim stays active.
+Any other refusal releases the claim at once. The worker did not start a session.
+
+A worker without the `get_calibration_status` command answers it with `Unsupported bridge command`.
+The coordinator then uses the calibration state from the worker's status reports.
+It releases the claim when the worker reports no calibration session.
 
 If a calibration start has no reply, the claim stays active.
 Use the calibration stop action after the worker reconnects.
@@ -248,7 +254,14 @@ The scheduler continues its cycle and checks other calibration claims.
 Benchmarks remain blocked until all calibration claims are released.
 Reconnection and a confirmed calibration stop are the preferred recovery path.
 
-If a worker cannot reconnect, use this procedure with database administrator access.
+The **Maintenance** status on the statistics page shows every claim.
+For an offline worker, or a worker that cannot report its calibration status, it offers **Release claim**.
+This action first tries a normal stop. It keeps the claim while the worker still reports a session.
+It keeps an unconfirmed start on an online worker for 20 minutes, because the start can still run.
+Otherwise it releases the claim. The orchestrator log and the audit log record the release.
+Before you release the claim of an offline worker, make sure that the worker cannot resume calibration.
+
+If the web application is not available, use this procedure with database administrator access.
 
 1. Identify the affected `provider_id` and `token` in `maintenance_calibration`.
 2. Stop the worker and its inference processes through the host management system.

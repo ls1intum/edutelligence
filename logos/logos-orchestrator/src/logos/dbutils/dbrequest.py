@@ -213,6 +213,11 @@ class InternalStopCalibrationRequest(BaseModel):
     provider_id: int
 
 
+class InternalReleaseCalibrationClaimRequest(BaseModel):
+    provider_id: int
+    claim_token: str
+
+
 class InternalDeleteLaneRequest(BaseModel):
     provider_id: int
     lane_id: str

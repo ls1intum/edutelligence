@@ -225,4 +225,7 @@ Conflicting manual starts return HTTP 409 rather than queueing.
 Migration `065_nightly_benchmarks.xml` and workers with
 `get_calibration_status` support are required. Calibration completion and
 benchmark cleanup must finish before their claims are released.
+`GET /internal/maintenance/status` lists the current holders, and
+`POST /internal/maintenance/calibration/release` releases one calibration claim
+after a normal stop on an administrator's request.
 See the [operator guide](../../docs/admin/nightly-benchmarks.md#calibration-priority-and-shared-execution).

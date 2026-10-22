@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration;
 
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.util.Map;
@@ -11,6 +12,8 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -20,6 +23,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.client.HttpClientErrorException;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -30,7 +34,9 @@ import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.notNull;
@@ -572,6 +578,99 @@ class ProviderControllerTest {
                 .content("{}"))
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.error").value("provider_id is required"));
+    }
+
+    // ------------------------------------------------------------ maintenance slot
+
+    @Test
+    void maintenanceEndpoints_requireLogosAdmin() throws Exception {
+        mvc.perform(get("/logosdb/providers/logosnode/maintenance")
+                .with(TestJwt.adminUser()))
+           .andExpect(status().isForbidden());
+        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_calibration")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"claim_token\":\"t\"}"))
+           .andExpect(status().isForbidden());
+        verify(workerAdminClient, never()).maintenanceStatus();
+        verify(workerAdminClient, never()).releaseCalibrationClaim(anyInt(), anyString());
+    }
+
+    @Test
+    void maintenanceStatus_proxiesTheOrchestratorView() throws Exception {
+        when(workerAdminClient.maintenanceStatus())
+            .thenReturn(ResponseEntity.ok(Map.of("free", false, "limit", 1)));
+
+        mvc.perform(get("/logosdb/providers/logosnode/maintenance")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.free").value(false))
+           .andExpect(jsonPath("$.limit").value(1));
+    }
+
+    @Test
+    void maintenanceStatus_reportsAnUnreachableOrchestrator() throws Exception {
+        when(workerAdminClient.maintenanceStatus())
+            .thenThrow(new IllegalStateException("Orchestrator URL or internal secret not configured"));
+
+        mvc.perform(get("/logosdb/providers/logosnode/maintenance")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isServiceUnavailable())
+           .andExpect(jsonPath("$.error").value("Orchestrator URL or internal secret not configured"));
+    }
+
+    @Test
+    void releaseCalibrationClaim_requiresProviderAndToken() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_calibration")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and claim_token are required"));
+        verify(workerAdminClient, never()).releaseCalibrationClaim(anyInt(), anyString());
+    }
+
+    @Test
+    void releaseCalibrationClaim_forwardsAndRecordsTheRelease() throws Exception {
+        jdbc.update("DELETE FROM audit_log WHERE action = 'provider.calibration_claim_released'");
+        when(workerAdminClient.releaseCalibrationClaim(6001, "claim-1"))
+            .thenReturn(ResponseEntity.ok(Map.of("released", true, "forced", true)));
+
+        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_calibration")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"claim_token\":\"claim-1\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.forced").value(true));
+
+        verify(workerAdminClient).releaseCalibrationClaim(6001, "claim-1");
+        Map<String, Object> entry = jdbc.queryForMap(
+            "SELECT target_type, target_id, CAST(before_state AS text) AS before_state, "
+                + "CAST(after_state AS text) AS after_state FROM audit_log "
+                + "WHERE action = 'provider.calibration_claim_released'");
+        assertEquals("provider", entry.get("target_type"));
+        assertEquals("6001", entry.get("target_id"));
+        assertTrue(entry.get("before_state").toString().contains("claim-1"));
+        assertTrue(entry.get("after_state").toString().contains("\"confirmed_by_worker\": false"));
+    }
+
+    @Test
+    void releaseCalibrationClaim_passesARefusalThroughWithoutAuditEntry() throws Exception {
+        jdbc.update("DELETE FROM audit_log WHERE action = 'provider.calibration_claim_released'");
+        when(workerAdminClient.releaseCalibrationClaim(6001, "claim-1"))
+            .thenThrow(HttpClientErrorException.create(HttpStatus.CONFLICT, "Conflict", HttpHeaders.EMPTY,
+                "{\"detail\":\"The worker still reports a calibration session\"}".getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8));
+
+        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_calibration")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"claim_token\":\"claim-1\"}"))
+           .andExpect(status().isConflict())
+           .andExpect(jsonPath("$.detail").value("The worker still reports a calibration session"));
+
+        assertEquals(0, jdbc.queryForObject(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'provider.calibration_claim_released'", Integer.class));
     }
 
     // ------------------------------------------------------------ lane locks

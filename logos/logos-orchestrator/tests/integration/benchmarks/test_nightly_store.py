@@ -34,11 +34,18 @@ def database(monkeypatch):
     )
     tree = ElementTree.parse(migration)
     with engine.begin() as connection:
-        connection.execute(text("CREATE TABLE model_provider (id integer PRIMARY KEY)"))
-        connection.execute(text("INSERT INTO model_provider VALUES (31), (32)"))
+        connection.execute(text("CREATE TABLE providers (id integer PRIMARY KEY, name text)"))
+        connection.execute(text("CREATE TABLE models (id integer PRIMARY KEY, name text)"))
+        connection.execute(text("INSERT INTO providers VALUES (1, 'worker-a'), (2, 'worker-b')"))
+        connection.execute(text("INSERT INTO models VALUES (11, 'model-a')"))
+        connection.execute(
+            text("CREATE TABLE model_provider (id integer PRIMARY KEY, provider_id integer, model_id integer)")
+        )
+        connection.execute(text("INSERT INTO model_provider VALUES (31, 1, 11), (32, NULL, NULL)"))
         connection.execute(
             text(
                 "CREATE TABLE jobs(id integer PRIMARY KEY, environment text, status text, "
+                "created_at timestamptz DEFAULT CURRENT_TIMESTAMP, "
                 "updated_at timestamptz DEFAULT CURRENT_TIMESTAMP, result_payload jsonb, "
                 "request_payload jsonb, error_message text)"
             )
@@ -308,3 +315,48 @@ def test_manual_job_and_cleanup_claim_count_once(database, monkeypatch):
         assert store.manual_admission(db, 21)
     with Database() as db:
         assert not store.manual_admission(db, 20)
+
+
+def test_maintenance_holders_name_every_kind_of_slot_holder(database):
+    engine, _ = database
+    store.claim_calibration(2, "claim-2", automatic=True)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO jobs (id, environment, status, request_payload) VALUES "
+                "(5, 'model-provider-benchmark', 'running', "
+                '\'{"provider_id": 1, "model_name": "model-a", "nightly": true}\'), '
+                "(6, 'model-provider-benchmark', 'completed', '{\"provider_id\": 2}'), "
+                "(7, 'inference', 'running', '{}')"
+            )
+        )
+        # A finished job whose claim is still being cleaned up holds the slot too.
+        connection.execute(text("INSERT INTO maintenance_benchmark (job_id, provider_id) VALUES (6, 2)"))
+        connection.execute(
+            text(
+                "INSERT INTO nightly_benchmarks (model_provider_id, status, recovery) "
+                'VALUES (31, \'restoring\', \'{"provider_id": 1, "model": "model-a"}\')'
+            )
+        )
+    holders = store.maintenance_holders()
+    (claim,) = holders["calibrations"]
+    assert (claim["provider_id"], claim["provider_name"], claim["token"], claim["automatic"]) == (
+        2,
+        "worker-b",
+        "claim-2",
+        True,
+    )
+    assert claim["age_s"] >= 0
+    benchmarks = {row["job_id"]: row for row in holders["benchmarks"]}
+    assert set(benchmarks) == {5, 6}
+    assert benchmarks[5]["provider_name"] == "worker-a"
+    assert benchmarks[5]["model_name"] == "model-a"
+    assert benchmarks[5]["nightly"] is True
+    assert benchmarks[6]["status"] is None and benchmarks[6]["provider_name"] == "worker-b"
+    (recovery,) = holders["recoveries"]
+    assert (recovery["model_provider_id"], recovery["provider_name"], recovery["model_name"]) == (
+        31,
+        "worker-a",
+        "model-a",
+    )
+    assert recovery["status"] == "restoring"

@@ -44,6 +44,29 @@ copy the commit. With this information, you can find which workers have the
 update. If a worker cannot report a commit, the page shows `version: unknown`.
 The icon then shows the reason.
 
+### Maintenance status
+
+Above the workers, the **Maintenance** box shows what holds the maintenance
+slot. Calibration, benchmarks and nightly recovery share this slot. While one
+of them holds it, the others cannot start. The box shows the kind of work, the
+worker and the time when the work started. If nothing holds the slot, the box
+shows **Free**.
+
+- **Calibrating**: click **Stop calibration** to end the calibration.
+- **Benchmarking**: click **Cancel benchmark** to end the benchmark.
+- **Nightly recovery**: the scheduler puts the original settings of the
+  worker back. This ends on its own.
+
+A worker confirms the end of its calibration before the slot is free again. An
+offline worker cannot confirm it, and neither can a worker with old software.
+For these workers, and after a stop that did not free the slot, the box shows
+**Release claim**. Logos tries a normal stop first. If the worker still reports
+a calibration, the claim stays. Otherwise Logos releases it and records the
+release in the audit log. Release the claim of an offline worker only if the
+worker cannot continue the calibration.
+
+The box updates together with the rest of the page.
+
 ### Idle lanes and lane locks
 
 The capacity planner puts a lane to sleep after the lane has no requests for
