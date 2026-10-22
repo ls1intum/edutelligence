@@ -1,8 +1,9 @@
-"""Iris acknowledges what the student did or said, specifically and honestly, at every support level.
+"""Iris opens its replies with one short, specific, true acknowledgement at every support level.
 
 A neutral, purely functional answer is correct and polite but gives the student nothing to feel
-read. The tone rule is concrete on purpose (one short, specific, true sentence) and has guardrails
-against flattery, and the places that told the model to answer with questions only make room for it.
+read. The tone rule replaces the abstract "encouraging tone" bullet instead of adding rules next to
+it (a short prompt is followed better), and the places that told the model to answer with questions
+only make room for it.
 """
 
 import os
@@ -27,7 +28,7 @@ CHAT_MODES = [
     "TEXT_EXERCISE_CHAT",
 ]
 SUPPORT_LEVELS = ["low", "moderate", "high"]
-RULE = "• Acknowledge Specifically:"
+RULE = "• Supportive & Focused:"
 
 
 def _render_template(template_name: str, context: dict) -> str:
@@ -89,47 +90,46 @@ def test_every_mode_and_support_level_asks_for_a_specific_acknowledgement(
     rendered = _render(chat_mode, support_level)
 
     rule = _rule(rendered)
-    assert "Open with one short, specific acknowledgement" in rule
-    assert "an attempt they made" in rule and "time pressure" in rule
-    assert "Gut, dass du schon einen Versuch hast." in rule
-    assert 'see "Acknowledge Specifically" in Response Style' in rendered
+    assert "Open every reply that is not a greeting" in rule
+    assert "one short, specific, true acknowledgement" in rule
+    assert "what the student did, asked or faces" in rule
     assert "Maintain a patient, encouraging tone" not in rendered
 
 
-def test_the_rule_keeps_the_acknowledgement_honest_and_skips_it_where_it_does_not_fit():
+def test_the_rule_keeps_the_acknowledgement_honest_and_then_helps():
     rule = _rule(_render("COURSE_CHAT"))
 
-    assert "acknowledge only what is true" in rule
-    assert "never praise something that is wrong" in rule
-    assert 'never use generic praise ("Great question!")' in rule
-    assert "never say that work is fine when it is not" in rule
-    assert "Skip it for greetings" in rule
-    assert "plain logistics questions" in rule
-    assert "already acknowledged the same thing earlier" in rule
+    assert "Never invent or exaggerate" in rule
+    assert "never praise what is wrong" in rule
+    assert rule.endswith("Then help.")
 
 
-def test_the_rule_stays_one_sentence_or_a_clause_at_every_level():
-    rule = _rule(_render("PROGRAMMING_EXERCISE_CHAT", "low"))
-
-    assert "One sentence or a clause is enough, also at low support." in rule
-
-
-def test_the_rule_comes_before_the_style_rules_that_push_for_brevity():
+def test_the_rule_is_one_short_bullet_that_replaces_the_old_one():
     rendered = _render("LECTURE_CHAT")
 
-    assert rendered.index(RULE) < rendered.index("• Clarity & Structure:")
-    assert rendered.index("• Be Actionable:") < rendered.index(RULE)
+    assert rendered.count("acknowledgement") == 1
+    assert len(_rule(rendered).split()) < 45
+
+
+def test_the_greeting_protocol_still_answers_a_greeting_warmly():
+    rendered = _render("COURSE_CHAT")
+
+    assert (
+        "• Greeting Protocol: If a student greets you, greet them back warmly"
+        in rendered
+    )
 
 
 @pytest.mark.parametrize("chat_mode", CHAT_MODES)
-def test_low_support_allows_a_clause_of_acknowledgement_before_the_question(chat_mode):
+def test_low_support_puts_the_questions_after_the_acknowledgement(chat_mode):
     low = _render(chat_mode, "low")
     moderate = _render(chat_mode, "moderate")
 
-    carve_out = "A one-clause acknowledgement of the student's effort or situation"
-    assert carve_out in low
-    assert "it is not an explanation and not a hint" in low
-    assert carve_out not in moderate
+    assert (
+        "Use the Socratic method: after the opening acknowledgement, respond ONLY "
+        "with guiding questions rather than explanations."
+    ) in low
+    assert "after the opening acknowledgement" not in moderate
 
 
 def test_the_rule_is_the_same_text_for_every_message_so_the_prompt_stays_cacheable():
@@ -148,15 +148,15 @@ def test_the_review_pass_keeps_the_acknowledgement_when_it_rewrites(support_leve
     )
 
     assert (
-        "A short opening acknowledgement of the student's effort or situation is not "
-        "part of the solution: keep it, also when you rewrite the response."
-    ) in rendered
+        "Only rewrite the code parts that contain solutions. Keep the opening acknowledgement."
+        in rendered
+    )
 
 
-def test_the_review_pass_of_low_support_lets_the_acknowledgement_stay_in_front():
+def test_the_review_pass_of_low_support_lets_the_acknowledgement_stay():
     low = _render_template(
         "exercise_chat_guide_prompt.j2",
         {"problem_statement": "Sort an array.", "support_level": "low"},
     )
 
-    assert "may stay in front of the questions" in low
+    assert "questions only, no answers. The opening acknowledgement stays." in low
