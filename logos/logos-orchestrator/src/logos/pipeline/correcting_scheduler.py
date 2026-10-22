@@ -16,7 +16,7 @@ import logging
 import os
 import random
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from logos import perf_trace
 from logos.benchmarks.reservations import benchmark_reservations
@@ -83,6 +83,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             on_capacity_needed,
         )
         self._ettft_enabled = ettft_enabled
+        # Whether an operator locked a worker (set by main once the capacity
+        # planner exists). Nothing wakes or loads a lane there on its own, so
+        # only a lane already awake can serve a request.
+        self._worker_locked: Callable[[int], bool] = lambda _provider_id: False
         self._prefix_router = prefix_router if prefix_router is not None else PrefixAffinityRouter()
         self._latency_store = latency_store
 
@@ -396,6 +400,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 )
         self._prefix_router.record(model_id, keys, provider_id)
 
+    def set_worker_lock_check(self, worker_locked: Callable[[int], bool]) -> None:
+        """Tell the scheduler which workers an operator locked (see _compute_candidate_scores)."""
+        self._worker_locked = worker_locked
+
     def _compute_candidate_scores(
         self,
         candidates: List[Tuple[int, float, int]],
@@ -458,6 +466,18 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 ettft = self._estimate_ettft(
                     model_id, provider_id, provider_type, input_tokens=input_tokens, request_id=request_id
                 )
+
+                if (
+                    provider_type == "logosnode"
+                    and ettft.tier not in (ReadinessTier.WARM, ReadinessTier.BUSY)
+                    and self._worker_locked(provider_id)
+                ):
+                    logger.debug(
+                        "Skipping model=%s worker=%s: the worker is locked and no lane of the model is awake",
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                        self._logosnode.get_provider_name(provider_id) or provider_id,
+                    )
+                    continue
 
                 if ettft.tier == ReadinessTier.UNAVAILABLE:
                     logger.debug(

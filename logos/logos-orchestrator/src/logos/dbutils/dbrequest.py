@@ -199,6 +199,10 @@ class LaneLockChangedRequest(BaseModel):
     # Order of the change among all changes of this lane; the pushes can
     # arrive out of order, so an older revision is ignored.
     revision: int
+    # The lock's restore record as committed (JSON text, None for none). Sent
+    # by webservices that know the record; a push without the field leaves
+    # the record the planner holds.
+    restore_lanes_json: Optional[str] = None
 
 
 class InternalCalibrateRequest(BaseModel):
