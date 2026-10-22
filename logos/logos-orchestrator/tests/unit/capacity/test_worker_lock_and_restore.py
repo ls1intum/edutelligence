@@ -612,3 +612,31 @@ def test_an_operator_stop_the_worker_refused_records_the_lane_again():
     _restore(planner)
     registry.lanes = []
     assert [a.lane_id for a in _restore(planner)] == [LANE]
+
+
+def test_a_payload_refusal_counts_as_refused():
+    assert CapacityPlanner._answer_refused(_answered({"success": True, "result": {"ok": False, "calibrating": True}}))
+
+
+def test_a_refusal_that_answers_after_the_timeout_records_the_lane_again():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+
+    async def late_refusal():
+        await planner.forget_restored_lane(PROVIDER, LANE)
+        answer = asyncio.get_running_loop().create_future()
+        await planner.settle_unload(PROVIDER, LANE, answer)  # the caller stopped waiting
+        await asyncio.sleep(0)
+        assert _unloading_marked(planner)
+        answer.set_result({"success": True, "result": {"rolled_back": True}})
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not _unloading_marked(planner)
+
+    asyncio.run(late_refusal())
+
+
+def _unloading_marked(planner):
+    record = planner._lock_cache().peek()[(PROVIDER, WORKER_LOCK_ID)][2] or {}
+    return "unloading" in record.get(LANE, {})

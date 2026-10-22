@@ -1057,10 +1057,13 @@ async def internal_logosnode_delete_lane(data: InternalDeleteLaneRequest, reques
         on_dispatched=dispatched.append,
     )
     # Definitely not unloaded: the worker refused it (502), or it never went
-    # out. A timeout after dispatch may still unload the lane.
+    # out. After a timeout the answer may still come and settle it.
     status = getattr(result, "status_code", 200)
-    if _main._capacity_planner is not None and (status == 502 or (status >= 400 and not dispatched)):
-        await _main._capacity_planner.unload_refused(data.provider_id, data.lane_id)
+    planner = _main._capacity_planner
+    if planner is not None and (status == 502 or (status >= 400 and not dispatched)):
+        await planner.unload_refused(data.provider_id, data.lane_id)
+    elif planner is not None and status >= 400:
+        await planner.settle_unload(data.provider_id, data.lane_id, dispatched[0])
     return result
 
 

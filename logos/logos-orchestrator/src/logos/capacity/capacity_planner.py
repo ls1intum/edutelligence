@@ -8901,7 +8901,37 @@ class CapacityPlanner:
         if not isinstance(message, dict):
             return False
         result = message.get("result")
-        return not message.get("success", False) or (isinstance(result, dict) and bool(result.get("rolled_back")))
+        if not message.get("success", False):
+            return True
+        # A refusal can also travel in the payload of a delivered command.
+        return isinstance(result, dict) and (result.get("ok") is False or bool(result.get("rolled_back")))
+
+    async def settle_unload(self, provider_id: int, lane_id: str, answer: Optional[asyncio.Future]) -> None:
+        """Record the lane again once the worker's answer shows the unload was refused.
+
+        The answer may come long after the caller stopped waiting: until then
+        the lane stays out of the records. An answer that never comes (the
+        session ended) settles nothing; the lane leaves the records once gone.
+        """
+        if answer is None:
+            return
+        if answer.done():
+            if self._answer_refused(answer):
+                await self.unload_refused(provider_id, lane_id)
+            return
+
+        async def settle() -> None:
+            try:
+                await asyncio.shield(answer)
+            except Exception:  # noqa: BLE001 — the outcome is unknown
+                return
+            if self._answer_refused(answer):
+                await self.unload_refused(provider_id, lane_id)
+
+        task = asyncio.get_running_loop().create_task(settle())
+        settlers = self.__dict__.setdefault("_unload_settlers", set())
+        settlers.add(task)
+        task.add_done_callback(settlers.discard)
 
     def _track_lifecycle_command(self, provider_id: int, lane_id: str) -> Callable[[asyncio.Future], None]:
         def on_dispatched(answer: asyncio.Future) -> None:
@@ -9518,15 +9548,14 @@ class CapacityPlanner:
                 # The sleep went to the worker: the re-sleep is settled,
                 # whatever its outcome. One that never went out stays due.
                 await self._mark_resleep(action.provider_id, set_on=set(), set_off={action.lane_id})
-            if (
-                action.operator_initiated
-                and action.action == "stop"
-                and not confirmed
-                and (not sent or self._answer_refused(self._lifecycle_commands_sent.get(key)))
-            ):
-                # The unload never went out, or the worker refused or rolled it
-                # back: the lane stays, so record it again. A timeout keeps it out.
-                await self.unload_refused(action.provider_id, action.lane_id)
+            if action.operator_initiated and action.action == "stop" and not confirmed:
+                if not sent:
+                    # The unload never went out: the lane stays, so record it again.
+                    await self.unload_refused(action.provider_id, action.lane_id)
+                else:
+                    # A refusal or rollback records it again, also one that
+                    # answers after the wait ended; until then it stays out.
+                    await self.settle_unload(action.provider_id, action.lane_id, self._lifecycle_commands_sent.get(key))
         finally:
             if marks_cold:
                 answer = self._lifecycle_commands_sent.pop(key, None)
