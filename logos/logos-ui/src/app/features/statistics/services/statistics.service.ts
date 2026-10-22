@@ -26,6 +26,59 @@ export interface LaneLock {
   locked_at: string;
 }
 
+/**
+ * A calibration that holds the maintenance slot. `claim_token` is null for a
+ * session the worker reports without a claim; such a session can be stopped
+ * but has no claim to release.
+ */
+export interface MaintenanceCalibration {
+  provider_id: number;
+  provider_name: string | null;
+  claim_token: string | null;
+  automatic: boolean | null;
+  confirmed: boolean | null;
+  since: string | null;
+  age_s: number | null;
+  online: boolean;
+  calibrating: boolean;
+  status_supported: boolean;
+}
+
+/**
+ * A benchmark that holds the maintenance slot. While its cleanup still runs,
+ * `status` is the job's final status, or null when the job record is gone.
+ */
+export interface MaintenanceBenchmark {
+  job_id: number;
+  status: string | null;
+  provider_id: number | null;
+  provider_name: string | null;
+  model_name: string | null;
+  nightly: boolean;
+  since: string | null;
+  age_s: number | null;
+}
+
+/** A nightly run whose worker settings are not restored yet. */
+export interface MaintenanceRecovery {
+  model_provider_id: number;
+  status: string;
+  provider_id: number | null;
+  provider_name: string | null;
+  model_name: string | null;
+  since: string | null;
+  age_s: number | null;
+}
+
+/** What holds the maintenance slot, as `GET /api/logosdb/providers/logosnode/maintenance` returns it. */
+export interface MaintenanceStatus {
+  limit: number;
+  free: boolean;
+  calibrations: MaintenanceCalibration[];
+  benchmarks: MaintenanceBenchmark[];
+  recoveries: MaintenanceRecovery[];
+}
+
 /** Position to continue a request-feed page from, as the server hands it back. */
 export interface RequestCursor {
   ts: string;
@@ -290,6 +343,38 @@ export class StatisticsService {
       {
         provider_id: providerId,
       }
+    ));
+  }
+
+  getMaintenanceStatus(): Promise<MaintenanceStatus> {
+    return firstValueFrom(this.http.get<MaintenanceStatus>('/api/logosdb/providers/logosnode/maintenance'));
+  }
+
+  /**
+   * Release a calibration claim. The server stops the calibration first and
+   * refuses while the worker still reports a session.
+   */
+  releaseCalibrationClaim(
+    providerId: number,
+    claimToken: string,
+  ): Promise<{ released: boolean; forced: boolean; message?: string }> {
+    return firstValueFrom(this.http.post<{ released: boolean; forced: boolean; message?: string }>(
+      '/api/logosdb/providers/logosnode/maintenance/release_calibration',
+      { provider_id: providerId, claim_token: claimToken },
+    ));
+  }
+
+  /**
+   * Release a nightly recovery. Without `force` the server refuses (409) unless
+   * the worker runs the lane's original settings.
+   */
+  releaseRecovery(
+    modelProviderId: number,
+    force: boolean,
+  ): Promise<{ released: boolean; forced: boolean; message?: string }> {
+    return firstValueFrom(this.http.post<{ released: boolean; forced: boolean; message?: string }>(
+      '/api/logosdb/providers/logosnode/maintenance/release_recovery',
+      { model_provider_id: modelProviderId, force },
     ));
   }
 

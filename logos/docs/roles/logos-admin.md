@@ -44,6 +44,38 @@ copy the commit. With this information, you can find which workers have the
 update. If a worker cannot report a commit, the page shows `version: unknown`.
 The icon then shows the reason.
 
+### Maintenance status
+
+Above the workers, the **Maintenance** box shows what holds the maintenance
+slot. Calibration, benchmarks and nightly recovery share this slot. While one
+of them holds it, the others cannot start. The box shows the kind of work, the
+worker and the time when the work started. If nothing holds the slot, the box
+shows **Free**.
+
+- **Calibrating**: click **Stop calibration** to end the calibration.
+- **Benchmarking**: click **Cancel benchmark** to end the benchmark.
+- **Nightly recovery**: the scheduler puts the original settings of the
+  worker back. This usually ends on its own. If it does not, click
+  **Release recovery**. Logos checks that the model runs its original settings
+  again, and then frees the slot.
+
+A worker confirms the end of its calibration before the slot is free again. An
+offline worker cannot confirm it, and neither can a worker with old software.
+For these workers, and after a stop that did not free the slot, the box shows
+**Release claim**. Logos tries a normal stop first. If the worker still reports
+a calibration, the claim stays. The claim also stays if the worker is online
+but does not answer. Try again later, or wait until the worker is offline. Otherwise Logos releases it and records the
+release in the audit log. Release the claim of an offline worker only if the
+worker cannot continue the calibration.
+
+If Logos cannot check the settings, for example because the worker is
+offline, it refuses the release. The box then shows **Force release**. A forced
+release frees the slot without the check. The model keeps the settings it has
+now, and these can be benchmark settings. Check the model on the worker first.
+The audit log records every release.
+
+The box updates together with the rest of the page.
+
 ### Idle lanes and lane locks
 
 The capacity planner puts a lane to sleep after the lane has no requests for

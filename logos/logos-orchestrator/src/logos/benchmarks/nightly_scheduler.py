@@ -273,9 +273,7 @@ class NightlyScheduler:
                 # Cached telemetry cannot prove that requests from the old
                 # execution have ended. Query the worker and fail closed.
                 recovery = row["recovery"]
-                if (jobs or recovery.get("mutated", True)) and not await self.recovery_worker_idle(
-                    recovery["provider_id"]
-                ):
+                if (jobs or recovery.get("mutated", True)) and not await self.recovery_worker_idle(recovery):
                     return False
                 if not held():
                     return False
@@ -287,7 +285,20 @@ class NightlyScheduler:
             finally:
                 LEASE_CHECK.reset(token)
 
-    async def recovery_worker_idle(self, provider_id):
+    async def recovery_worker_idle(self, recovery):
+        """True when the worker reports no request on the lane a recovery restores.
+
+        Only the worker's own counters count. The orchestrator's in-flight
+        counter can stay above zero after a request ended, and it cannot see
+        requests from the crashed execution anyway.
+
+        The check covers the journal's lane and any lane of the same model:
+        those are the only lanes the old execution sent benchmark traffic to,
+        and the only ones the restore restarts. Other lanes keep serving
+        production and do not hold the recovery back. A journal without lane
+        and model falls back to requiring the whole worker to be idle.
+        """
+        provider_id = recovery["provider_id"]
         if not self.healthy(provider_id):
             return False
         runtime = await self.registry.send_command(provider_id, "get_runtime", {}, timeout_seconds=30)
@@ -296,9 +307,14 @@ class NightlyScheduler:
             return False
         if not isinstance(lanes, list):
             return False
+        lane_id, model = recovery.get("lane_id"), recovery.get("model")
+        if lane_id or model:
+            lanes = [
+                lane
+                for lane in lanes
+                if (lane_id and lane.get("lane_id") == lane_id) or (model and lane.get("model") == model)
+            ]
         for lane in lanes:
-            if self.planner._facade.model_inflight_requests(provider_id, lane.get("model")):
-                return False
             if lane.get("active_requests") != 0:
                 return False
             metrics = lane.get("backend_metrics") or {}

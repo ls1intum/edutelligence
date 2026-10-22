@@ -87,6 +87,14 @@ def compute_calibration_key(
     }
     if metal and cfg.engines:
         key["metal"] = _metal_engine_settings(cfg.engines.metal)
+    if not metal:
+        from logos_worker_node.calibration import probe_attention_backend  # noqa: PLC0415
+
+        # Only when the probe passes a backend, so keys of probes that leave the
+        # choice to vLLM stay as they are.
+        backend = probe_attention_backend(plan)
+        if backend:
+            key["attention_backend"] = backend
     return key
 
 

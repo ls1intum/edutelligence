@@ -249,7 +249,8 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
 
   private statisticsService = inject(StatisticsService);
 
-  unloadingLaneId = signal<string | null>(null);
+  /** Lanes of the selected provider with an unload in flight; workers unload lanes in parallel. */
+  unloadingLaneIds = signal<ReadonlySet<string>>(new Set());
   unloadError = signal<string | null>(null);
 
   // ── Sleep/drain/wake state ───────────────────────────────────────────────
@@ -449,7 +450,8 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
   }
 
   /**
-   * Monotonic attempt counters, one per action kind.
+   * Monotonic attempt counters for sleep, drain and wake, one per action
+   * kind. Unloads keep one attempt per lane instead (see unloadAttempts).
    *
    * (provider, lane id) is not a unique attempt identity: a lane id is
    * per-worker and can collide across workers, and an A → B → A switch
@@ -462,16 +464,28 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
    * newer attempt of the kind has started and no switch has happened since it
    * began.
    */
-  private unloadAttempt = 0;
   private sleepAttempt = 0;
   private drainAttempt = 0;
   private wakeAttempt = 0;
 
+  /**
+   * Unload attempts in flight, keyed by laneLockKey(provider, lane). Unloads
+   * run in parallel, so each lane has its own attempt: the value is the
+   * attempt's number from `unloadSeq`, and a settling attempt may touch its
+   * lane's spinner and the error only while the entry still holds its number
+   * and the operator is still on its provider. A provider switch clears the
+   * map, which abandons every attempt in flight.
+   */
+  private unloadAttempts = new Map<string, number>();
+  private unloadSeq = 0;
+
   async handleUnload(laneId: string): Promise<void> {
     const pid = this.providerId;
-    if (pid == null || this.unloadingLaneId() != null) return;
-    const attempt = ++this.unloadAttempt;
-    this.unloadingLaneId.set(laneId);
+    if (pid == null || this.unloadingLaneIds().has(laneId)) return;
+    const key = laneLockKey(pid, laneId);
+    const attempt = ++this.unloadSeq;
+    this.unloadAttempts.set(key, attempt);
+    this.setUnloading(laneId, true);
     this.unloadError.set(null);
 
     let failed: unknown = null;
@@ -480,19 +494,23 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     } catch (err: unknown) {
       failed = err;
     }
-    // A newer attempt or a provider switch superseded this one while the call
-    // was in flight — see unloadAttempt. Only the latest attempt may settle
-    // the shared signal and error.
-    if (this.unloadAttempt === attempt) {
-      this.unloadingLaneId.set(null);
-      if (failed === null) return;
-      const e = failed as { status?: number };
-      if (e.status === 404 || e.status === 501 || e.status === 0) {
-        this.unloadError.set('Action not available on this server yet.');
-      } else {
-        this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(failed)}`);
-      }
+    if (this.unloadAttempts.get(key) !== attempt || this.providerId !== pid) return;
+    this.unloadAttempts.delete(key);
+    this.setUnloading(laneId, false);
+    if (failed === null) return;
+    const e = failed as { status?: number };
+    if (e.status === 404 || e.status === 501 || e.status === 0) {
+      this.unloadError.set('Action not available on this server yet.');
+    } else {
+      this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(failed)}`);
     }
+  }
+
+  private setUnloading(laneId: string, unloading: boolean): void {
+    const next = new Set(this.unloadingLaneIds());
+    if (unloading) next.add(laneId);
+    else next.delete(laneId);
+    this.unloadingLaneIds.set(next);
   }
 
   async handleSleep(laneId: string): Promise<void> {
@@ -510,7 +528,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     } catch (err: unknown) {
       failed = err;
     }
-    // Same ownership rule as handleUnload.
+    // Same ownership rule as the attempt counters above.
     if (this.sleepAttempt === attempt) {
       this.sleepingLaneId.set(null);
       if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, failed));
@@ -539,7 +557,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     } catch (err: unknown) {
       failed = err;
     }
-    // Same ownership rule as handleUnload.
+    // Same ownership rule as the attempt counters above.
     if (this.drainAttempt === attempt) {
       this.drainingLaneId.set(null);
       if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Drain', laneId, failed));
@@ -560,7 +578,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     } catch (err: unknown) {
       failed = err;
     }
-    // Same ownership rule as handleUnload.
+    // Same ownership rule as the attempt counters above.
     if (this.wakeAttempt === attempt) {
       this.wakingLaneId.set(null);
       if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, failed));
@@ -659,7 +677,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       // error or a still-spinning button from worker A must not sit under
       // worker B's panel after the switch.
       this.unloadError.set(null);
-      this.unloadingLaneId.set(null);
+      this.unloadingLaneIds.set(new Set());
       this.sleepWakeError.set(null);
       this.sleepingLaneId.set(null);
       this.drainingLaneId.set(null);
@@ -670,7 +688,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       // their counters no longer match, so they cannot touch the shared
       // signal or error of the worker the operator is on now.
       this.lockAttempt++;
-      this.unloadAttempt++;
+      this.unloadAttempts.clear();
       this.sleepAttempt++;
       this.drainAttempt++;
       this.wakeAttempt++;

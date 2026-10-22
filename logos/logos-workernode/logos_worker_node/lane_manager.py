@@ -302,6 +302,8 @@ def _log_shows_memory_trouble(handle: Any) -> bool:
 
 
 _NOT_LOADING = object()
+# reconfigure_lane: the change does not fit the lane-and-GPU scope it holds.
+_NEEDS_WHOLE_LOCK = object()
 
 
 async def _destroy_quietly(handle: ProcessHandle) -> None:
@@ -1090,70 +1092,113 @@ class LaneManager:
     async def reconfigure_lane(
         self, lane_id: str, updates: dict[str, Any], *, require_idle: bool = False, force_restart: bool = False
     ) -> LaneStatus:
-        """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
+        """Apply partial updates to an existing lane (stop-then-start if restart needed).
+
+        A lane pinned to its GPUs that keeps them is reconfigured holding only
+        the lane and those GPUs, so requests and actions on other lanes go on
+        while it restarts. Any other change holds the whole lock.
+        """
+        gpus = self._pinned_gpus(lane_id)
+        if gpus:
+            async with self._lock.scoped([lane_id], gpus):
+                if self._pinned_gpus(lane_id) == gpus:
+                    status = await self._reconfigure_unlocked(
+                        lane_id, updates, require_idle=require_idle, force_restart=force_restart, held_gpus=gpus
+                    )
+                    if status is not _NEEDS_WHOLE_LOCK:
+                        return status
         async with self._lock:
-            handle = self._handles.get(lane_id)
-            if handle is None:
-                raise KeyError(f"Lane '{lane_id}' not found")
-
-            current = handle.lane_config
-            if current is None:
-                raise RuntimeError(f"Lane '{lane_id}' has no config (never spawned)")
-
-            current_data = current.model_dump()
-            changed = False
-            for key, value in updates.items():
-                if value is not None and key in current_data and current_data[key] != value:
-                    current_data[key] = value
-                    changed = True
-
-            if not changed and not force_restart:
-                return await self._get_status_unlocked(lane_id)
-
-            parallel_changed = False
-            if current.vllm_config is not None and current_data.get("vllm_config"):
-                requested_vllm = VllmConfig(**current_data["vllm_config"])
-                parallel_changed = (
-                    requested_vllm.tensor_parallel_size != current.vllm_config.tensor_parallel_size
-                    or requested_vllm.parallel_gpu_count != current.vllm_config.parallel_gpu_count
-                )
-                if parallel_changed:
-                    current_data["auto_tensor_parallel"] = False
-                    # Automatic placement belongs to the old parallel topology.
-                    # Static operator pins remain authoritative.
-                    if lane_id not in self._static_lane_ids:
-                        current_data["gpu_devices"] = ""
-            new_lc = LaneConfig(**current_data)
-            if parallel_changed:
-                available = self._gpu_device_count()
-                pool = self._global_config.gpu_devices
-                if pool and pool.lower() != "all":
-                    available = min(available, len(set(self._parse_gpu_selector(pool))))
-                required = new_lc.vllm_config.parallel_gpu_count
-                if required > available:
-                    raise ValueError(
-                        f"Tensor × pipeline parallel size requires {required} GPUs, "
-                        f"but this worker provides only {available}."
-                    )
-            self._validate_vllm_runtime_requirements([new_lc])
-            # Benchmark settings include spawn-time options such as KV cache size
-            # that the planner's automatic tuning deliberately excludes.
-            restart_needed = (
-                force_restart
-                or _lane_needs_restart(current, new_lc)
-                or (require_idle and current.vllm_config != new_lc.vllm_config)
+            return await self._reconfigure_unlocked(
+                lane_id, updates, require_idle=require_idle, force_restart=force_restart
             )
-            if restart_needed:
-                active = self._active_requests.get(lane_id, 0)
-                if (require_idle or force_restart) and active > 0:
-                    raise RuntimeError(
-                        f"Cannot apply vLLM settings: model '{current.model}' still has {active} active request(s). "
-                        "Wait for them to finish, or run the benchmark with the current settings."
-                    )
-                await self._restart_lane_unlocked(lane_id, new_lc)
-            prom.LANE_TRANSITIONS_TOTAL.labels(action="reconfigure").inc()
 
+    def _pinned_gpus(self, lane_id: str) -> frozenset[int] | None:
+        """The GPUs a lane is pinned to, or ``None`` when its config does not tell."""
+        handle = self._handles.get(lane_id)
+        lane_config = getattr(handle, "lane_config", None)
+        if lane_config is None or not lane_config.gpu_devices:
+            return None
+        return self._launch_gpu_set(lane_config)
+
+    async def _reconfigure_unlocked(
+        self,
+        lane_id: str,
+        updates: dict[str, Any],
+        *,
+        require_idle: bool,
+        force_restart: bool,
+        held_gpus: frozenset[int] | None = None,
+    ) -> Any:
+        """The body of reconfigure_lane.
+
+        With *held_gpus* the caller holds only the lane and those GPUs; a change
+        that would start the lane anywhere else returns ``_NEEDS_WHOLE_LOCK``
+        before anything is touched.
+        """
+        handle = self._handles.get(lane_id)
+        if handle is None:
+            raise KeyError(f"Lane '{lane_id}' not found")
+
+        current = handle.lane_config
+        if current is None:
+            raise RuntimeError(f"Lane '{lane_id}' has no config (never spawned)")
+
+        current_data = current.model_dump()
+        changed = False
+        for key, value in updates.items():
+            if value is not None and key in current_data and current_data[key] != value:
+                current_data[key] = value
+                changed = True
+
+        if not changed and not force_restart:
             return await self._get_status_unlocked(lane_id)
+
+        parallel_changed = False
+        if current.vllm_config is not None and current_data.get("vllm_config"):
+            requested_vllm = VllmConfig(**current_data["vllm_config"])
+            parallel_changed = (
+                requested_vllm.tensor_parallel_size != current.vllm_config.tensor_parallel_size
+                or requested_vllm.parallel_gpu_count != current.vllm_config.parallel_gpu_count
+            )
+            if parallel_changed:
+                current_data["auto_tensor_parallel"] = False
+                # Automatic placement belongs to the old parallel topology.
+                # Static operator pins remain authoritative.
+                if lane_id not in self._static_lane_ids:
+                    current_data["gpu_devices"] = ""
+        new_lc = LaneConfig(**current_data)
+        if held_gpus is not None and (parallel_changed or self._launch_gpu_set(new_lc) != held_gpus):
+            return _NEEDS_WHOLE_LOCK
+        if parallel_changed:
+            available = self._gpu_device_count()
+            pool = self._global_config.gpu_devices
+            if pool and pool.lower() != "all":
+                available = min(available, len(set(self._parse_gpu_selector(pool))))
+            required = new_lc.vllm_config.parallel_gpu_count
+            if required > available:
+                raise ValueError(
+                    f"Tensor × pipeline parallel size requires {required} GPUs, "
+                    f"but this worker provides only {available}."
+                )
+        self._validate_vllm_runtime_requirements([new_lc])
+        # Benchmark settings include spawn-time options such as KV cache size
+        # that the planner's automatic tuning deliberately excludes.
+        restart_needed = (
+            force_restart
+            or _lane_needs_restart(current, new_lc)
+            or (require_idle and current.vllm_config != new_lc.vllm_config)
+        )
+        if restart_needed:
+            active = self._active_requests.get(lane_id, 0)
+            if (require_idle or force_restart) and active > 0:
+                raise RuntimeError(
+                    f"Cannot apply vLLM settings: model '{current.model}' still has {active} active request(s). "
+                    "Wait for them to finish, or run the benchmark with the current settings."
+                )
+            await self._restart_lane_unlocked(lane_id, new_lc, scoped=held_gpus is not None)
+        prom.LANE_TRANSITIONS_TOTAL.labels(action="reconfigure").inc()
+
+        return await self._get_status_unlocked(lane_id)
 
     async def _drain_lane_inflight(self, lane_id: str) -> None:
         """Wait (bounded) for in-flight requests on ``lane_id`` to finish before
@@ -3151,11 +3196,19 @@ class LaneManager:
         self,
         lane_id: str,
         new_config: LaneConfig,
+        *,
+        scoped: bool = False,
     ) -> None:
         """
         Reconfigure a lane by stopping the old process first, then spawning a
         new one on the same port.  No concurrent processes — avoids zombie VRAM.
+
+        With *scoped* the caller holds only the lane and the GPUs it is pinned
+        to. Those GPUs count as loading from the start, so a load elsewhere
+        does not place onto the memory the old process frees.
         """
+        if scoped:
+            self._loading_gpus[lane_id] = self._launch_gpu_set(new_config)
         # The old handle leaves _handles' protection the moment its process is
         # destroyed, while the new one only lands there after the spawn
         # succeeds — reserve the model for the whole stop/spawn window so the

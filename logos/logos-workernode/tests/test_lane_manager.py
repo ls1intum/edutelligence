@@ -4615,3 +4615,76 @@ async def test_a_crash_the_restart_logic_gives_up_on_is_still_reported(fatal_cud
     )
     await manager._recover_dead_lanes([status])  # noqa: SLF001
     assert _rejections(manager) == ([("org/m", "11")] if reported else [])
+
+
+def _restart_manager(gpu_devices: str) -> tuple[LaneManager, asyncio.Event, asyncio.Event, list]:
+    manager = LaneManager(WorkerConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 2)
+    restarting = LaneConfig(model="org/model", vllm=True, gpu_devices=gpu_devices)
+    manager._handles["lane"] = _StubHandle(restarting)  # noqa: SLF001
+    manager._handles["other"] = _StubHandle(LaneConfig(model="org/other", vllm=True, gpu_devices="1"))  # noqa: SLF001
+    manager._active_requests["other"] = 1  # noqa: SLF001
+    manager._get_status_unlocked = AsyncMock()  # noqa: SLF001
+    manager._validate_vllm_runtime_requirements = MagicMock()  # noqa: SLF001
+    started, release = asyncio.Event(), asyncio.Event()
+    calls: list = []
+
+    async def slow_restart(lane_id, new_config, *, scoped=False):
+        calls.append(scoped)
+        started.set()
+        await release.wait()
+
+    manager._restart_lane_unlocked = slow_restart  # noqa: SLF001
+    return manager, started, release, calls
+
+
+@pytest.mark.asyncio
+async def test_restart_of_a_pinned_lane_lets_requests_on_other_lanes_finish() -> None:
+    """A request on another lane completes while the pinned lane restarts."""
+    manager, started, release, calls = _restart_manager("0")
+    restart = asyncio.create_task(manager.reconfigure_lane("lane", {"model": "org/model"}, force_restart=True))
+    await started.wait()
+    await asyncio.wait_for(manager.decrement_active_requests("other"), timeout=1)
+    assert manager._active_requests["other"] == 0  # noqa: SLF001
+    release.set()
+    await restart
+    assert calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_restart_of_a_pinned_lane_still_holds_its_gpus() -> None:
+    manager, started, release, _ = _restart_manager("0")
+    restart = asyncio.create_task(manager.reconfigure_lane("lane", {"model": "org/model"}, force_restart=True))
+    await started.wait()
+    entered = asyncio.Event()
+
+    async def take_gpu0():
+        async with manager._lock.scoped(["third"], frozenset({0})):  # noqa: SLF001
+            entered.set()
+
+    waiter = asyncio.create_task(take_gpu0())
+    await asyncio.sleep(0.05)
+    assert not entered.is_set()
+    release.set()
+    await restart
+    await asyncio.wait_for(waiter, timeout=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "gpu_devices, updates",
+    [
+        ("", {"model": "org/model"}),  # not pinned: may start anywhere
+        ("0", {"gpu_devices": "1"}),  # moves to other GPUs
+    ],
+)
+async def test_restart_that_may_move_the_lane_holds_the_whole_lock(gpu_devices, updates) -> None:
+    manager, started, release, calls = _restart_manager(gpu_devices)
+    restart = asyncio.create_task(manager.reconfigure_lane("lane", updates, force_restart=True))
+    await started.wait()
+    decrement = asyncio.create_task(manager.decrement_active_requests("other"))
+    await asyncio.sleep(0.05)
+    assert not decrement.done()
+    release.set()
+    await restart
+    await asyncio.wait_for(decrement, timeout=1)
+    assert calls == [False]

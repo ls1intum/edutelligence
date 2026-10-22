@@ -359,3 +359,25 @@ async def test_unchanged_configuration_explicitly_restarts_recovering_lane(state
     assert await planner.prepare_configured_benchmark_lane(7, "org/model", ServingOverrides(tensor_parallel_size=1))
     assert planner._registry.send_command.await_args.args[2]["force_restart"] is True
     planner.prepare_benchmark_lane.assert_awaited_once()
+
+
+async def test_recovery_relies_on_worker_counters_not_the_stale_local_one():
+    from logos.benchmarks.reservations import benchmark_reservations
+    from logos.capacity.capacity_planner import MAINTENANCE_RECOVERY
+
+    planner = _planner(_lane("loaded", "awake"))
+    planner._facade.model_inflight_requests.return_value = 3
+    planner._drain_lane = AsyncMock(return_value=True)
+    benchmark_reservations.reserve(7, "*", -31)
+    token = MAINTENANCE_RECOVERY.set(True)
+    try:
+        assert await planner.prepare_benchmark_lane(7, "org/model", 0) is True
+        planner._facade.model_inflight_requests.assert_not_called()
+        planner._drain_lane.assert_awaited_once()
+        # The worker's own counters still decide.
+        planner._drain_lane.return_value = False
+        with pytest.raises(RuntimeError, match="existing requests"):
+            await planner.prepare_benchmark_lane(7, "org/model", 0)
+    finally:
+        MAINTENANCE_RECOVERY.reset(token)
+        benchmark_reservations.release(-31)

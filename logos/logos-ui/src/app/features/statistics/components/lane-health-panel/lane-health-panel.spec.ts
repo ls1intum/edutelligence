@@ -836,10 +836,10 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
 
   it('clears the spinner of a call that is still in flight at the switch', async () => {
     panel.handleUnload('planner-foo');
-    expect(panel.unloadingLaneId()).toBe('planner-foo');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
 
     switchTo('gpu-02');
-    expect(panel.unloadingLaneId()).toBeNull();
+    expect(panel.unloadingLaneIds().size).toBe(0);
   });
 
   it('does not show a stale unload error under the switched-to worker', async () => {
@@ -861,7 +861,7 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
     // …the operator switches, and fires gpu-02's own unload.
     switchTo('gpu-02');
     const pendingB = panel.handleUnload('planner-bar');
-    expect(panel.unloadingLaneId()).toBe('planner-bar');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-bar']));
 
     // gpu-01's delayed answer must not release the signal: it belongs to
     // gpu-02's attempt now, and clearing it while that call is still running
@@ -870,13 +870,13 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
     unloadSettlers[0]();
     await pendingA;
 
-    expect(panel.unloadingLaneId()).toBe('planner-bar');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-bar']));
     expect(panel.unloadError()).toBeNull();
 
     // …and the signal stays fully functional for the attempt that owns it.
     settleUnload?.();
     await pendingB;
-    expect(panel.unloadingLaneId()).toBeNull();
+    expect(panel.unloadingLaneIds().size).toBe(0);
   });
 
   it('does not let an A → B → A attempt settle the newer attempt on the same lane', async () => {
@@ -889,11 +889,11 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
     const onOther = panel.handleUnload('planner-foo');
     unloadSettlers[1]();
     await onOther;
-    expect(panel.unloadingLaneId()).toBeNull();
+    expect(panel.unloadingLaneIds().size).toBe(0);
 
     switchTo('gpu-01');
     const second = panel.handleUnload('planner-foo');
-    expect(panel.unloadingLaneId()).toBe('planner-foo');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
 
     // The first attempt settles last — on the worker it started on, with the
     // same lane name the newer attempt now holds.
@@ -902,12 +902,116 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
 
     // It must not have cleared the newer attempt's signal or written into
     // its error.
-    expect(panel.unloadingLaneId()).toBe('planner-foo');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
     expect(panel.unloadError()).toBeNull();
 
     unloadSettlers[2]();
     await second;
-    expect(panel.unloadingLaneId()).toBeNull();
+    expect(panel.unloadingLaneIds().size).toBe(0);
+  });
+});
+
+describe('LaneHealthPanel parallel unloads', () => {
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let settlers: Map<string, (error?: unknown) => void>;
+  let unloadLane: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    settlers = new Map();
+    unloadLane = vi.fn(
+      (pid: number, laneId: string) =>
+        new Promise((resolve, reject) => {
+          settlers.set(`${pid}/${laneId}`, (error?: unknown) => (error ? reject(error) : resolve({})));
+        }),
+    );
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [
+        {
+          provide: StatisticsService,
+          useValue: {
+            listLaneLocks: () => Promise.resolve([]),
+            unloadLane,
+            getLaneLoadStatus: () => Promise.resolve({ status: 'running' }),
+          },
+        },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': {
+        'planner-foo': lane({ model: 'foo', runtime_state: 'running' }),
+        'planner-bar': lane({ model: 'bar', runtime_state: 'running' }),
+      },
+      'gpu-02': { 'planner-foo': lane({ model: 'foo', runtime_state: 'running' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', {
+      'gpu-01': { provider_id: 1 },
+      'gpu-02': { provider_id: 2 },
+    });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    fixture.detectChanges();
+  });
+
+  function unloadButtons(): HTMLButtonElement[] {
+    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.btn-unload'));
+  }
+
+  it('unloads a second lane while the first unload is still running', async () => {
+    const first = panel.handleUnload('planner-foo');
+    const second = panel.handleUnload('planner-bar');
+    expect(unloadLane).toHaveBeenCalledTimes(2);
+    expect(unloadLane).toHaveBeenLastCalledWith(1, 'planner-bar');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo', 'planner-bar']));
+    fixture.detectChanges();
+    const buttons = unloadButtons();
+    expect(buttons.length).toBe(2);
+    expect(buttons.every((b) => b.disabled && b.textContent!.trim() === 'Unloading…')).toBe(true);
+
+    settlers.get('1/planner-bar')!();
+    await second;
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
+
+    settlers.get('1/planner-foo')!({ status: 500, error: 'busy' });
+    await first;
+    expect(panel.unloadingLaneIds().size).toBe(0);
+    expect(panel.unloadError()).toBe('Unload of planner-foo failed: busy');
+  });
+
+  it('ignores a second click on the lane that is already unloading', async () => {
+    const first = panel.handleUnload('planner-foo');
+    await panel.handleUnload('planner-foo');
+    expect(unloadLane).toHaveBeenCalledTimes(1);
+    settlers.get('1/planner-foo')!();
+    await first;
+  });
+
+  it('abandons every unload in flight when the provider changes', async () => {
+    const foo = panel.handleUnload('planner-foo');
+    const bar = panel.handleUnload('planner-bar');
+    panel.selectedProvider = 'gpu-02';
+    panel.ngOnChanges({ selectedProvider: new SimpleChange('gpu-01', 'gpu-02', false) });
+    expect(panel.unloadingLaneIds().size).toBe(0);
+
+    const other = panel.handleUnload('planner-foo');
+    expect(unloadLane).toHaveBeenLastCalledWith(2, 'planner-foo');
+    settlers.get('1/planner-bar')!({ status: 500, error: 'from gpu-01' });
+    await bar;
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
+    expect(panel.unloadError()).toBeNull();
+
+    // Both lanes share the id planner-foo; the gpu-01 answer arrives after the
+    // gpu-02 attempt started and must not settle it.
+    settlers.get('1/planner-foo')!({ status: 500, error: 'from gpu-01' });
+    await foo;
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
+    expect(panel.unloadError()).toBeNull();
+
+    settlers.get('2/planner-foo')!();
+    await other;
+    expect(panel.unloadingLaneIds().size).toBe(0);
   });
 });
 

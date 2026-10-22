@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
@@ -37,6 +38,29 @@ public class OrchestratorWorkerAdminClient {
 
     public ResponseEntity<Map> stopCalibration(int providerId) {
         return post("/internal/logosnode/stop_calibration", Map.of("provider_id", providerId));
+    }
+
+    /** What holds the cluster-wide maintenance slot: calibrations, benchmarks and nightly recoveries. */
+    public ResponseEntity<Map> maintenanceStatus() {
+        return get("/internal/maintenance/status");
+    }
+
+    /**
+     * Releases one calibration claim. The orchestrator stops the calibration
+     * first and keeps the claim while the worker still reports a session.
+     */
+    public ResponseEntity<Map> releaseCalibrationClaim(int providerId, String claimToken) {
+        return post("/internal/maintenance/calibration/release",
+            Map.of("provider_id", providerId, "claim_token", claimToken));
+    }
+
+    /**
+     * Releases a nightly recovery journal. Without force the orchestrator
+     * first checks that the worker runs the lane's original settings.
+     */
+    public ResponseEntity<Map> releaseRecovery(int modelProviderId, boolean force) {
+        return post("/internal/maintenance/recovery/release",
+            Map.of("model_provider_id", modelProviderId, "force", force));
     }
 
     public ResponseEntity<Map> deleteLane(int providerId, String laneId) {
@@ -107,12 +131,17 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/model_benchmarks/jobs/" + jobId + "/cancel", Map.of());
     }
 
-    private ResponseEntity<Map> post(String path, Map<String, Object> body) {
-        if (orchestratorUrl.isBlank() || internalSecret.isBlank()) {
-            throw new IllegalStateException("Orchestrator URL or internal secret not configured");
+    private ResponseEntity<Map> get(String path) {
+        try {
+            return restTemplate.exchange(orchestratorUrl + path, HttpMethod.GET, new HttpEntity<>(headers()), Map.class);
+        } catch (HttpClientErrorException | HttpServerErrorException e) {
+            log.warn("Orchestrator worker admin call to {} failed: {} {}", path, e.getStatusCode(), e.getResponseBodyAsString());
+            throw e;
         }
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("Authorization", "Bearer " + internalSecret);
+    }
+
+    private ResponseEntity<Map> post(String path, Map<String, Object> body) {
+        HttpHeaders headers = headers();
         headers.set("Content-Type", "application/json");
         try {
             return restTemplate.postForEntity(
@@ -124,5 +153,14 @@ public class OrchestratorWorkerAdminClient {
             log.warn("Orchestrator worker admin call to {} failed: {} {}", path, e.getStatusCode(), e.getResponseBodyAsString());
             throw e;
         }
+    }
+
+    private HttpHeaders headers() {
+        if (orchestratorUrl.isBlank() || internalSecret.isBlank()) {
+            throw new IllegalStateException("Orchestrator URL or internal secret not configured");
+        }
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", "Bearer " + internalSecret);
+        return headers;
     }
 }

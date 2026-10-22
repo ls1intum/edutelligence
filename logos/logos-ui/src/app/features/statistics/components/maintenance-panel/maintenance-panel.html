@@ -1,0 +1,114 @@
+<section class="maintenance" aria-labelledby="maintenance-title">
+  <div class="maintenance__header">
+    <span id="maintenance-title" class="maintenance__title">Maintenance</span>
+    @if (status(); as s) {
+      <span class="maintenance__badge" [class.maintenance__badge--busy]="!s.free">
+        {{ s.free ? 'Free' : 'In use' }}
+      </span>
+      <span class="maintenance__hint">
+        Calibration, benchmarks and nightly recovery share this slot{{
+          s.limit > 1 ? ' (up to ' + s.limit + ' providers at a time)' : ''
+        }}.
+      </span>
+    }
+  </div>
+
+  @if (loadError(); as error) {
+    <div class="maintenance__notice maintenance__notice--error" role="alert">{{ error }}</div>
+  }
+  @if (notice(); as n) {
+    <div class="maintenance__notice" [class.maintenance__notice--error]="n.kind === 'error'"
+         [class.maintenance__notice--success]="n.kind === 'success'" role="status">{{ n.text }}</div>
+  }
+
+  @if (status(); as s) {
+    @if (s.free) {
+      <p class="maintenance__free">The slot is free. Calibration and benchmarks can start.</p>
+    } @else {
+      <ul class="maintenance__list">
+        @for (row of rows(); track row.key) {
+          <li class="maintenance__row" [attr.data-kind]="row.kind">
+            <div class="maintenance__info">
+              <div class="maintenance__top">
+                <span class="maintenance__kind">{{ row.label }}</span>
+                <span class="maintenance__provider">{{ row.provider }}</span>
+                @if (row.since) {
+                  <span class="maintenance__since" [title]="row.since | date: 'medium'">
+                    since {{ row.since | date: 'shortTime' }} · {{ formatTimeAgo(row.since, now) }}
+                  </span>
+                }
+              </div>
+              <div class="maintenance__details">{{ row.details.join(' · ') }}</div>
+              @if (row.warning) {
+                <div class="maintenance__warning">
+                  <i class="pi pi-exclamation-triangle" aria-hidden="true"></i> {{ row.warning }}
+                </div>
+              }
+            </div>
+            <div class="maintenance__actions">
+              @if (row.canStop) {
+                <button type="button" class="maintenance__btn" [disabled]="busyKey() !== null" (click)="stop(row)">
+                  {{ busyKey() === row.key && !releaseTarget() ? 'Stopping…' : 'Stop calibration' }}
+                </button>
+              }
+              @if (canRelease(row)) {
+                <button type="button" class="maintenance__btn maintenance__btn--danger" [disabled]="busyKey() !== null"
+                        (click)="askRelease(row)">
+                  Release claim
+                </button>
+              }
+              @if (row.canReleaseRecovery) {
+                <button type="button" class="maintenance__btn" [disabled]="busyKey() !== null"
+                        (click)="releaseRecovery(row)">
+                  {{ busyKey() === row.key && !forceTarget() ? 'Releasing…' : 'Release recovery' }}
+                </button>
+                @if (forceOffered().has(row.key)) {
+                  <button type="button" class="maintenance__btn maintenance__btn--danger" [disabled]="busyKey() !== null"
+                          (click)="askForceRelease(row)">
+                    Force release
+                  </button>
+                }
+              }
+              @if (row.canCancel) {
+                <button type="button" class="maintenance__btn maintenance__btn--danger" [disabled]="busyKey() !== null"
+                        (click)="cancel(row)">
+                  {{ busyKey() === row.key ? 'Cancelling…' : 'Cancel benchmark' }}
+                </button>
+              }
+            </div>
+          </li>
+        }
+      </ul>
+    }
+  } @else if (!loadError()) {
+    <p class="maintenance__free">Reading maintenance status…</p>
+  }
+</section>
+
+<app-modal-confirm
+  [visible]="releaseTarget() !== null"
+  (visibleChange)="closeRelease($event)"
+  title="Release the calibration claim?"
+  [message]="'Release the claim only when ' + (releaseTarget()?.provider ?? 'the provider')
+    + ' is not calibrating anymore. Logos stops calibration first. It keeps the claim while the provider still reports a session, or while it is online but does not answer. Calibration and benchmarks can start again afterwards.'"
+  confirmLabel="Release claim"
+  icon="pi-unlock"
+  [loading]="busyKey() !== null"
+  (confirmed)="confirmRelease()"
+>
+  @if (releaseError(); as error) { <p modal-error role="alert">{{ error }}</p> }
+</app-modal-confirm>
+
+<app-modal-confirm
+  [visible]="forceTarget() !== null"
+  (visibleChange)="closeForceRelease($event)"
+  title="Force release the recovery?"
+  [message]="'Logos could not confirm that ' + (forceTarget()?.provider ?? 'the provider')
+    + ' runs its original settings again. If you force the release, the model keeps whatever settings it has now, and those may be benchmark settings. Check the lane on the provider first. Calibration and benchmarks can start again afterwards.'"
+  confirmLabel="Force release"
+  icon="pi-unlock"
+  [loading]="busyKey() !== null"
+  (confirmed)="confirmForceRelease()"
+>
+  @if (forceError(); as error) { <p modal-error role="alert">{{ error }}</p> }
+</app-modal-confirm>
