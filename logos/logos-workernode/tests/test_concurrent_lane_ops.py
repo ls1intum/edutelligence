@@ -135,6 +135,7 @@ async def test_widen_waits_for_a_holder_of_the_gpu() -> None:
 class _Handle:
     def __init__(self, lane_config: LaneConfig) -> None:
         self.lane_config = lane_config
+        self.port = None
         self.release = asyncio.Event()
         self.release.set()
         self.destroyed = False
@@ -658,3 +659,30 @@ async def test_a_cancelled_replacement_spawn_stops_its_process() -> None:
         await spawn
     assert handle.destroyed
     assert "a" not in manager._loading_gpus  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_a_failed_wake_holds_its_gpu_until_the_process_has_exited() -> None:
+    class _WakeOOM(_Handle):
+        async def wake_up(self) -> None:
+            raise RuntimeError("CUDA out of memory")
+
+    handle = _WakeOOM(LaneConfig(model="m-a", gpu_devices="0"))
+    handle.release.clear()
+    manager = _manager_with({"a": handle})
+    manager._is_probable_cuda_oom = lambda exc: True  # noqa: SLF001
+    waking = asyncio.create_task(manager.wake_lane("a"))
+    await _settle()
+    claimed = asyncio.Event()
+
+    async def start_on_gpu0() -> None:
+        async with manager._lock.scoped(["new"], [0]):  # noqa: SLF001
+            claimed.set()
+
+    starting = asyncio.create_task(start_on_gpu0())
+    await _settle()
+    assert not claimed.is_set()  # the failed process still holds GPU 0
+    handle.release.set()
+    with pytest.raises(RuntimeError):
+        await waking
+    await asyncio.wait_for(starting, timeout=2)

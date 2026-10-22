@@ -1090,10 +1090,11 @@ async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest):
 @router.post("/logosdb/providers/logosnode/lanes/delete", tags=["logosnode"])
 async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
     await asyncio.to_thread(_require_root_access, data.logos_key)
+    attempt = None
     if _main._capacity_planner is not None:
         # An operator unloads on purpose: a locked lane must not come back.
         try:
-            await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
+            attempt = await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
         except RestoreRecordError as exc:
             return JSONResponse(status_code=503, content={"error": str(exc)})
     dispatched = []
@@ -1107,10 +1108,10 @@ async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
     # out. After a timeout the answer may still come and settle it.
     status = getattr(result, "status_code", 200)
     planner = _main._capacity_planner
-    if planner is not None and (status == 502 or (status >= 400 and not dispatched)):
-        await planner.unload_refused(data.provider_id, data.lane_id)
-    elif planner is not None and status >= 400:
-        await planner.settle_unload(data.provider_id, data.lane_id, dispatched[0])
+    if planner is not None and attempt is not None and (status == 502 or (status >= 400 and not dispatched)):
+        await planner.unload_refused(data.provider_id, data.lane_id, attempt)
+    elif planner is not None and attempt is not None and status >= 400:
+        await planner.settle_unload(data.provider_id, data.lane_id, attempt, dispatched[0])
     return result
 
 

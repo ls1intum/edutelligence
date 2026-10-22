@@ -495,8 +495,8 @@ def test_a_refused_unload_records_the_lane_again():
     registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
     planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
     _restore(planner)
-    asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
-    asyncio.run(planner.unload_refused(PROVIDER, LANE))
+    attempt = asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
+    asyncio.run(planner.unload_refused(PROVIDER, LANE, attempt))
     _restore(planner)
     registry.lanes = []
     assert [a.lane_id for a in _restore(planner)] == [LANE]
@@ -555,8 +555,8 @@ def test_a_refused_unload_of_a_lane_never_recorded_drops_its_mark():
     registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
     table = _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)])
     planner = _planner(registry, table)
-    asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))  # marked before any observation
-    asyncio.run(planner.unload_refused(PROVIDER, LANE))
+    attempt = asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))  # marked before any observation
+    asyncio.run(planner.unload_refused(PROVIDER, LANE, attempt))
     assert LANE not in (table.rows[(PROVIDER, WORKER_LOCK_ID)][4] or {})
     _restore(planner)  # recorded again
     registry.lanes = []
@@ -624,9 +624,9 @@ def test_a_refusal_that_answers_after_the_timeout_records_the_lane_again():
     _restore(planner)
 
     async def late_refusal():
-        await planner.forget_restored_lane(PROVIDER, LANE)
+        attempt = await planner.forget_restored_lane(PROVIDER, LANE)
         answer = asyncio.get_running_loop().create_future()
-        await planner.settle_unload(PROVIDER, LANE, answer)  # the caller stopped waiting
+        await planner.settle_unload(PROVIDER, LANE, attempt, answer)  # the caller stopped waiting
         await asyncio.sleep(0)
         assert _unloading_marked(planner)
         answer.set_result({"success": True, "result": {"rolled_back": True}})
@@ -640,3 +640,18 @@ def test_a_refusal_that_answers_after_the_timeout_records_the_lane_again():
 def _unloading_marked(planner):
     record = planner._lock_cache().peek()[(PROVIDER, WORKER_LOCK_ID)][2] or {}
     return "unloading" in record.get(LANE, {})
+
+
+def test_a_late_refusal_of_an_earlier_unload_keeps_a_retry_suppressed():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+
+    async def retried():
+        first = await planner.forget_restored_lane(PROVIDER, LANE)
+        await asyncio.sleep(0.01)
+        await planner.forget_restored_lane(PROVIDER, LANE)  # the operator tries again
+        await planner.unload_refused(PROVIDER, LANE, first)  # the first one's late refusal
+
+    asyncio.run(retried())
+    assert _unloading_marked(planner)

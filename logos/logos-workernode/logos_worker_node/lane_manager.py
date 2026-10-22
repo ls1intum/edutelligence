@@ -1341,7 +1341,7 @@ class LaneManager:
             self._clear_transition(lane_id)
 
     async def _wake_lane(self, lane_id: str) -> LaneStatus:
-        cleanup: tuple[ProcessHandle, int | None, str] | None = None
+        failure: str | None = None
         status: LaneStatus | None = None
         # Waking grows the lane on its GPUs, so no load may start there meanwhile.
         async with self._holding_lane(lane_id):
@@ -1379,11 +1379,14 @@ class LaneManager:
                     details=str(exc),
                     port=handle.port,
                 )
-                detached_handle, port = self._detach_lane_unlocked(lane_id)
-                if detached_handle is not None:
-                    cleanup = (detached_handle, port, str(exc))
-                else:
-                    cleanup = (handle, handle.port, str(exc))
+                failure = str(exc)
+                # Out of service now; its lane, GPUs and port stay held until
+                # the process has exited, so nothing starts on memory it frees.
+                port = self._port_alloc.get_port(lane_id)
+                self._handles.pop(lane_id, None)
+                self._active_requests.pop(lane_id, None)
+                self._starting_deadlines.pop(lane_id, None)
+                await self._finalize_unloaded(lane_id, handle, port)
             else:
                 # Refresh GPU snapshot before _record_event for the same reason
                 # as in sleep_lane: wake allocates VRAM and _status_refresh_loop
@@ -1399,7 +1402,7 @@ class LaneManager:
                 )
                 status = await self._get_status_unlocked(lane_id)
 
-        if cleanup is None:
+        if failure is None:
             # The lane is awake again and its NEXT sleep must hold host
             # RAM — but the last re-plan saw it asleep and dropped it
             # from the sleep reserve, so until the next 60 s tick the
@@ -1412,10 +1415,7 @@ class LaneManager:
             assert status is not None
             return status
 
-        assert cleanup is not None
-        detached_handle, port, details = cleanup
-        await self._finalize_detached_lane(lane_id, detached_handle, port)
-        raise RuntimeError(f"Lane '{lane_id}' wake failed with CUDA OOM and was removed for cleanup: {details}")
+        raise RuntimeError(f"Lane '{lane_id}' wake failed with CUDA OOM and was removed for cleanup: {failure}")
 
     # ------------------------------------------------------------------
     # Status / queries

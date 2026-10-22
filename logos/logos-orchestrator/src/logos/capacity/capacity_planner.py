@@ -1060,11 +1060,14 @@ class CapacityPlanner:
         self._lock_cache().update(apply)
         return True
 
-    async def unload_refused(self, provider_id: int, lane_id: str) -> None:
-        """The worker refused an unload: the lane stays, so record it again."""
-        await self._set_unloading(provider_id, lane_id, None)
+    async def unload_refused(self, provider_id: int, lane_id: str, attempt: float) -> None:
+        """The worker refused the unload *attempt*: the lane stays, so record it again.
 
-    async def forget_restored_lane(self, provider_id: int, lane_id: str) -> None:
+        Only that attempt's mark is cleared: a later unload of the lane keeps its own.
+        """
+        await self._set_unloading(provider_id, lane_id, None, attempt=attempt)
+
+    async def forget_restored_lane(self, provider_id: int, lane_id: str) -> float:
         """Mark a lane an operator unloads on purpose: it is not put back.
 
         Called before the unload goes out, so no cycle puts the lane back in
@@ -1072,17 +1075,24 @@ class CapacityPlanner:
         orchestrator restart, and the lane leaves the records once the worker
         no longer reports it. Raises RestoreRecordError when a record could
         not be updated: the caller must not unload then, or the lane would be
-        put back.
+        put back. Returns the attempt, which names this unload to unload_refused.
         """
         self._restore_sleep_pending().discard((int(provider_id), lane_id))
-        if not await self._set_unloading(provider_id, lane_id, time.time()):
+        attempt = time.time()
+        if not await self._set_unloading(provider_id, lane_id, attempt):
             raise RestoreRecordError(
                 f"Lane {lane_id} is recorded to be restored after a restart, and the record could not "
                 "be updated; it was not unloaded. Try again."
             )
+        return attempt
 
-    async def _set_unloading(self, provider_id: int, lane_id: str, since: Optional[float]) -> bool:
-        """Set (or, with None, clear) the unloading mark of a lane in every lock that records it."""
+    async def _set_unloading(
+        self, provider_id: int, lane_id: str, since: Optional[float], attempt: Optional[float] = None
+    ) -> bool:
+        """Set (or, with None, clear) the unloading mark of a lane in every lock that records it.
+
+        Clearing for *attempt* leaves a mark that a later attempt set.
+        """
         ok = True
         async with self._restore_record_lock(provider_id):
             for (pid, lock_id), (locked, revision, record) in list(self._lock_cache().peek().items()):
@@ -1092,7 +1102,10 @@ class CapacityPlanner:
                 # a worker lock every lane, a lane lock its own.
                 if lane_id not in (record or {}) and (since is None or lock_id not in (WORKER_LOCK_ID, lane_id)):
                     continue
-                entry = {k: v for k, v in (record or {}).get(lane_id, {}).items() if k != UNLOADING}
+                current = (record or {}).get(lane_id, {})
+                if since is None and attempt is not None and current.get(UNLOADING) != attempt:
+                    continue  # another unload of the lane is still on its way
+                entry = {k: v for k, v in current.items() if k != UNLOADING}
                 if since is not None:
                     entry[UNLOADING] = since
                 if entry:
@@ -8906,7 +8919,9 @@ class CapacityPlanner:
         # A refusal can also travel in the payload of a delivered command.
         return isinstance(result, dict) and (result.get("ok") is False or bool(result.get("rolled_back")))
 
-    async def settle_unload(self, provider_id: int, lane_id: str, answer: Optional[asyncio.Future]) -> None:
+    async def settle_unload(
+        self, provider_id: int, lane_id: str, attempt: float, answer: Optional[asyncio.Future]
+    ) -> None:
         """Record the lane again once the worker's answer shows the unload was refused.
 
         The answer may come long after the caller stopped waiting: until then
@@ -8917,7 +8932,7 @@ class CapacityPlanner:
             return
         if answer.done():
             if self._answer_refused(answer):
-                await self.unload_refused(provider_id, lane_id)
+                await self.unload_refused(provider_id, lane_id, attempt)
             return
 
         async def settle() -> None:
@@ -8926,7 +8941,7 @@ class CapacityPlanner:
             except Exception:  # noqa: BLE001 — the outcome is unknown
                 return
             if self._answer_refused(answer):
-                await self.unload_refused(provider_id, lane_id)
+                await self.unload_refused(provider_id, lane_id, attempt)
 
         task = asyncio.get_running_loop().create_task(settle())
         settlers = self.__dict__.setdefault("_unload_settlers", set())
@@ -9518,9 +9533,10 @@ class CapacityPlanner:
                 self._facade.get_provider_name(action.provider_id) or action.provider_id,
             )
             return False
+        unload_attempt: Optional[float] = None
         if action.action == "stop" and action.operator_initiated:
             try:
-                await self.forget_restored_lane(action.provider_id, action.lane_id)
+                unload_attempt = await self.forget_restored_lane(action.provider_id, action.lane_id)
             except RestoreRecordError as exc:
                 logger.warning("Skipping stop of lane %s: %s", action.lane_id, exc)
                 self.record_lane_action_failure(action.provider_id, action.lane_id, str(exc))
@@ -9548,14 +9564,16 @@ class CapacityPlanner:
                 # The sleep went to the worker: the re-sleep is settled,
                 # whatever its outcome. One that never went out stays due.
                 await self._mark_resleep(action.provider_id, set_on=set(), set_off={action.lane_id})
-            if action.operator_initiated and action.action == "stop" and not confirmed:
+            if unload_attempt is not None and not confirmed:
                 if not sent:
                     # The unload never went out: the lane stays, so record it again.
-                    await self.unload_refused(action.provider_id, action.lane_id)
+                    await self.unload_refused(action.provider_id, action.lane_id, unload_attempt)
                 else:
                     # A refusal or rollback records it again, also one that
                     # answers after the wait ended; until then it stays out.
-                    await self.settle_unload(action.provider_id, action.lane_id, self._lifecycle_commands_sent.get(key))
+                    await self.settle_unload(
+                        action.provider_id, action.lane_id, unload_attempt, self._lifecycle_commands_sent.get(key)
+                    )
         finally:
             if marks_cold:
                 answer = self._lifecycle_commands_sent.pop(key, None)
