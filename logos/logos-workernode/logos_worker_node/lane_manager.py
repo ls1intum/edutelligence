@@ -305,11 +305,15 @@ _NOT_LOADING = object()
 
 
 async def _destroy_quietly(handle: ProcessHandle) -> None:
+    """Stop a process no handle tracks, bounded and best effort: the spawn's own error stays the one raised."""
     try:
-        await handle.destroy()
+        await asyncio.wait_for(handle.destroy(), timeout=_HANDLE_DESTROY_TIMEOUT)
     except Exception:  # noqa: BLE001 — best effort while a spawn is unwinding
-        logger.debug("Destroying an unregistered lane process failed", exc_info=True)
-    await handle.close()
+        logger.warning("Destroying an unregistered lane process failed", exc_info=True)
+    try:
+        await asyncio.wait_for(handle.close(), timeout=_HANDLE_CLOSE_TIMEOUT)
+    except Exception:  # noqa: BLE001
+        logger.debug("Closing an unregistered lane handle failed", exc_info=True)
 
 
 class LaneManager:

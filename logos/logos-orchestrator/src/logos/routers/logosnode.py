@@ -1098,20 +1098,30 @@ async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
         except RestoreRecordError as exc:
             return JSONResponse(status_code=503, content={"error": str(exc)})
     dispatched = []
-    result = await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="delete_lane",
-        params={"lane_id": data.lane_id},
-        on_dispatched=dispatched.append,
-    )
-    # Definitely not unloaded: the worker refused it (502), or it never went
-    # out. After a timeout the answer may still come and settle it.
-    status = getattr(result, "status_code", 200)
     planner = _main._capacity_planner
-    if planner is not None and attempt is not None and (status == 502 or (status >= 400 and not dispatched)):
-        await planner.unload_refused(data.provider_id, data.lane_id, attempt)
-    elif planner is not None and attempt is not None and status >= 400:
-        await planner.settle_unload(data.provider_id, data.lane_id, attempt, dispatched[0])
+    try:
+        result = await _dispatch_logosnode_command(
+            provider_id=data.provider_id,
+            action="delete_lane",
+            params={"lane_id": data.lane_id},
+            on_dispatched=dispatched.append,
+        )
+    except BaseException:
+        # Cancelled before an answer: settle the attempt all the same, or the
+        # live lane would stay out of the restore records.
+        if planner is not None and attempt is not None:
+            await asyncio.shield(
+                planner.settle_unload_attempt(
+                    data.provider_id, data.lane_id, attempt, dispatched[0] if dispatched else None
+                )
+            )
+        raise
+    # Not unloaded, or not known yet: one never sent records the lane again,
+    # a sent one is decided by its answer, also a late one.
+    if planner is not None and attempt is not None and getattr(result, "status_code", 200) >= 400:
+        await planner.settle_unload_attempt(
+            data.provider_id, data.lane_id, attempt, dispatched[0] if dispatched else None
+        )
     return result
 
 

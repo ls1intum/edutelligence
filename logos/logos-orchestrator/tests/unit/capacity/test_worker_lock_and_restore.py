@@ -712,3 +712,30 @@ def test_a_queued_restore_load_is_dropped_when_the_operator_unloads_the_lane_fir
     planner._execute_action_core = AsyncMock(return_value=True)
     assert asyncio.run(planner._execute_action_with_confirmation(loads[0])) is False
     planner._execute_action_core.assert_not_awaited()
+
+
+def test_an_operator_stop_cancelled_before_it_was_sent_records_the_lane_again():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+    stop = CapacityPlanAction(
+        action="stop", provider_id=PROVIDER, lane_id=LANE, model_name=MODEL, operator_initiated=True
+    )
+
+    async def drain_forever(action, **kwargs):
+        await asyncio.Event().wait()
+
+    planner._execute_action_core = drain_forever
+
+    async def cancelled():
+        task = asyncio.create_task(planner._execute_action_with_confirmation(stop))
+        for _ in range(20):
+            await asyncio.sleep(0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(cancelled())
+    assert not _unloading_marked(planner)

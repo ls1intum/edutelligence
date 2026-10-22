@@ -8968,6 +8968,19 @@ class CapacityPlanner:
         # A refusal can also travel in the payload of a delivered command.
         return isinstance(result, dict) and (result.get("ok") is False or bool(result.get("rolled_back")))
 
+    async def settle_unload_attempt(
+        self, provider_id: int, lane_id: str, attempt: float, answer: Optional[asyncio.Future]
+    ) -> None:
+        """Settle an unload attempt that did not end confirmed.
+
+        Never sent (no answer to wait for): the lane stays, so record it
+        again. Sent: the answer decides, also one that comes later.
+        """
+        if answer is None:
+            await self.unload_refused(provider_id, lane_id, attempt)
+        else:
+            await self.settle_unload(provider_id, lane_id, attempt, answer)
+
     async def settle_unload(
         self, provider_id: int, lane_id: str, attempt: float, answer: Optional[asyncio.Future]
     ) -> None:
@@ -9621,17 +9634,16 @@ class CapacityPlanner:
                 # The sleep went to the worker: the re-sleep is settled,
                 # whatever its outcome. One that never went out stays due.
                 await self._mark_resleep(action.provider_id, set_on=set(), set_off={action.lane_id})
+        finally:
             if unload_attempt is not None and not confirmed:
-                if not sent:
-                    # The unload never went out: the lane stays, so record it again.
-                    await self.unload_refused(action.provider_id, action.lane_id, unload_attempt)
-                else:
-                    # A refusal or rollback records it again, also one that
-                    # answers after the wait ended; until then it stays out.
-                    await self.settle_unload(
+                # Also when cancelled (during the drain, or waiting to send):
+                # an attempt left unsettled would keep the live lane out of
+                # the records for good. Shielded, so it completes regardless.
+                await asyncio.shield(
+                    self.settle_unload_attempt(
                         action.provider_id, action.lane_id, unload_attempt, self._lifecycle_commands_sent.get(key)
                     )
-        finally:
+                )
             if marks_cold:
                 answer = self._lifecycle_commands_sent.pop(key, None)
                 if answer is not None and not confirmed:
