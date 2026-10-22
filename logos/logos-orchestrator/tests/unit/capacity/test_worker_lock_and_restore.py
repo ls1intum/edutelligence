@@ -631,8 +631,7 @@ def test_a_refusal_that_answers_after_the_timeout_records_the_lane_again():
         await asyncio.sleep(0)
         assert _unloading_marked(planner)
         answer.set_result({"success": True, "result": {"rolled_back": True}})
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await asyncio.gather(*planner._unload_settlers)
         assert not _unloading_marked(planner)
 
     asyncio.run(late_refusal())
