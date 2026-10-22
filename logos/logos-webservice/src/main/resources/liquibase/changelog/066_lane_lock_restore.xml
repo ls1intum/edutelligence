@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+    <!-- Locked lanes put back after a worker restart.
+         A worker that restarts comes back without its lanes. The capacity
+         planner records here, for a locked lane, and for every lane of a
+         locked worker (lane_id '*'), the lane as the worker last reported
+         it: {lane_id: {"lane_config": {...}, "sleeping": bool}}. The lane
+         config names the model, the GPUs and the vLLM settings the lane ran
+         with, so the planner loads a missing lane again on the same GPUs.
+         The orchestrator writes the column only while the lock holds the
+         revision it read; the webservice clears it when a lane is locked
+         anew, so a new lock does not inherit the lanes of an earlier one. -->
+    <changeSet id="066-lane-lock-restore" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="lane_locks" columnName="restore_lanes"/></not>
+        </preConditions>
+        <sql>
+            ALTER TABLE lane_locks ADD COLUMN restore_lanes JSONB;
+        </sql>
+        <rollback>
+            <sql>ALTER TABLE lane_locks DROP COLUMN IF EXISTS restore_lanes;</sql>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

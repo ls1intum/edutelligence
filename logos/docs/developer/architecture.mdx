@@ -112,7 +112,8 @@ This design has three properties:
 | **Agent session** | One run of a coding agent in an isolated container. The agent runner starts the run from a task (usually a GitHub issue or pull request). |
 | **Calibration** | The measurement by the worker of the GPU memory that each model needs when it is loaded and when it sleeps. The capacity planner uses the profiles. |
 | **Capacity planner** | The background loop of the orchestrator. It puts idle lanes to sleep (by default after 30 minutes without a request), wakes lanes on demand, and adjusts the GPU memory utilization. It does not sleep or unload a locked lane. |
-| **Lane lock** | A mark that a Logos admin sets on a lane on the statistics page. The capacity planner keeps a locked lane warm: it does not put the lane to sleep, and it does not unload the lane for other models. The lock is stored in the `lane_locks` table. |
+| **Lane lock** | A mark that a Logos admin sets on a lane on the statistics page. The capacity planner keeps a locked lane warm: it does not put the lane to sleep, and it does not unload the lane for other models. After a worker restart, it loads the lane again on the same GPUs. The lock is stored in the `lane_locks` table. |
+| **Worker lock** | A lock on a whole worker (lane id `*` in `lane_locks`). The capacity planner does not load, wake, put to sleep or unload a lane there on its own, and it puts every lane back after a worker restart. Actions of a Logos admin still run. |
 
 ## Roles
 

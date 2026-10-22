@@ -279,7 +279,8 @@ public class ProviderController {
 
     /**
      * Lanes locked warm. The capacity planner reads the same table every
-     * cycle and never sleeps, drains or unloads a locked lane.
+     * cycle and never sleeps, drains or unloads a locked lane. A lock with
+     * lane id {@code *} locks the whole worker (see {@link LaneLockService}).
      */
     @GetMapping("/providers/logosnode/lanes/locks")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")

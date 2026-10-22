@@ -220,7 +220,13 @@ def calibration_claims():
     with DBManager() as db:
         return [
             dict(row)
-            for row in db.session.execute(text("SELECT * FROM maintenance_calibration ORDER BY provider_id")).mappings()
+            for row in db.session.execute(
+                # The age by the database clock, the one created_at was set by.
+                text(
+                    "SELECT *, EXTRACT(EPOCH FROM now() - created_at) AS age_s "
+                    "FROM maintenance_calibration ORDER BY provider_id"
+                )
+            ).mappings()
         ]
 
 
