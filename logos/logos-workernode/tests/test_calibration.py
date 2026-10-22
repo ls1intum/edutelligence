@@ -3807,3 +3807,76 @@ def test_a_stall_abort_is_not_counted_as_a_ready_timeout(tmp_path: Path):
     result, managers, _ = _search_with_ready_timeouts(tmp_path, TimeoutError("vLLM engine warmup stalled after 180s"))
 
     assert result.observed_reason != "repeated-ready-timeout"
+
+
+class _Sensor:
+    def __init__(self, *states):
+        self.states = list(states)
+        self.calls = 0
+
+    def __call__(self):
+        from logos_worker_node.node_health import SensorResult
+
+        state = self.states[min(self.calls, len(self.states) - 1)]
+        self.calls += 1
+        return SensorResult(state=state, detail=f"detail for {state}")
+
+
+def test_gpu_health_watch_needs_consecutive_bad_reads(monkeypatch):
+    from logos_worker_node import calibration
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(calibration.time, "monotonic", lambda: clock["now"])
+    watch = calibration._GpuHealthWatch(_Sensor("ok", "gpu-error", "ok", "gpu-error", "gpu-error"))
+    seen = []
+    for _ in range(5):
+        seen.append(watch())
+        clock["now"] += calibration._GPU_HEALTH_INTERVAL_S
+    assert seen[:4] == [None, None, None, None]
+    assert seen[4] == ("gpu-error", "detail for gpu-error")
+
+
+def test_gpu_health_watch_is_rate_limited(monkeypatch):
+    from logos_worker_node import calibration
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(calibration.time, "monotonic", lambda: clock["now"])
+    sensor = _Sensor("gpu-na")
+    watch = calibration._GpuHealthWatch(sensor)
+    for _ in range(10):
+        watch()
+        clock["now"] += 1.0
+    assert sensor.calls == 1
+
+
+def test_gpu_health_watch_ignores_a_sensor_that_raises(monkeypatch):
+    from logos_worker_node import calibration
+
+    def boom():
+        raise OSError("no nvidia-smi")
+
+    assert calibration._GpuHealthWatch(boom)() is None
+
+
+def test_wait_ready_aborts_with_gpu_health_error(monkeypatch):
+    from logos_worker_node import calibration
+
+    proc = MagicMock()
+    proc.poll.return_value = None
+    monkeypatch.setattr(calibration, "_get", lambda *a, **k: (503, None))
+    monkeypatch.setattr(calibration.time, "sleep", lambda _: None)
+    with pytest.raises(calibration.GpuHealthError) as error:
+        calibration.wait_ready("http://x", 600.0, proc, health_check=lambda: ("gpu-error", "GPU1.power='ERR!'"))
+    assert error.value.reason_code == "gpu-error"
+
+
+def test_gpu_error_during_a_probe_aborts_the_calibration_without_blacklisting(tmp_path: Path):
+    from logos_worker_node.calibration import GpuHealthError
+
+    result, managers, log_path = _search_with_ready_timeouts(tmp_path, GpuHealthError("gpu-error", "GPU1.power='ERR!'"))
+
+    assert not result.success
+    assert result.node_unhealthy_reason == "gpu-error"
+    assert result.unsupported_reason is None
+    assert managers["spawn"].call_count == 1
+    assert "[logos] gpu health: gpu-error: GPU1.power='ERR!'" in log_path.read_text()

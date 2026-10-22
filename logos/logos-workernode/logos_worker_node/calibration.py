@@ -89,6 +89,11 @@ _COMPILER_PROCESSES = frozenset({"nvcc", "cicc", "ptxas", "cc1plus", "ninja"})
 # slow: another KV size would only wait out the same timeout again.
 _MAX_CONSECUTIVE_READY_TIMEOUTS = 2
 _READY_TIMEOUT_MARKER = "ready timeout:"
+# While waiting for a probe, nvidia-smi is polled this often; a GPU reading as
+# wedged on this many checks in a row aborts the calibration.
+_GPU_HEALTH_INTERVAL_S = 15.0
+_GPU_HEALTH_STRIKES = 2
+_GPU_HEALTH_MARKER = "gpu health:"
 _SLEEP_TIMEOUT_S = 120.0
 _VLLM_STOP_TIMEOUT_S = 30.0
 _VRAM_SETTLE_S = 4.0
@@ -1518,6 +1523,47 @@ class VllmReadyTimeout(TimeoutError):
     """vLLM did not answer /health before the ready deadline."""
 
 
+class GpuHealthError(RuntimeError):
+    """A GPU reads as wedged (nvidia-smi ERR!/N/A, query failure or hang)."""
+
+    def __init__(self, reason_code: str, detail: str) -> None:
+        super().__init__(f"GPU unhealthy ({reason_code}): {detail}")
+        self.reason_code = reason_code
+        self.detail = detail
+
+
+class _GpuHealthWatch:
+    """Rate-limited node_health GPU sensor that needs consecutive bad reads."""
+
+    def __init__(self, check: Callable[[], Any] | None = None) -> None:
+        self._check = check
+        self._last = float("-inf")
+        self._strikes = 0
+
+    def __call__(self) -> tuple[str, str] | None:
+        now = time.monotonic()
+        if now - self._last < _GPU_HEALTH_INTERVAL_S:
+            return None
+        self._last = now
+        check = self._check
+        if check is None:
+            from logos_worker_node.node_health import _check_gpu  # noqa: PLC0415
+
+            check = _check_gpu
+        try:
+            result = check()
+        except Exception:  # noqa: BLE001
+            logger.debug("GPU health check raised", exc_info=True)
+            return None
+        if result.state == "ok":
+            self._strikes = 0
+            return None
+        self._strikes += 1
+        if self._strikes < _GPU_HEALTH_STRIKES:
+            return None
+        return result.state, result.detail
+
+
 def _compiler_running() -> bool:
     proc_root = Path("/proc")
     if not proc_root.exists():
@@ -1567,6 +1613,7 @@ def wait_ready(
     cancel_event: threading.Event | None = None,
     stall_check: Callable[[], bool] | None = None,
     busy_check: Callable[[], bool] | None = None,
+    health_check: Callable[[], tuple[str, str] | None] | None = None,
 ) -> None:
     deadline = time.perf_counter() + timeout_s
     hard_deadline = deadline + (_COMPILE_EXTENSION_S if busy_check is not None else 0.0)
@@ -1583,6 +1630,10 @@ def wait_ready(
             raise RuntimeError("cancelled")
         if proc.poll() is not None:
             raise RuntimeError(f"vLLM exited before becoming ready (code={proc.poll()})")
+        if health_check is not None:
+            unhealthy = health_check()
+            if unhealthy is not None:
+                raise GpuHealthError(*unhealthy)
         if stall_check is not None and stall_check():
             raise TimeoutError(f"vLLM {_STALL_MARKER} after {time.perf_counter() - t_start:.0f}s")
         status, _ = _get(f"{base_url}/health", timeout_s=5.0)
@@ -2759,6 +2810,7 @@ def _calibrate_model_probe(
                 cancel_event=cancel_event,
                 stall_check=_stall_check,
                 busy_check=_compiler_running,
+                health_check=_GpuHealthWatch(),
             )
             # This attempt actually came up — anchor the cold-load
             # measurement at ITS spawn, not before the outer call: the
@@ -2796,6 +2848,8 @@ def _calibrate_model_probe(
                 stop_vllm(proc)
                 time.sleep(_VRAM_SETTLE_S)
                 return None
+            if isinstance(exc, GpuHealthError):
+                _append_log_marker(log_path, f"{_GPU_HEALTH_MARKER} {exc.reason_code}: {exc.detail}")
             if isinstance(exc, VllmReadyTimeout):
                 _ready_timeouts[0] += 1
                 _append_log_marker(log_path, f"{_READY_TIMEOUT_MARKER} {exc} (in a row: {_ready_timeouts[0]})")
@@ -2837,6 +2891,10 @@ def _calibrate_model_probe(
             # UI — node_health.py's own sensors, not this, are what make
             # the orchestrator actually stop scheduling on this node.
             node_pattern = _classify_node_transient_error(probe_log)
+            if node_pattern is None and isinstance(exc, GpuHealthError):
+                node_pattern = NodeTransientErrorPattern(
+                    needle=_GPU_HEALTH_MARKER, reason_code=exc.reason_code, description=exc.detail
+                )
             if node_pattern is not None:
                 if not _node_unhealthy_box:
                     _node_unhealthy_box.append(node_pattern)

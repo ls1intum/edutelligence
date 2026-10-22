@@ -354,6 +354,36 @@ const NODE_UNHEALTHY_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
     // Same reasoning as filesystem-eio above.
     needle: 'No space left on device',
   },
+  'gpu-error': {
+    label: 'GPU reports an error',
+    description:
+      'nvidia-smi reported an error state (ERR!/[Error]) for a GPU ' +
+      'while the probe was running. The card or driver is wedged and ' +
+      'the node needs operator action.',
+    // Written by the worker's GPU health check during the probe.
+    needle: 'gpu health:',
+  },
+  'gpu-na': {
+    label: 'GPU memory unreadable',
+    description:
+      'nvidia-smi could not read a GPU\'s memory while the probe was ' +
+      'running. The card fell off the bus or the driver lost it.',
+    needle: 'gpu health:',
+  },
+  'gpu-query-failed': {
+    label: 'GPU query failed',
+    description:
+      'nvidia-smi exited with an error while the probe was running. ' +
+      'The driver is likely unhealthy.',
+    needle: 'gpu health:',
+  },
+  'gpu-query-timeout': {
+    label: 'GPU query timed out',
+    description:
+      'nvidia-smi did not answer while the probe was running. The ' +
+      'driver is likely stuck.',
+    needle: 'gpu health:',
+  },
   'cuda-device-not-detected': {
     label: 'No GPU detected',
     description: 'No CUDA-capable device is visible to vLLM on this node.',
