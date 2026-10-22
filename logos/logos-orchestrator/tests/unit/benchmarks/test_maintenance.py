@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from logos.benchmarks import maintenance as module
-from logos.logosnode_registry import LogosNodeCommandError, MaintenanceBusyError
+from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, MaintenanceBusyError
 
 
 @pytest.fixture
@@ -454,11 +454,34 @@ async def test_release_claim_refuses_while_the_worker_reports_a_session(coordina
     assert state["claim"] is not None
 
 
-async def test_release_claim_of_unreachable_worker_releases_when_no_session_is_reported(coordinator):
+@pytest.mark.parametrize(
+    "failure", [TimeoutError(), LogosNodeOfflineError("Command timeout waiting for worker response")]
+)
+async def test_release_claim_keeps_the_claim_of_an_online_worker_that_does_not_answer(coordinator, failure):
     service, state = coordinator
     token = await _claimed(service, state)
     service.registry.is_provider_online.return_value = True
-    service.registry._send_command = AsyncMock(side_effect=TimeoutError())
+    service.registry._send_command = AsyncMock(side_effect=failure)
+    with pytest.raises(MaintenanceBusyError, match="did not answer"):
+        await service.release_claim(1, token)
+    assert state["claim"] is not None
+
+
+async def test_release_claim_releases_once_the_silent_worker_is_offline(coordinator):
+    service, state = coordinator
+    token = await _claimed(service, state)
+    online = iter([True, False])
+    service.registry.is_provider_online.side_effect = lambda _pid: next(online)
+    service.registry._send_command = AsyncMock(side_effect=LogosNodeOfflineError("No active logosnode worker session"))
+    assert await service.release_claim(1, token) == {"released": True, "forced": True}
+    assert state["claim"] is None
+
+
+async def test_release_claim_of_a_worker_that_refuses_the_stop_uses_its_status_reports(coordinator):
+    service, state = coordinator
+    token = await _claimed(service, state)
+    service.registry.is_provider_online.return_value = True
+    service.registry._send_command = AsyncMock(side_effect=LogosNodeCommandError("Unsupported bridge command"))
     assert await service.release_claim(1, token) == {"released": True, "forced": True}
     assert state["claim"] is None
 

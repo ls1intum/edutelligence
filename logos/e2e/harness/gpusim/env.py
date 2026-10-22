@@ -70,7 +70,7 @@ class GpuSimEnv:
         """Install this environment into the current process via monkeypatch."""
         for key, value in self.env().items():
             monkeypatch.setenv(key, value)
-        # The worker caches the detected arch on the class, so a second test
+        # The worker caches the detected arch per process, so a second test
         # with different hardware would otherwise inherit the first one's answer.
         self.reset_arch_cache()
         return self
@@ -78,10 +78,10 @@ class GpuSimEnv:
     @staticmethod
     def reset_arch_cache() -> None:
         try:
-            from logos_worker_node.vllm_process import VllmProcessHandle  # noqa: PLC0415
+            from logos_worker_node.vllm_process import reset_cuda_arch_cache  # noqa: PLC0415
         except ImportError:
             return
-        VllmProcessHandle._cached_cuda_arch = None
+        reset_cuda_arch_cache()
 
     # -- state ------------------------------------------------------------
 

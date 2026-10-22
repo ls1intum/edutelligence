@@ -18,6 +18,7 @@ Key characteristics:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -67,6 +68,7 @@ from logos_worker_node.vllm_compat import (
     _VLLM_METRIC_TTFT_BUCKET,
     _VLLM_METRIC_TTFT_COUNT,
     _VLLM_METRIC_TTFT_SUM,
+    LANE_ENV_MARKER,
     _infer_default_chat_template_kwargs,
     _infer_reasoning_parser,
     _infer_tool_call_parser,
@@ -513,9 +515,57 @@ def auto_attention_backend(cuda_arch: str | None) -> str:
     return ""
 
 
+def reset_cuda_arch_cache() -> None:
+    """Forget the detected compute capabilities, so the next call probes again."""
+    global _cached_cuda_arch
+    _cached_cuda_arch = None
+
+
+_BACKEND_FLAGS = ("--attention-backend", f"{ATTENTION_BACKEND_FLAG}", "-ac.backend")
+_ATTENTION_CONFIG_FLAGS = ("--attention-config", "-ac")
+
+
+def _config_value_sets_backend(value: str) -> bool:
+    """True when an ``--attention-config`` value (JSON or ``key=value``) names a backend."""
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return re.search(r"(^|[,\s])backend\s*=", value) is not None
+    return isinstance(parsed, dict) and "backend" in parsed
+
+
 def extra_args_set_attention_backend(extra_args: list[str] | None) -> bool:
-    """True when raw vLLM args already choose the attention backend."""
-    return any(str(arg).startswith(("--attention-config", "--attention-backend", "-ac")) for arg in (extra_args or []))
+    """True when raw vLLM args already choose the attention backend.
+
+    Other attention settings, such as ``--attention-config.flash_attn_version``,
+    leave the backend choice open.
+    """
+    args = [str(arg) for arg in (extra_args or [])]
+    for index, arg in enumerate(args):
+        name, has_value, inline = arg.partition("=")
+        if name in _BACKEND_FLAGS:
+            return True
+        if name in _ATTENTION_CONFIG_FLAGS:
+            value = inline if has_value else (args[index + 1] if index + 1 < len(args) else "")
+            if _config_value_sets_backend(value):
+                return True
+    return False
+
+
+def resolve_attention_backend(
+    explicit_backend: str,
+    extra_args: list[str] | None,
+    auto_backend: Callable[[], str],
+) -> str:
+    """The backend Logos passes as ``--attention-config.backend``, or "" for none.
+
+    An explicit ``attention_backend`` wins, otherwise ``auto_backend`` decides.
+    Nothing is passed when ``extra_args`` already set the backend, so the
+    command carries a single choice and the operator's raw flag is the one used.
+    """
+    if extra_args_set_attention_backend(extra_args):
+        return ""
+    return str(explicit_backend or "").strip() or auto_backend()
 
 
 def attention_backend_args(
@@ -523,15 +573,8 @@ def attention_backend_args(
     extra_args: list[str] | None,
     auto_backend: Callable[[], str],
 ) -> list[str]:
-    """The ``--attention-config.backend`` arguments a lane (or its probe) runs with.
-
-    An explicit ``attention_backend`` wins, otherwise ``auto_backend`` decides.
-    Nothing is emitted when ``extra_args`` already set the backend, so the
-    command carries a single choice and the operator's raw flag is the one used.
-    """
-    if extra_args_set_attention_backend(extra_args):
-        return []
-    backend = str(explicit_backend or "").strip() or auto_backend()
+    """The ``--attention-config.backend`` arguments a lane (or its probe) runs with."""
+    backend = resolve_attention_backend(explicit_backend, extra_args, auto_backend)
     return [ATTENTION_BACKEND_FLAG, backend] if backend else []
 
 
@@ -2290,7 +2333,7 @@ class VllmProcessHandle:
     def _build_env(self, lane_config: LaneConfig) -> dict[str, str]:
         """Build environment variables for this lane's vLLM process."""
         gc = self._global_config
-        env: dict[str, str] = {}
+        env: dict[str, str] = {LANE_ENV_MARKER: self.lane_id}
 
         # GPU device pinning. The indices come from nvidia-smi, which numbers
         # GPUs by PCI bus; CUDA's default FASTEST_FIRST order can differ (for

@@ -44,7 +44,10 @@ export interface MaintenanceCalibration {
   status_supported: boolean;
 }
 
-/** A benchmark that holds the maintenance slot. `status` is null while its cleanup still runs. */
+/**
+ * A benchmark that holds the maintenance slot. While its cleanup still runs,
+ * `status` is the job's final status, or null when the job record is gone.
+ */
 export interface MaintenanceBenchmark {
   job_id: number;
   status: string | null;

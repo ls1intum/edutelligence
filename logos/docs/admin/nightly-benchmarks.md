@@ -280,6 +280,8 @@ Reconnection and a confirmed calibration stop are the preferred recovery path.
 The **Maintenance** status on the statistics page shows every claim.
 For an offline worker, or a worker that cannot report its calibration status, it offers **Release claim**.
 This action first tries a normal stop. It keeps the claim while the worker still reports a session.
+It also keeps the claim of an online worker that does not answer the stop, because no answer does not prove a stop.
+Try again, or release the claim once the worker shows as offline.
 It keeps an unconfirmed start on an online worker for 20 minutes, because the start can still run.
 Otherwise it releases the claim. The orchestrator log and the audit log record the release.
 Before you release the claim of an offline worker, make sure that the worker cannot resume calibration.

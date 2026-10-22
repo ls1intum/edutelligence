@@ -63,7 +63,8 @@ A worker confirms the end of its calibration before the slot is free again. An
 offline worker cannot confirm it, and neither can a worker with old software.
 For these workers, and after a stop that did not free the slot, the box shows
 **Release claim**. Logos tries a normal stop first. If the worker still reports
-a calibration, the claim stays. Otherwise Logos releases it and records the
+a calibration, the claim stays. The claim also stays if the worker is online
+but does not answer. Try again later, or wait until the worker is offline. Otherwise Logos releases it and records the
 release in the audit log. Release the claim of an offline worker only if the
 worker cannot continue the calibration.
 

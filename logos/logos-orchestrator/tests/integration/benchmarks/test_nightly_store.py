@@ -326,8 +326,9 @@ def test_maintenance_holders_name_every_kind_of_slot_holder(database):
                 "INSERT INTO jobs (id, environment, status, request_payload) VALUES "
                 "(5, 'model-provider-benchmark', 'running', "
                 '\'{"provider_id": 1, "model_name": "model-a", "nightly": true}\'), '
-                "(6, 'model-provider-benchmark', 'completed', '{\"provider_id\": 2}'), "
-                "(7, 'inference', 'running', '{}')"
+                "(6, 'model-provider-benchmark', 'failed', '{\"provider_id\": 2, \"model_name\": \"model-b\"}'), "
+                "(7, 'inference', 'running', '{}'), "
+                "(8, 'model-provider-benchmark', 'completed', '{\"provider_id\": 2}')"
             )
         )
         # A finished job whose claim is still being cleaned up holds the slot too.
@@ -352,7 +353,9 @@ def test_maintenance_holders_name_every_kind_of_slot_holder(database):
     assert benchmarks[5]["provider_name"] == "worker-a"
     assert benchmarks[5]["model_name"] == "model-a"
     assert benchmarks[5]["nightly"] is True
-    assert benchmarks[6]["status"] is None and benchmarks[6]["provider_name"] == "worker-b"
+    # A cancelled job keeps its status and model name while its claim is cleaned up.
+    assert benchmarks[6]["status"] == "failed"
+    assert (benchmarks[6]["provider_name"], benchmarks[6]["model_name"]) == ("worker-b", "model-b")
     (recovery,) = holders["recoveries"]
     assert (recovery["model_provider_id"], recovery["provider_name"], recovery["model_name"]) == (
         31,

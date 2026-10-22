@@ -195,6 +195,11 @@ export class MaintenancePanel implements OnChanges {
       if (seq !== this.readSeq) return;
       this.status.set(status);
       this.loadError.set(null);
+      // A holder that left the slot takes its offers along; a later holder
+      // with the same key starts with the normal action again.
+      const live = new Set(this.rows().map((r) => r.key));
+      this.forceOffered.update((keys) => new Set([...keys].filter((k) => live.has(k))));
+      this.stopFailed.update((keys) => new Set([...keys].filter((k) => live.has(k))));
     } catch (err: unknown) {
       if (seq !== this.readSeq) return;
       this.loadError.set(`Could not read the maintenance status: ${failureDetail(err)}`);

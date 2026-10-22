@@ -125,9 +125,10 @@ class MaintenanceCoordinator:
         """Release one calibration claim on an operator's request.
 
         Tries a normal stop first. The claim is released without the worker's
-        confirmation only when the worker cannot answer: it is offline, or the
-        stop or the status query fails. A worker that still reports a session
-        keeps its claim.
+        confirmation only when the worker is offline, or when it answers the
+        stop or the status query with an error and its status reports show no
+        session. An online worker that does not answer keeps its claim, and so
+        does a worker that still reports a session.
         """
         from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, MaintenanceBusyError
 
@@ -154,7 +155,15 @@ class MaintenanceCoordinator:
                     raise MaintenanceBusyError("The worker still reports a calibration session")
                 except MaintenanceBusyError:
                     raise
-                except (LogosNodeOfflineError, LogosNodeCommandError, TimeoutError) as exc:
+                except (LogosNodeOfflineError, TimeoutError) as exc:
+                    # No answer is no proof of a stop: the worker may only be busy.
+                    if self.registry.is_provider_online(provider_id):
+                        raise MaintenanceBusyError(
+                            "The worker did not answer. Try again, or release the claim once it is offline."
+                        ) from exc
+                    failure = str(exc) or type(exc).__name__
+                except LogosNodeCommandError as exc:
+                    # The worker answered, so its status reports are current.
                     failure = str(exc) or type(exc).__name__
                 if self.registry.is_calibrating(provider_id):
                     raise MaintenanceBusyError("The worker still reports a calibration session")

@@ -240,7 +240,8 @@ def maintenance_holders():
             )
         ).mappings()
         calibrations = [dict(row) for row in calibrations]
-        # The same jobs and claims has_active_benchmarks counts.
+        # The same jobs and claims has_active_benchmarks counts. A claimed job
+        # that already ended keeps its metadata while its cleanup runs.
         benchmarks = db.session.execute(
             text(
                 "SELECT COALESCE(j.id, b.job_id) AS job_id, j.status, "
@@ -251,7 +252,7 @@ def maintenance_holders():
                 "j.request_payload->>'model_name' AS model_name, "
                 "COALESCE(j.request_payload->>'nightly', 'false') = 'true' AS nightly "
                 "FROM (SELECT * FROM jobs WHERE environment = 'model-provider-benchmark' "
-                "AND status IN ('pending', 'running')) AS j "
+                "AND (status IN ('pending', 'running') OR id IN (SELECT job_id FROM maintenance_benchmark))) AS j "
                 "FULL OUTER JOIN maintenance_benchmark AS b ON b.job_id = j.id "
                 "LEFT JOIN providers p ON p.id = COALESCE(b.provider_id, (j.request_payload->>'provider_id')::integer) "
                 "ORDER BY since, job_id"

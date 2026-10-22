@@ -90,7 +90,7 @@
   (visibleChange)="closeRelease($event)"
   title="Release the calibration claim?"
   [message]="'Release the claim only when ' + (releaseTarget()?.provider ?? 'the provider')
-    + ' is not calibrating anymore. Logos stops calibration first and keeps the claim while the provider still reports a session. Calibration and benchmarks can start again afterwards.'"
+    + ' is not calibrating anymore. Logos stops calibration first. It keeps the claim while the provider still reports a session, or while it is online but does not answer. Calibration and benchmarks can start again afterwards.'"
   confirmLabel="Release claim"
   icon="pi-unlock"
   [loading]="busyKey() !== null"

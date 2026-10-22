@@ -106,6 +106,15 @@ describe('maintenance holder rows', () => {
     expect(calibrationRow(calibration()).canReleaseRecovery).toBe(false);
   });
 
+  it('shows a cancelled benchmark with its model while its cleanup runs', () => {
+    const row = benchmarkRow({
+      job_id: 9, status: 'failed', provider_id: 3, provider_name: 'gpu-a',
+      model_name: 'Qwen', nightly: false, since: SINCE, age_s: 30,
+    });
+    expect(row.details).toEqual(['Qwen', 'Cleaning up']);
+    expect(row.canCancel).toBe(false);
+  });
+
   it('lists every holder, calibrations first, when several share the slot', () => {
     const rows = holderRows(
       status({
@@ -322,5 +331,34 @@ describe('MaintenancePanel', () => {
     expect(releaseRecovery).toHaveBeenCalledTimes(1);
     finish({ released: true, forced: false });
     await first;
+  });
+
+  it('drops the Force release offer once the recovery has left the slot', async () => {
+    const held = status({ recoveries: [RECOVERY] });
+    const root = await render(held);
+    releaseRecovery.mockRejectedValue({ status: 409, error: { detail: 'The worker is offline' } });
+    getMaintenanceStatus.mockResolvedValue(held);
+    await component.releaseRecovery(component.rows()[0]);
+    expect(component.forceOffered().has('recovery:31')).toBe(true);
+
+    getMaintenanceStatus.mockResolvedValue(FREE);
+    await component.refresh();
+    getMaintenanceStatus.mockResolvedValue(held);
+    await component.refresh();
+    fixture.detectChanges();
+    expect(buttons(root)).toEqual(['Release recovery']);
+  });
+
+  it('drops the Release claim offer once the claim has left the slot', async () => {
+    const held = status({ calibrations: [calibration()] });
+    const root = await render(held);
+    stopCalibration.mockRejectedValue({ status: 503, error: { error: 'Worker not connected' } });
+    await component.stop(component.rows()[0]);
+    getMaintenanceStatus.mockResolvedValue(FREE);
+    await component.refresh();
+    getMaintenanceStatus.mockResolvedValue(held);
+    await component.refresh();
+    fixture.detectChanges();
+    expect(buttons(root)).toEqual(['Stop calibration']);
   });
 });
