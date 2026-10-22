@@ -770,3 +770,23 @@ def test_an_unload_cancelled_while_its_mark_is_written_leaves_no_mark():
     asyncio.run(cancelled())
     assert not _unloading_marked(planner)
     assert "unloading" not in (table.rows[(PROVIDER, WORKER_LOCK_ID)][4] or {}).get(LANE, {})
+
+
+def test_a_refusal_whose_write_failed_is_retried_until_it_lands():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    table = _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)])
+    planner = _planner(registry, table)
+    _restore(planner)
+    attempt = asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
+
+    def broken(changes):
+        raise RuntimeError("database down")
+
+    planner._lane_restore_writer = broken
+    asyncio.run(planner.unload_refused(PROVIDER, LANE, attempt))
+    assert _unloading_marked(planner)
+    planner._lane_restore_writer = table.write  # the database is back
+    _restore(planner)
+    assert not _unloading_marked(planner)
+    registry.lanes = []
+    assert [a.lane_id for a in _restore(planner)] == [LANE]

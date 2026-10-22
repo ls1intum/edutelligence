@@ -853,6 +853,7 @@ class CapacityPlanner:
             return []
         if not any(pid == provider_id and entry[0] for (pid, _), entry in self._lock_cache().peek().items()):
             return []
+        await self._retry_unsettled_refusals(provider_id)
         present = {str(lane.get("lane_id")) for lane in runtime_lanes if isinstance(lane, dict)}
         pending = self._restore_sleep_pending()
         async with self._restore_record_lock(provider_id):
@@ -1095,8 +1096,21 @@ class CapacityPlanner:
         """The worker refused the unload *attempt*: the lane stays, so record it again.
 
         Only that attempt's mark is cleared: a later unload of the lane keeps its own.
+        A write that fails is retried every cycle until it lands.
         """
-        await self._set_unloading(provider_id, lane_id, None, attempt=attempt)
+        key = (int(provider_id), lane_id, attempt)
+        if await self._set_unloading(provider_id, lane_id, None, attempt=attempt):
+            self._unsettled_refusals().discard(key)
+        else:
+            self._unsettled_refusals().add(key)
+
+    def _unsettled_refusals(self) -> set[tuple[int, str, float]]:
+        """Refused unload attempts whose mark could not be cleared yet."""
+        return self.__dict__.setdefault("_unsettled_refusal_keys", set())
+
+    async def _retry_unsettled_refusals(self, provider_id: int) -> None:
+        for pid, lane_id, attempt in [key for key in self._unsettled_refusals() if key[0] == int(provider_id)]:
+            await self.unload_refused(pid, lane_id, attempt)
 
     async def forget_restored_lane(self, provider_id: int, lane_id: str) -> float:
         """Mark a lane an operator unloads on purpose: it is not put back.
