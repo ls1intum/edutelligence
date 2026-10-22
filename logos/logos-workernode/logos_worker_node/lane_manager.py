@@ -3217,7 +3217,9 @@ class LaneManager:
                         f"Replacement process did not enter running state "
                         f"(state={status.state.value}, return_code={status.return_code})"
                     )
-            except Exception as exc:
+            except BaseException as exc:
+                # Cancellation too (a worker shutdown): the replacement process
+                # must not outlive the old handle it was meant to replace.
                 logger.error(
                     "Restart '%s' failed during preparation or spawn: %s",
                     lane_id,

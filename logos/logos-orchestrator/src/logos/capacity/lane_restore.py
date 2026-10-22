@@ -22,6 +22,9 @@ WORKER_LOCK_ID = "*"
 # Marks a lane put back awake that slept before the restart and is still to
 # be put to sleep. Kept in the record, so it survives an orchestrator restart.
 RESLEEP = "resleep"
+# Marks, with the time it was sent, a lane an operator is unloading: it is
+# neither recorded again nor put back while the worker still reports it.
+UNLOADING = "unloading"
 
 # A lane in these states, or in a transition, is not recorded: it is not in a
 # state to put back.
@@ -59,9 +62,11 @@ def updated_record(
     """
     # A record is read back from the table: drop entries that cannot be put
     # back rather than fail the planner cycle on them. The rewrite repairs it.
-    record = {lane_id: entry for lane_id, entry in (previous or {}).items() if _restorable(entry)}
+    record = {lane_id: entry for lane_id, entry in (previous or {}).items() if _keepable(entry)}
     seen = observed if lane_id == WORKER_LOCK_ID else {k: v for k, v in observed.items() if k == lane_id}
     for seen_id, entry in seen.items():
+        if UNLOADING in record.get(seen_id, {}):
+            continue  # being unloaded: the report still shows it
         if seen_id in keep_sleeping and seen_id in record:
             entry = {**entry, "sleeping": record[seen_id].get("sleeping", False)}
             if record[seen_id].get(RESLEEP):
@@ -75,7 +80,21 @@ def _restorable(entry: Any) -> bool:
         isinstance(entry, dict)
         and isinstance(entry.get("lane_config"), dict)
         and bool(entry["lane_config"].get("model"))
+        and UNLOADING not in entry
     )
+
+
+def _keepable(entry: Any) -> bool:
+    return _restorable(entry) or (isinstance(entry, dict) and isinstance(entry.get(UNLOADING), (int, float)))
+
+
+def unloading_lanes(record: dict[str, dict[str, Any]] | None) -> dict[str, float]:
+    """Lanes of a record an operator is unloading, by when the unload was sent."""
+    return {
+        lane_id: float(entry[UNLOADING])
+        for lane_id, entry in (record or {}).items()
+        if isinstance(entry, dict) and isinstance(entry.get(UNLOADING), (int, float))
+    }
 
 
 def missing_lanes(

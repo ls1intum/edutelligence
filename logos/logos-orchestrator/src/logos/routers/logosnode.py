@@ -1103,7 +1103,7 @@ async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
     )
     # 502: the worker refused it. A timeout (503) may still unload the lane.
     if _main._capacity_planner is not None and getattr(result, "status_code", 200) == 502:
-        _main._capacity_planner.unload_refused(data.provider_id, data.lane_id)
+        await _main._capacity_planner.unload_refused(data.provider_id, data.lane_id)
     return result
 
 
