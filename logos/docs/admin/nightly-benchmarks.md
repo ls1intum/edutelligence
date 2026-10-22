@@ -152,6 +152,8 @@ Recovery waits only for the lane it restores, and for other lanes of the same mo
 It reads the request counters from the worker itself.
 Production traffic on other lanes of the worker does not hold the recovery back.
 The worker also refuses the restart while the lane still has requests.
+A lane pinned to its GPUs restarts while holding only that lane and those GPUs, so requests on other lanes finish normally.
+The orchestrator's own request counter does not delay a recovery.
 
 ### Release a recovery
 

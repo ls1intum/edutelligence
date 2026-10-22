@@ -555,3 +555,47 @@ async def test_live_sibling_execution_prevents_parallel_wave_recovery(scheduler,
     monkeypatch.setattr(module.store, "execution_lock", lambda pair: nullcontext(None if pair == 32 else object()))
     assert not await scheduler.recover(rows[0], MagicMock())
     scheduler.restore.assert_not_awaited()
+
+
+async def test_recovery_completes_although_the_orchestrator_counter_is_stale(scheduler, rotation):
+    """The whole path: idle check, restore, planner preparation, journal release."""
+    from types import SimpleNamespace
+
+    from logos.capacity.capacity_planner import CapacityPlanner
+
+    rows, _ = rotation
+    original = {"max_num_seqs": 16, "max_num_batched_tokens": 4096}
+    recovery = {
+        "provider_id": 20,
+        "model": "model",
+        "lane_id": "lane",
+        "vllm_config": original,
+        "lane_config": {"lane_id": "lane", "model": "model", "vllm": True, "vllm_config": original},
+        "mutated": True,
+    }
+    rows[0]["recovery"] = recovery
+    idle_lane = {"lane_id": "lane", "model": "model", "active_requests": 0, "backend_metrics": {}}
+
+    async def send_command(_pid, action, params, timeout_seconds=None):
+        if action in {"get_runtime", "get_lanes"}:
+            return {"lanes": [idle_lane]}
+        assert action == "reconfigure_lane" and params["updates"] == {"vllm_config": original}
+        return {"restarted": True, "lane_config": {"vllm_config": original}}
+
+    scheduler.registry.send_command = AsyncMock(side_effect=send_command)
+    planner = object.__new__(CapacityPlanner)
+    planner._registry = scheduler.registry
+    planner._facade = MagicMock()
+    planner._facade.model_inflight_requests.return_value = 2  # never drops: stale
+    ready = SimpleNamespace(lane_id="lane", runtime_state="running", sleep_state="awake")
+    planner._pick_request_target_lane = MagicMock(return_value=ready)
+    planner._drain_lane = AsyncMock(return_value=True)
+    planner.is_worker_locked = MagicMock(return_value=False)
+    scheduler.planner = planner
+    scheduler.restore = module.NightlyScheduler.restore.__get__(scheduler)
+
+    await asyncio.wait_for(scheduler.tick(), timeout=5)
+
+    planner._drain_lane.assert_awaited_once()
+    assert scheduler.saved[-1][1:] == ("interrupted_recovered", [], None)
+    assert benchmark_reservations.owner(20, "model") is None

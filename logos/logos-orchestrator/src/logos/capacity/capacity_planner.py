@@ -1982,7 +1982,10 @@ class CapacityPlanner:
         if benchmark_reservations.owner(provider_id, model_name) is None:
             return
         deadline = time.monotonic() + timeout_seconds
-        while self._facade.model_inflight_requests(provider_id, model_name) > 0:
+        # A recovery restores production settings; the requests it waits for are
+        # the worker's, and _drain_lane reads those. The local counter can stay
+        # above zero after a request ended and would hold the recovery forever.
+        while not MAINTENANCE_RECOVERY.get() and self._facade.model_inflight_requests(provider_id, model_name) > 0:
             if time.monotonic() >= deadline:
                 raise RuntimeError("Timed out waiting for existing requests on the benchmark lane to finish")
             await asyncio.sleep(0.2)
