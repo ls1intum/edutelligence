@@ -251,7 +251,7 @@ Use this endpoint for Docker health checks or load balancer probes.
 - **Weaviate disk warnings**: Weaviate is configured to warn at 80% disk usage (`DISK_USE_WARNING_PERCENTAGE=80`).
 
 :::tip
-Monitor Weaviate's disk usage in production. If the disk fills up, ingestion operations will fail silently.
+Monitor Weaviate's disk usage in production. Above 90% (Weaviate's default `DISK_USE_READONLY_PERCENTAGE`), Weaviate sets every shard read-only. Ingestion runs then fail at their write and show as failed in Artemis, while retrieval keeps working on what is stored. Weaviate does not lift the read-only state by itself once space is freed: set each shard back with `PUT /v1/schema/<collection>/shards/<shard>` and `{"status": "READY"}`.
 :::
 
 ## Managing Containers

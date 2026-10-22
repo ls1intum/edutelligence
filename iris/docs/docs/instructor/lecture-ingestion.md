@@ -8,49 +8,38 @@ Lecture ingestion sends your lecture materials to Iris's knowledge base, enablin
 
 ## What Gets Ingested
 
-When you ingest lectures, Iris processes:
+For each attachment video unit, Iris processes:
 
-- **Slide content** — text and structure from attachment units (PDFs, slide decks)
-- **Video transcriptions** — if available, transcriptions from video units
+- **Slide content**: text and structure from the unit's PDF, including what a vision model reads from figures
+- **Video transcripts**: Iris transcribes the unit's video and aligns the transcript with the slides
 
 This content is indexed and made available to Iris so it can reference specific slides, concepts, and explanations from your lectures when responding to students.
 
-## How to Ingest Lectures
+## When Ingestion Happens
 
-There are two ways to send lecture content to Iris:
+There is nothing to trigger. Artemis sends a lecture unit to Iris on its own whenever its content changes:
 
-### Bulk Ingestion
+- when you create an attachment video unit with a PDF, or with a video from YouTube or TUM-Live;
+- when you replace its file, which uploads a new version; and
+- when you change its video link.
 
-On the **lecture management page**, use the **"Send All Lectures to Iris"** button to ingest all lecture units at once. This is the fastest way to set up Iris for a course with existing materials.
+A file whose content is unchanged, such as a deck saved again from the slide editor, keeps its version and is not processed again. Artemis also checks the index regularly and sends a unit again when its content is missing, incomplete or outdated, for example after Iris was unavailable. You do not have to watch for that either.
 
-### Individual Ingestion
+A unit is processed only if Iris can read something from it: a PDF, or a video it can transcribe. A unit that only links a video on another site is marked as not indexed, and is processed automatically once it gets a PDF or a supported video.
 
-On an individual lecture unit that has attachments, use the **"Send Unit to Iris"** button to ingest just that specific unit. This is useful when you add or update a single lecture.
+Ingestion does not depend on whether Iris is enabled in your course. The processed content is also used by the Artemis global search, which every student who allowed AI can use. The chat only uses it while Iris is enabled; see [Enabling Iris](./enabling-iris).
 
-<!-- TODO: Screenshot needed — Lecture management page -->
+## Following the Progress
 
-## Prerequisites
+On the **lecture management page**, every attachment video unit shows a status badge: **Awaiting Processing**, then the current step, such as **Transcribing** for a video or **Reading slides** and **Indexing**, and finally **Indexed**. Transcribing a video takes noticeably longer than processing slides.
 
-Before ingesting, ensure that:
+<!-- TODO: Screenshot needed: status badges on the lecture management page, one unit Indexed and one in progress -->
 
-- **Lectures have attachment units** — Iris can only ingest content from lecture units that have attached files (slides, PDFs). Lectures without attachments have nothing to ingest.
-- **Iris is enabled** for your course — see [Enabling Iris](./enabling-iris)
+If processing fails, the badge shows **Processing Failed** with the reason, for example a video that is private or too long, or a PDF without readable pages. Artemis retries transient errors on its own. After you have fixed the cause, **Retry processing** next to the unit starts it again.
 
-## When to Re-Ingest
+### Changing a Unit While It Is Still Processing
 
-You should re-ingest lectures when:
-
-- **You update slide content** — Iris uses the version it last ingested, so updates require re-ingestion
-- **You add new lectures** — newly added lectures are not automatically ingested
-- **You add transcriptions** — if video transcriptions become available after the initial ingestion
-
-:::tip
-Make it a habit to re-ingest after updating lecture materials. A quick click on "Send Unit to Iris" ensures students always get answers based on the latest version of your content.
-:::
-
-### Re-Ingesting While a Unit Is Still Processing
-
-You do not have to wait for a running ingestion to finish before sending the same unit again. Iris **supersedes** the run in progress: the older run stops at its next checkpoint and sends no final success or failure status. It may already have sent progress updates before it was superseded.
+You do not have to wait for a running ingestion to finish before changing the same unit again. Iris **supersedes** the run in progress: the older run stops at its next checkpoint and sends no final success or failure status. It may already have sent progress updates before it was superseded.
 
 This is what makes correcting a mistake cheap. If you replace the slides again, or fix a video link while the first version is still being transcribed, the obsolete run does not finish and cannot overwrite the result of the one you actually want.
 

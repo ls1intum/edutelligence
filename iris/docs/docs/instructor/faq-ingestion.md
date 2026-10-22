@@ -8,7 +8,7 @@ FAQ ingestion lets you feed your course's frequently asked questions into Iris's
 
 ## What FAQ Ingestion Does
 
-When you ingest course FAQs, Iris indexes the questions and answers you have curated. This means:
+Iris indexes the questions and answers you have curated in your course. This means:
 
 - Students get **answers consistent with your official responses** rather than generic AI-generated explanations
 - Common questions are handled accurately without requiring tutor intervention
@@ -16,11 +16,11 @@ When you ingest course FAQs, Iris indexes the questions and answers you have cur
 
 ## Setting Up FAQs
 
-FAQs are managed through Artemis's built-in FAQ system for your course. To make them available to Iris:
+FAQs are managed through Artemis's built-in FAQ system for your course, and there is no separate step to make them available to Iris:
 
 1. **Create or update your course FAQs** in Artemis — navigate to the FAQ management section in your course and add questions with their answers
-2. **Ingest the FAQs into Iris** — use the ingestion button on the FAQ management page to send your FAQ content to Iris's knowledge base (similar to [lecture ingestion](./lecture-ingestion))
-3. **Verify ingestion** — after ingestion, test by asking Iris a question that one of your FAQs covers to confirm it references the correct answer
+2. **Accept them**: Artemis sends every accepted FAQ to Iris shortly after you save it, as long as Iris is enabled for your course; FAQs that are only proposed are not sent
+3. **Verify the result**: ask Iris a question that one of your FAQs covers to confirm it references the correct answer
 
 ## What Makes a Good FAQ
 
@@ -41,10 +41,12 @@ As your course evolves, your FAQs should too:
 
 - **Add new FAQs** as new common questions emerge during the semester
 - **Update existing answers** when course policies or content change
-- **Re-ingest after changes** so Iris uses the latest version of your FAQs
+- **Delete outdated FAQs**: Iris stops using a deleted FAQ as well
 
-:::warning
-If you update FAQs in Artemis but do not re-ingest them, Iris will continue using the old versions. Always re-ingest after making changes.
+Every change reaches Iris on its own. Artemis also compares the FAQs Iris holds with the accepted FAQs of your course every few minutes and sends whatever is missing or changed, so an FAQ saved while Iris was unavailable catches up without you doing anything.
+
+:::info
+FAQs are only sent to Iris while Iris is enabled for your course. After you enable Iris, the existing accepted FAQs follow within a few minutes.
 :::
 
 ## How Iris Uses FAQs
@@ -59,5 +61,5 @@ FAQs are particularly useful for:
 
 ## Next Steps
 
-- [Lecture Ingestion](./lecture-ingestion) — add lecture materials to Iris's knowledge base
+- [Lecture Ingestion](./lecture-ingestion): how your lecture materials reach Iris
 - [Custom Instructions](./custom-instructions) — further shape how Iris responds in your course

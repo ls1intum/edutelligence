@@ -13,7 +13,7 @@ Model roles, providers, and local/cloud selection belong in [LLM configuration](
 The RAG lifecycle has two separate phases:
 
 ```text
-Ingestion: Artemis webhook -> Iris ingestion pipeline -> Iris Weaviate collections
+Ingestion: Artemis queue -> Iris ingestion worker (claim) -> Iris ingestion pipeline -> Iris Weaviate collections
 Retrieval: user query -> rewrite/HyDE -> vector retrieval -> reranking -> agent tool result -> optional citations
 ```
 
@@ -37,7 +37,7 @@ The collections retain course and lecture/unit metadata so ingestion, deletion, 
 
 ### Lecture PDFs
 
-`LectureIngestionUpdatePipeline` coordinates the lecture-unit update flow. The PDF ingestion path extracts lecture-page content, processes relevant visual material, chunks text, vectorizes it, and writes `Lectures` records with their metadata. It also updates the related lecture-unit representation used by retrieval. The incoming lecture-unit webhook runs on a thread registered in `IngestionJobHandler`, which starts it immediately and supersedes any run still in progress for the same base URL, course, lecture, and lecture unit. See [ingestion jobs](./ingestion-jobs.md) for the supersession and cancellation contract.
+`LectureIngestionUpdatePipeline` coordinates the lecture-unit update flow. The PDF ingestion path extracts lecture-page content, processes relevant visual material, chunks text, vectorizes it, and writes `Lectures` records with their metadata. It also updates the related lecture-unit representation used by retrieval. A lecture-unit job, whether the ingestion worker claimed it or a caller pushed it through the webhook, runs on a thread registered in `IngestionJobHandler`, which starts it immediately and supersedes any run still in progress for the same base URL, course, lecture, and lecture unit. See [ingestion jobs](./ingestion-jobs.md) for the supersession and cancellation contract.
 
 For an updated attachment, `LectureUnitPageIngestionPipeline` performs the following source-backed sequence:
 
@@ -48,7 +48,7 @@ For an updated attachment, `LectureUnitPageIngestionPipeline` performs the follo
 5. generate embeddings and batch-write the chunks to `Lectures`; and
 6. remove the temporary file and report token/status updates through the ingestion callback.
 
-If the stored attachment version is already current, the pipeline can retain the existing chunks and restore display-page metadata instead of re-ingesting the PDF. Updated content is scoped and replaced before the new chunks are written.
+If the stored attachment version is already current, the pipeline can retain the existing chunks and restore display-page metadata instead of re-ingesting the PDF. Updated content is written as a new generation first and the previous rows are purged only once it is verified, so an interrupted run never leaves the unit empty; see [Ingestion reliability](./ingestion-reliability.md#writing-a-generation).
 
 ### Printed slide numbers
 
@@ -121,5 +121,6 @@ After a response uses lecture or FAQ material, the nested citation pipeline can 
 
 ## Boundaries
 
-- **Artemis Global Search** has its own authorization model and schemas. Iris's global-search answer path may retrieve lecture content, but it does not merge the two storage systems.
+- **Artemis Global Search** has its own authorization model and schemas. Iris's global-search answer path may retrieve lecture content, but it does not merge the two storage systems; see [Global search](./global-search.md).
+- **Ingestion reliability**, meaning how a run writes, verifies and reports a unit, is described in [Ingestion reliability](./ingestion-reliability.md).
 - **Memiris** uses separate learning, memory, and relationship schemas. Iris's wrapper, memory tools, and periodic sleep scheduling are documented in the [pipeline system](./pipeline-system.md); reusable library internals live in the Memiris README.

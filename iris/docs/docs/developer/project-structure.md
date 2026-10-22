@@ -36,7 +36,7 @@ src/iris/
 ├── tools/                     # LLM-callable tools
 ├── llm/                       # LLM client implementations
 ├── retrieval/                 # RAG retrieval logic
-├── ingestion/                 # Ingestion job management
+├── ingestion/                 # Ingestion job handling and the pull-based worker
 ├── vector_database/           # Weaviate integration and schemas
 ├── tracing/                   # Observability (LangFuse integration)
 └── web/                       # FastAPI routers and status callbacks
@@ -116,12 +116,17 @@ pipeline/
 ├── lecture_ingestion_update_pipeline.py   # Update existing ingested lectures
 ├── transcription_ingestion_pipeline.py    # Ingest lecture transcriptions
 ├── faq_ingestion_pipeline.py              # Ingest FAQs into Weaviate
+├── ingestion_audit.py                     # Read-back audit before a run reports FINISHED
+├── ingestion_quality.py                   # Deterministic quality score of page chunks
+├── global_search_pipeline.py              # Iris answer of the Artemis global search
 ├── rewriting_pipeline.py                  # Rewrite content for clarity
 ├── tutor_suggestion_pipeline.py           # Generate tutor suggestions for posts
 ├── autonomous_tutor_pipeline.py           # Autonomous tutor agent
 ├── session_title_generation_pipeline.py   # Generate chat session titles
 ├── shared/                                # Shared pipeline utilities
 │   ├── citation_pipeline.py               # Citation generation sub-pipeline
+│   ├── global_search_intent_classifier.py # Decides whether a search query gets an answer
+│   ├── entity_card_renderer.py            # Renders Artemis entity candidates for the answer
 │   └── utils.py                           # Tool generation, date formatting
 └── prompts/                               # Prompt templates
     ├── templates/                         # Jinja2 templates (.j2 files)
@@ -194,6 +199,7 @@ retrieval/
 ├── faq_retrieval_utils.py                 # FAQ retrieval utilities
 └── lecture/                               # Lecture retrieval sub-system
     ├── lecture_retrieval.py               # Main lecture retrieval orchestrator
+    ├── lecture_global_search_retrieval.py  # Retrieval for global search and its answer
     ├── lecture_page_chunk_retrieval.py     # Retrieve lecture page chunks
     ├── lecture_transcription_retrieval.py  # Retrieve lecture transcriptions
     └── lecture_unit_segment_retrieval.py   # Retrieve lecture segments
@@ -208,6 +214,7 @@ vector_database/
 ├── lecture_transcription_schema.py         # Schema: LectureTranscriptions collection
 ├── lecture_unit_segment_schema.py          # Schema: LectureUnitSegments collection
 ├── lecture_unit_schema.py                  # Schema: LectureUnits collection
+├── batch_verify.py                         # Confirms rows and generations against the object store
 └── faq_schema.py                          # Schema: FAQs collection
 ```
 
@@ -219,6 +226,9 @@ web/
 │   ├── pipelines.py                       # Pipeline execution endpoints
 │   ├── webhooks.py                        # Artemis webhook receivers
 │   ├── ingestion_status.py                # Ingestion status endpoints
+│   ├── ingestion_census.py                # Per-course lecture ingestion census
+│   ├── faq_census.py                      # FAQ ingestion census
+│   ├── search.py                          # Lecture content search for global search
 │   ├── memiris.py                         # Memory management endpoints
 │   └── health/                            # Health check endpoint
 ├── status/
