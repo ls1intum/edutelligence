@@ -739,3 +739,34 @@ def test_an_operator_stop_cancelled_before_it_was_sent_records_the_lane_again():
 
     asyncio.run(cancelled())
     assert not _unloading_marked(planner)
+
+
+def test_an_unload_cancelled_while_its_mark_is_written_leaves_no_mark():
+    import threading
+
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    table = _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)])
+    planner = _planner(registry, table)
+    _restore(planner)
+    writing, release = threading.Event(), threading.Event()
+
+    def slow_write(changes):
+        writing.set()
+        release.wait(2)
+        return table.write(changes)
+
+    async def cancelled():
+        planner._lane_restore_writer = slow_write
+        task = asyncio.create_task(planner.forget_restored_lane(PROVIDER, LANE))
+        await asyncio.to_thread(writing.wait, 2)
+        task.cancel()
+        planner._lane_restore_writer = table.write
+        release.set()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(cancelled())
+    assert not _unloading_marked(planner)
+    assert "unloading" not in (table.rows[(PROVIDER, WORKER_LOCK_ID)][4] or {}).get(LANE, {})

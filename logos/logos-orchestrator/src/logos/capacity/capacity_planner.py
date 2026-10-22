@@ -1110,7 +1110,18 @@ class CapacityPlanner:
         """
         self._restore_sleep_pending().discard((int(provider_id), lane_id))
         attempt = time.time()
-        if not await self._set_unloading(provider_id, lane_id, attempt):
+        # The write runs to its end even when the caller is cancelled: it may
+        # already be committing, and a mark nobody knows of would keep the
+        # live lane out of the records. A cancelled caller sends no unload,
+        # so its attempt is cleared again before the cancellation goes on.
+        marking = asyncio.ensure_future(self._set_unloading(provider_id, lane_id, attempt))
+        try:
+            marked = await asyncio.shield(marking)
+        except asyncio.CancelledError:
+            if await marking:
+                await asyncio.shield(self.unload_refused(provider_id, lane_id, attempt))
+            raise
+        if not marked:
             raise RestoreRecordError(
                 f"Lane {lane_id} is recorded to be restored after a restart, and the record could not "
                 "be updated; it was not unloaded. Try again."
