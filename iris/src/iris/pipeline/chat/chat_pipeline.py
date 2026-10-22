@@ -25,8 +25,6 @@ from iris.tools.current_view_content import CONTENT_BLOCKS_KEY
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.web.status.status_update import StatusCallback
 
-from ...common.memiris_setup import get_tenant_for_user
-from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
@@ -295,40 +293,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     def __str__(self):
         return f"{self.__class__.__name__}(context={self.chat_mode.value})"
 
-    def get_memiris_reference(self, dto: ChatPipelineExecutionDTO):
-        """
-        Return the reference to use for the Memiris learnings created in a programming exercise chat.
-        It is simply the id of last user message in the chat history with a prefix.
-
-        Returns:
-            str: The reference identifier
-        """
-        last_message: Optional[PyrisMessage] = next(
-            (
-                m
-                for m in reversed(dto.chat_history or [])
-                if m.sender == IrisMessageRole.USER
-            ),
-            None,
-        )
-        return (
-            f"session-messages/{last_message.id}"
-            if last_message and last_message.id
-            else "session-messages/unknown"
-        )
-
-    def get_memiris_tenant(self, dto: ChatPipelineExecutionDTO) -> str:
-        """
-        Return the Memiris tenant identifier for the current user.
-
-        Args:
-            dto: The execution DTO containing user information.
-
-        Returns:
-            The tenant identifier string.
-        """
-        return get_tenant_for_user(dto.user.id)
-
     def on_agent_step(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -441,7 +405,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 state.callback.send_result(
                     result,
                     tokens=state.tokens,
-                    accessed_memories=state.accessed_memory_storage,
                     activities=activities,
                     activity_seq=activity_seq,
                     suggested_context=state.pending_context_switch,
@@ -489,23 +452,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             return state.result
 
-    @staticmethod
-    def _has_memories(
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-    ) -> bool:
-        """Whether the memory tool is offered; not when the memories cannot be read, so the chat still answers."""
-        dto = state.dto
-        if not (dto.user and dto.user.memiris_enabled and state.memiris_wrapper):
-            return False
-        try:
-            return state.memiris_wrapper.has_memories()
-        except Exception:
-            logger.warning(
-                "Memories are unavailable; answering without the memory tool",
-                exc_info=True,
-            )
-            return False
-
     def prepare_state(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -528,7 +474,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             state.allow_lecture_tool = lecture_tool_future.result()
             state.allow_faq_tool = faq_tool_future.result()
-        state.allow_memiris_tool = self._has_memories(state)
 
         # Extract lecture contexts from DTO and store in state
         lecture_contexts = self._parse_lecture_context(dto)
@@ -612,7 +557,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "course_name": dto.course.name,
             "allow_lecture_tool": state.allow_lecture_tool,
             "allow_faq_tool": state.allow_faq_tool,
-            "allow_memiris_tool": state.allow_memiris_tool,
             "has_exercises": bool(dto.course.exercises),
             "lecture_name": dto.lecture.title if dto.lecture else None,
             "can_point_out_in_combined_view": can_point_out_in_combined_view,
@@ -691,23 +635,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             The chat pipeline enum for this chat mode.
         """
         return _TOKEN_PIPELINE_BY_CHAT_MODE.get(self.chat_mode, PipelineEnum.NOT_SET)
-
-    def is_memiris_memory_creation_enabled(
-        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
-    ) -> bool:
-        """
-        Return True if background memory creation should be enabled for this run.
-
-        Args:
-            state: The current pipeline execution state.
-
-        Returns:
-            True if memory creation should be enabled, False otherwise.
-        """
-        if self.chat_mode in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
-            return bool(state.dto.user.memiris_enabled)
-        else:
-            return False
 
     def _parse_lecture_context(self, dto: ChatPipelineExecutionDTO):
         """

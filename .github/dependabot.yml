@@ -9,15 +9,6 @@ updates:
         applies-to: version-updates
         patterns:
           - "*"
-  - package-ecosystem: "pip"
-    directory: "memiris"
-    schedule:
-      interval: "weekly"
-    groups:
-      memiris-python-dependencies:
-        applies-to: version-updates
-        patterns:
-          - "*"
   # The logos services are uv projects. They were not covered here at all, so
   # their manifests were only ever read once by the dependency graph and never
   # rescanned -- an alert for a dependency that had since been fixed stayed
