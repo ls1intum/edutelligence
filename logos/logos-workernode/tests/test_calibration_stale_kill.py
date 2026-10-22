@@ -121,11 +121,14 @@ def test_probe_environment_is_marked_and_tracked(tmp_path, monkeypatch):
     assert calibration._probe_process_groups == {4242}
 
 
-def test_lane_environment_carries_the_lane_marker():
+def test_lane_environment_carries_the_lane_marker(tmp_path, monkeypatch):
     from logos_worker_node.models import LaneConfig, VllmConfig, WorkerConfig
     from logos_worker_node.vllm_process import VllmProcessHandle
 
-    handle = VllmProcessHandle("planner-qwen", 19000, WorkerConfig())
+    # Keep the caches the lane environment points at inside the test directory.
+    monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
+    handle = VllmProcessHandle("planner-qwen", 19000, WorkerConfig(models_path=str(tmp_path)))
+    monkeypatch.setattr(handle, "_resolve_hf_home", lambda root: f"{root}/.hf_cache")
     env = handle._build_env(LaneConfig(model="org/m", vllm=True, vllm_config=VllmConfig()))
     assert env[LANE_ENV_MARKER] == "planner-qwen"
     assert PROBE_ENV_MARKER not in env

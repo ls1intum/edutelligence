@@ -84,9 +84,9 @@ def test_override_from_config_reaches_the_probe_command(monkeypatch, tmp_path):
     assert _backends(cmd) == ["TRITON_ATTN"]
 
 
-def test_probe_and_serving_lane_choose_the_same_backend(monkeypatch):
+def test_probe_and_serving_lane_choose_the_same_backend(monkeypatch, tmp_path):
     monkeypatch.setattr(vllm_process, "detect_cuda_arch", lambda: "7.5")
-    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(models_path=str(tmp_path)))
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     for vc_kwargs, plan in (
         ({}, {}),
@@ -97,8 +97,8 @@ def test_probe_and_serving_lane_choose_the_same_backend(monkeypatch):
         assert _backends(serving) == _backends(probe)
 
 
-def test_serving_lane_does_not_duplicate_a_raw_backend_flag(monkeypatch):
-    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+def test_serving_lane_does_not_duplicate_a_raw_backend_flag(monkeypatch, tmp_path):
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(models_path=str(tmp_path)))
     monkeypatch.setattr(handle, "_detect_cuda_arch", lambda: "7.5")
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     vc = VllmConfig(extra_args=[ATTENTION_BACKEND_FLAG, "FLASHINFER"])
