@@ -445,24 +445,50 @@ def test_an_unload_waiting_on_the_worker_stays_forgotten_until_the_lane_is_gone(
     assert _restore(planner) == []
 
 
-def test_a_lane_never_unloaded_is_recorded_again_after_the_limit():
+def test_an_unload_queued_for_hours_is_still_not_undone():
     registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
     planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
     _restore(planner)
     asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
-    _age_unload(planner, planner.FORGOTTEN_LANE_LIMIT_S + 1)
-    _restore(planner)  # still there, not unloading: record it again
+    _age_unload(planner, 6 * 3600)
+    assert _restore(planner) == []
+    registry.lanes = []
+    assert _restore(planner) == []
+
+
+def test_a_new_lane_lock_marks_its_unload_before_it_has_recorded_the_lane():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, LANE, True, 5, None)]))
+    asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))  # no cycle has recorded it yet
+    assert _restore(planner) == []
+    registry.lanes = []
+    assert _restore(planner) == []
+
+
+def test_a_re_sleep_that_never_went_out_stays_due():
+    record = {EMBED_LANE: {**_entry(EMBED_LANE, EMBED, "0", True), "resleep": True}}
+    registry = _Registry([_runtime_lane(EMBED_LANE, EMBED, "0")])
+    table = _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, record)])
+    planner = _planner(registry, table)
+    sleeps = _restore(planner)
+    planner._execute_action_core = AsyncMock(return_value=False)  # the drain timed out, nothing was sent
+    asyncio.run(planner._execute_action_with_confirmation(sleeps[0]))
+    assert table.rows[(PROVIDER, WORKER_LOCK_ID)][4][EMBED_LANE].get("resleep") is True
+    assert [a.action for a in _restore(planner)] == ["sleep_l1"]
+
+
+def test_an_operator_stop_that_never_went_out_records_the_lane_again():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+    planner._execute_action_core = AsyncMock(return_value=False)
+    stop = CapacityPlanAction(
+        action="stop", provider_id=PROVIDER, lane_id=LANE, model_name=MODEL, operator_initiated=True
+    )
+    asyncio.run(planner._execute_action_with_confirmation(stop))
+    _restore(planner)
     registry.lanes = []
     assert [a.lane_id for a in _restore(planner)] == [LANE]
-
-
-def test_a_lane_still_unloading_after_the_limit_stays_forgotten():
-    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1", transition="stopping")])
-    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
-    asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
-    _age_unload(planner, planner.FORGOTTEN_LANE_LIMIT_S + 1)
-    _restore(planner)
-    assert "unloading" in planner._lock_cache().peek()[(PROVIDER, WORKER_LOCK_ID)][2][LANE]
 
 
 def test_a_refused_unload_records_the_lane_again():

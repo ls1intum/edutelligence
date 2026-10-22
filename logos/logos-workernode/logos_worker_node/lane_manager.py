@@ -3302,6 +3302,25 @@ class LaneManager:
         handle: ProcessHandle,
         port: int | None,
     ) -> None:
+        """Stop a lane's process once it has left _handles.
+
+        Runs to its end even when the caller is cancelled (a worker shutdown):
+        nothing tracks the process any more, so an interrupted teardown would
+        leave it running.
+        """
+        teardown = asyncio.ensure_future(self._teardown_detached_lane(lane_id, handle, port))
+        try:
+            await asyncio.shield(teardown)
+        except asyncio.CancelledError:
+            await teardown
+            raise
+
+    async def _teardown_detached_lane(
+        self,
+        lane_id: str,
+        handle: ProcessHandle,
+        port: int | None,
+    ) -> None:
         try:
             await asyncio.wait_for(handle.destroy(), timeout=_HANDLE_DESTROY_TIMEOUT)
         except asyncio.TimeoutError:

@@ -621,3 +621,18 @@ async def test_an_unload_waits_for_a_start_on_its_gpu() -> None:
     assert not unload.done()
     release.set()
     await asyncio.wait_for(asyncio.gather(starting, unload), timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_unload_still_stops_its_process() -> None:
+    handle = _Handle(LaneConfig(model="m-a", gpu_devices="0"))
+    handle.release.clear()
+    manager = _manager_with({"a": handle})
+    unload = asyncio.create_task(manager.remove_lane("a"))
+    await _settle()
+    unload.cancel()
+    await _settle()
+    handle.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await unload
+    assert handle.destroyed
