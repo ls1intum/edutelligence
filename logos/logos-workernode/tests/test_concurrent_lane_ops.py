@@ -636,3 +636,21 @@ async def test_a_cancelled_unload_still_stops_its_process() -> None:
     with pytest.raises(asyncio.CancelledError):
         await unload
     assert handle.destroyed
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_replacement_spawn_stops_its_process() -> None:
+    started = asyncio.Event()
+
+    class _Spawning(_Handle):
+        async def spawn(self, lane_config):
+            started.set()
+            await asyncio.Event().wait()
+
+    handle = _Spawning(LaneConfig(model="m-a"))
+    spawn = asyncio.create_task(LaneManager._spawn_or_destroy(handle, handle.lane_config))  # noqa: SLF001
+    await started.wait()
+    spawn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await spawn
+    assert handle.destroyed

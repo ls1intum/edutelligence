@@ -1093,9 +1093,11 @@ class CapacityPlanner:
                 entry = {k: v for k, v in (record or {}).get(lane_id, {}).items() if k != UNLOADING}
                 if since is not None:
                     entry[UNLOADING] = since
-                if not entry:
-                    continue
-                new_record = {**(record or {}), lane_id: entry}
+                if entry:
+                    new_record = {**(record or {}), lane_id: entry}
+                else:
+                    # Only the mark was there: drop the entry, so the lane is recorded again.
+                    new_record = {k: v for k, v in (record or {}).items() if k != lane_id}
                 if new_record != record:
                     ok = await self._save_restore_record(pid, lock_id, revision, new_record) and ok
         return ok

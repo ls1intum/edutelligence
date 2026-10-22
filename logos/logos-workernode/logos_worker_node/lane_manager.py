@@ -304,6 +304,14 @@ def _log_shows_memory_trouble(handle: Any) -> bool:
 _NOT_LOADING = object()
 
 
+async def _destroy_quietly(handle: ProcessHandle) -> None:
+    try:
+        await handle.destroy()
+    except Exception:  # noqa: BLE001 — best effort while a spawn is unwinding
+        logger.debug("Destroying an unregistered lane process failed", exc_info=True)
+    await handle.close()
+
+
 class LaneManager:
     """Manages a pool of vLLM process handles, one per model lane."""
 
@@ -3392,7 +3400,7 @@ class LaneManager:
                             metal_config=self._metal_config,
                         )
                         await restored.init()
-                        await restored.spawn(orig_lc)
+                        await self._spawn_or_destroy(restored, orig_lc)
                         self._handles[lid] = restored
                         self._port_alloc._used[lid] = orig_port
                         self._active_requests[lid] = 0
@@ -3422,7 +3430,7 @@ class LaneManager:
                         metal_config=self._metal_config,
                     )
                     await restored.init()
-                    await restored.spawn(lc)
+                    await self._spawn_or_destroy(restored, lc)
                     self._handles[lid] = restored
                     self._port_alloc._used[lid] = port
                     self._active_requests[lid] = 0
@@ -3444,6 +3452,20 @@ class LaneManager:
     def _current_calibration_id(self, model: str) -> int | None:
         profile = self._model_profiles.get_profile(model) if self._model_profiles is not None else None
         return profile.calibration_id if profile is not None else None
+
+    @staticmethod
+    async def _spawn_or_destroy(handle: ProcessHandle, lane_config: LaneConfig) -> None:
+        """Spawn a process that is not tracked yet, and stop it again if the spawn fails or is cancelled."""
+        try:
+            await handle.spawn(lane_config)
+        except BaseException:
+            # Cancellation too (a worker shutdown): nothing else tracks it.
+            teardown = asyncio.ensure_future(_destroy_quietly(handle))
+            try:
+                await asyncio.shield(teardown)
+            except asyncio.CancelledError:
+                await teardown
+            raise
 
     def _note_lane_spawn(self, lane_id: str, model: str) -> None:
         self._lane_calibration_at_spawn[lane_id] = self._current_calibration_id(model)

@@ -549,3 +549,15 @@ def test_a_sleeper_is_not_loaded_while_its_re_sleep_mark_cannot_be_written():
     assert _restore(planner) == []
     planner._lane_restore_writer = table.write
     assert [a.lane_id for a in _restore(planner)] == [EMBED_LANE]
+
+
+def test_a_refused_unload_of_a_lane_never_recorded_drops_its_mark():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    table = _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)])
+    planner = _planner(registry, table)
+    asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))  # marked before any observation
+    asyncio.run(planner.unload_refused(PROVIDER, LANE))
+    assert LANE not in (table.rows[(PROVIDER, WORKER_LOCK_ID)][4] or {})
+    _restore(planner)  # recorded again
+    registry.lanes = []
+    assert [a.lane_id for a in _restore(planner)] == [LANE]
