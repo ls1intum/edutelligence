@@ -86,6 +86,18 @@ def _is_retryable_openai_error(error: Exception) -> bool:
     return False
 
 
+def is_content_filter_error(error: Exception) -> bool:
+    """Whether the provider's content filter rejected the request or its answer.
+
+    Azure answers a flagged prompt with a 400 whose code is ``content_filter``, and a flagged answer
+    with the ``content_filter`` finish reason. The filter judges the exact input, so resending the same
+    request gets the same verdict.
+    """
+    if isinstance(error, ContentFilterFinishReasonError):
+        return True
+    return isinstance(error, APIStatusError) and error.code == "content_filter"
+
+
 def convert_content_to_openai_format(content):
     """Convert a single content item to OpenAI format."""
     content_type_mapping = {

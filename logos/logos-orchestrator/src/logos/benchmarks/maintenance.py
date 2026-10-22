@@ -3,6 +3,7 @@
 import logging
 import uuid
 from contextvars import ContextVar
+from datetime import UTC, datetime, timedelta
 
 from logos.benchmarks import nightly_store as store
 from logos.maintenance_window import maintenance_node_limit
@@ -10,6 +11,13 @@ from logos.maintenance_window import maintenance_node_limit
 logger = logging.getLogger(__name__)
 
 AUTOMATIC_CALIBRATION = ContextVar("automatic_calibration", default=False)
+
+# A start whose reply was lost keeps an unconfirmed claim. The worker activates
+# its session before it answers, so once this has passed since the claim, an
+# idle status proves the start never took effect or has already finished.
+# Longer than the longest lane command (900 s): a worker that still reads
+# commands one at a time can run a start that long after it was sent.
+UNCONFIRMED_CLAIM_GRACE = timedelta(minutes=20)
 
 
 class MaintenanceCoordinator:
@@ -86,10 +94,12 @@ class MaintenanceCoordinator:
             if connection is None:
                 return completed
             for claim in store.calibration_claims():
-                if not claim["confirmed"]:
+                if not claim["confirmed"] and not _past_grace(claim):
                     continue
                 try:
-                    if await self._release_if_finished(claim):
+                    # A start never confirmed may not have run: free the slot,
+                    # but leave the worker due for calibration this window.
+                    if await self._release_if_finished(claim) and claim["confirmed"]:
                         completed.append(claim["provider_id"])
                 except (LogosNodeOfflineError, LogosNodeCommandError, TimeoutError) as exc:
                     logger.warning(
@@ -115,3 +125,11 @@ class MaintenanceCoordinator:
         finally:
             # Run only after GuideLLM and its cancellation cleanup have ended.
             store.release_benchmark(job_id)
+
+
+def _past_grace(claim):
+    age_s = claim.get("age_s")
+    if age_s is not None:
+        return float(age_s) >= UNCONFIRMED_CLAIM_GRACE.total_seconds()
+    created_at = claim.get("created_at")
+    return created_at is not None and datetime.now(UTC) - created_at >= UNCONFIRMED_CLAIM_GRACE

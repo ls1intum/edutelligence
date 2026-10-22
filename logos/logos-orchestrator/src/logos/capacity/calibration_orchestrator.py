@@ -29,7 +29,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 from zoneinfo import ZoneInfo
 
 # Terminal session events that free the active-provider slot. Shared with the
@@ -117,10 +117,13 @@ class CalibrationOrchestrator:
         registry: "LogosNodeRuntimeRegistry",
         facade: "LogosNodeSchedulingDataFacade",
         config: CalibrationConfig | None = None,
+        worker_locked: Callable[[int], bool] | None = None,
     ) -> None:
         self._registry = registry
         self._facade = facade
         self._config = config or CalibrationConfig.from_env()
+        # Whether an operator locked a worker; automatic calibration skips it.
+        self._worker_locked: Callable[[int], bool] = worker_locked or (lambda _provider_id: False)
         self._task: asyncio.Task[None] | None = None
         self._active_provider_ids: set[int] = set()
         # Providers we have already kicked off this window. A worker that
@@ -224,7 +227,8 @@ class CalibrationOrchestrator:
             pid not in self._completed_this_window
             and self._registry.has_received_first_status(pid)
             and not self._provider_is_unhealthy(pid)
-            and self._provider_has_uncalibrated_models(pid)
+            # A locked worker's calibration cannot start, so it holds up nothing.
+            and not self._worker_locked(pid) and self._provider_has_uncalibrated_models(pid)
             for pid in self._facade.provider_ids()
         )
 
@@ -246,6 +250,10 @@ class CalibrationOrchestrator:
             if not self._registry.has_received_first_status(provider_id):
                 continue
             if self._provider_is_unhealthy(provider_id):
+                continue
+            if self._worker_locked(provider_id):
+                # Calibration stops every lane; on a locked worker only an
+                # operator may start it.
                 continue
             if self._provider_has_active_requests(provider_id):
                 continue

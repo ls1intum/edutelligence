@@ -186,6 +186,16 @@ def _strip_nul(value: Any) -> Any:
     return value
 
 
+def _json_object(value: Any) -> Optional[dict]:
+    """A ``jsonb`` object column as a dict; the driver may hand it over as text."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    return value if isinstance(value, dict) else None
+
+
 def _json_for_jsonb(value: Any) -> str:
     """Serialise ``value`` for a ``jsonb`` column or cast.
 
@@ -4064,22 +4074,66 @@ class DBManager:
             written += len(log_ids)
         return written
 
-    def get_lane_locks(self) -> Optional[list[tuple[int, str, bool, int]]]:
-        """Return every lane lock row as ``(provider_id, lane_id, locked, revision)``.
+    def get_lane_locks(self) -> Optional[list[tuple[int, str, bool, int, Optional[dict]]]]:
+        """Return every lane lock row as ``(provider_id, lane_id, locked, revision, restore_lanes)``.
 
         An unlocked lane keeps its row (``locked`` false) so its revision tells
         the planner that a lock push it may still receive is older. Returns
         ``None`` when the read fails (for example while the table does not
         exist yet on a database the webservice has not migrated), so the
         caller can tell "no locks" apart from "could not read the locks".
+        ``restore_lanes`` is ``None`` before the webservice adds that column.
         """
         try:
-            rows = self.session.execute(text("SELECT provider_id, lane_id, locked, revision FROM lane_locks")).all()
-        except Exception as exc:  # noqa: BLE001 — a lock read must never break the planner
+            rows = self.session.execute(
+                text("SELECT provider_id, lane_id, locked, revision, restore_lanes FROM lane_locks")
+            ).all()
+        except Exception:  # noqa: BLE001 — an older schema has no restore_lanes yet
             self.session.rollback()
-            logger.warning("Reading lane locks failed: %s", exc)
-            return None
-        return [(int(row[0]), str(row[1]), bool(row[2]), int(row[3])) for row in rows]
+            try:
+                rows = [
+                    (*row, None)
+                    for row in self.session.execute(
+                        text("SELECT provider_id, lane_id, locked, revision FROM lane_locks")
+                    ).all()
+                ]
+            except Exception as exc:  # noqa: BLE001 — a lock read must never break the planner
+                self.session.rollback()
+                logger.warning("Reading lane locks failed: %s", exc)
+                return None
+        return [(int(row[0]), str(row[1]), bool(row[2]), int(row[3]), _json_object(row[4])) for row in rows]
+
+    def set_lane_restore_records(self, changes: list[tuple[int, str, int, dict]]) -> bool:
+        """Store what locks put back after a worker restart, all or none.
+
+        Each change is ``(provider_id, lane_id, revision, record)``. Returns
+        False, and stores nothing, when one lock changed since its revision:
+        the revision guard keeps a record observed under one lock from
+        reaching a lock taken later, and a mark that spans several locks
+        (an unload) must not land in only some of them.
+        """
+        try:
+            for provider_id, lane_id, revision, record in changes:
+                result = self.session.execute(
+                    text(
+                        "UPDATE lane_locks SET restore_lanes = CAST(:record AS JSONB) "
+                        "WHERE provider_id = :provider_id AND lane_id = :lane_id AND locked AND revision = :revision"
+                    ),
+                    {
+                        "record": _json_for_jsonb(record),
+                        "provider_id": provider_id,
+                        "lane_id": lane_id,
+                        "revision": revision,
+                    },
+                )
+                if not result.rowcount:
+                    self.session.rollback()
+                    return False
+            self.session.commit()
+            return True
+        except Exception:
+            self.session.rollback()
+            raise
 
     # ADMIN ONLY
     def get_all_deployments(self) -> list[Deployment]:
