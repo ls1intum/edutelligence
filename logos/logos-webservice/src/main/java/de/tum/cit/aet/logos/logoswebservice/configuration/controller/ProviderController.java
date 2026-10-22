@@ -29,6 +29,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DrainLaneRequestDT
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.LaneLoadStatusRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.LockLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ReleaseCalibrationClaimRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ReleaseRecoveryRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UnlockLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.LaneLockService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
@@ -234,6 +235,35 @@ public class ProviderController {
             after.put("confirmed_by_worker", !Boolean.TRUE.equals(body.get("forced")));
             auditLog.record("provider.calibration_claim_released", "provider", req.providerId(), null,
                 Map.of("calibration_claim", req.claimToken()), after);
+        }
+        return response;
+    }
+
+    /**
+     * Releases a nightly recovery that cannot finish on its own. Without force
+     * the worker must run the lane's original settings. Recorded in the audit trail.
+     */
+    @PostMapping("/providers/logosnode/maintenance/release_recovery")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> releaseRecovery(@RequestBody ReleaseRecoveryRequestDTO req) {
+        if (req == null || req.modelProviderId() == null)
+            return ResponseEntity.badRequest().body(Map.of("error", "model_provider_id is required"));
+        boolean force = Boolean.TRUE.equals(req.force());
+        ResponseEntity<Map> response;
+        try {
+            response = workerAdminClient.releaseRecovery(req.modelProviderId(), force);
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+        Map<?, ?> body = response.getBody();
+        if (response.getStatusCode().is2xxSuccessful() && body != null && Boolean.TRUE.equals(body.get("released"))) {
+            Map<String, Object> after = new HashMap<>();
+            after.put("nightly_recovery", null);
+            after.put("forced", Boolean.TRUE.equals(body.get("forced")));
+            auditLog.record("provider.nightly_recovery_released", "model_provider", req.modelProviderId(), null,
+                Map.of("nightly_recovery", "pending"), after);
         }
         return response;
     }

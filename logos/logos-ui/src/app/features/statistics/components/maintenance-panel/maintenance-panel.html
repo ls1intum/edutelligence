@@ -57,6 +57,18 @@
                   Release claim
                 </button>
               }
+              @if (row.canReleaseRecovery) {
+                <button type="button" class="maintenance__btn" [disabled]="busyKey() !== null"
+                        (click)="releaseRecovery(row)">
+                  {{ busyKey() === row.key && !forceTarget() ? 'Releasing…' : 'Release recovery' }}
+                </button>
+                @if (forceOffered().has(row.key)) {
+                  <button type="button" class="maintenance__btn maintenance__btn--danger" [disabled]="busyKey() !== null"
+                          (click)="askForceRelease(row)">
+                    Force release
+                  </button>
+                }
+              }
               @if (row.canCancel) {
                 <button type="button" class="maintenance__btn maintenance__btn--danger" [disabled]="busyKey() !== null"
                         (click)="cancel(row)">
@@ -85,4 +97,18 @@
   (confirmed)="confirmRelease()"
 >
   @if (releaseError(); as error) { <p modal-error role="alert">{{ error }}</p> }
+</app-modal-confirm>
+
+<app-modal-confirm
+  [visible]="forceTarget() !== null"
+  (visibleChange)="closeForceRelease($event)"
+  title="Force release the recovery?"
+  [message]="'Logos could not confirm that ' + (forceTarget()?.provider ?? 'the provider')
+    + ' runs its original settings again. If you force the release, the model keeps whatever settings it has now, and those may be benchmark settings. Check the lane on the provider first. Calibration and benchmarks can start again afterwards.'"
+  confirmLabel="Force release"
+  icon="pi-unlock"
+  [loading]="busyKey() !== null"
+  (confirmed)="confirmForceRelease()"
+>
+  @if (forceError(); as error) { <p modal-error role="alert">{{ error }}</p> }
 </app-modal-confirm>

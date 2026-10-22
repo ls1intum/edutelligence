@@ -55,7 +55,9 @@ shows **Free**.
 - **Calibrating**: click **Stop calibration** to end the calibration.
 - **Benchmarking**: click **Cancel benchmark** to end the benchmark.
 - **Nightly recovery**: the scheduler puts the original settings of the
-  worker back. This ends on its own.
+  worker back. This usually ends on its own. If it does not, click
+  **Release recovery**. Logos checks that the model runs its original settings
+  again, and then frees the slot.
 
 A worker confirms the end of its calibration before the slot is free again. An
 offline worker cannot confirm it, and neither can a worker with old software.
@@ -64,6 +66,12 @@ For these workers, and after a stop that did not free the slot, the box shows
 a calibration, the claim stays. Otherwise Logos releases it and records the
 release in the audit log. Release the claim of an offline worker only if the
 worker cannot continue the calibration.
+
+If Logos cannot check the settings, for example because the worker is
+offline, it refuses the release. The box then shows **Force release**. A forced
+release frees the slot without the check. The model keeps the settings it has
+now, and these can be benchmark settings. Check the model on the worker first.
+The audit log records every release.
 
 The box updates together with the rest of the page.
 

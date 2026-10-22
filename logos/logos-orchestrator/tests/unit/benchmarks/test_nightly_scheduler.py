@@ -358,8 +358,58 @@ async def test_recovery_keeps_journal_when_execution_or_cleanup_is_uncertain(sch
 )
 async def test_recovery_uses_fresh_worker_request_counters(scheduler, runtime, expected):
     scheduler.registry.send_command = AsyncMock(return_value=runtime)
-    assert await scheduler.recovery_worker_idle(20) == expected
+    assert await scheduler.recovery_worker_idle({"provider_id": 20, "lane_id": "lane", "model": "model"}) == expected
     scheduler.registry.send_command.assert_awaited_once_with(20, "get_runtime", {}, timeout_seconds=30)
+
+
+def _lane(lane_id, model, active=0, **metrics):
+    return {"lane_id": lane_id, "model": model, "active_requests": active, "backend_metrics": metrics}
+
+
+async def test_stale_orchestrator_inflight_counter_does_not_block_recovery(scheduler):
+    scheduler.planner._facade.model_inflight_requests.return_value = 3
+    scheduler.registry.send_command = AsyncMock(return_value={"lanes": [_lane("lane", "model")]})
+    assert await scheduler.recovery_worker_idle({"provider_id": 20, "lane_id": "lane", "model": "model"})
+
+
+async def test_production_traffic_on_other_lanes_does_not_block_recovery(scheduler):
+    lanes = [_lane("lane", "model"), _lane("other", "other-model", 4, requests_running=4, queue_waiting=2)]
+    scheduler.registry.send_command = AsyncMock(return_value={"lanes": lanes})
+    assert await scheduler.recovery_worker_idle({"provider_id": 20, "lane_id": "lane", "model": "model"})
+
+
+@pytest.mark.parametrize(
+    "busy",
+    [
+        _lane("lane", "model", 1),
+        _lane("lane", "model", requests_running=1),
+        # A second lane of the recovered model, e.g. after a replacement.
+        _lane("lane-2", "model", 2),
+    ],
+)
+async def test_requests_on_the_recovered_model_block_recovery(scheduler, busy):
+    lanes = [busy, _lane("other", "other-model")]
+    if busy["lane_id"] != "lane":
+        lanes.append(_lane("lane", "model"))
+    scheduler.registry.send_command = AsyncMock(return_value={"lanes": lanes})
+    assert not await scheduler.recovery_worker_idle({"provider_id": 20, "lane_id": "lane", "model": "model"})
+
+
+async def test_missing_recovered_lane_counts_as_idle(scheduler):
+    scheduler.registry.send_command = AsyncMock(return_value={"lanes": [_lane("other", "other-model", 1)]})
+    assert await scheduler.recovery_worker_idle({"provider_id": 20, "lane_id": "lane", "model": "model"})
+
+
+async def test_journal_without_lane_requires_the_whole_worker_idle(scheduler):
+    scheduler.registry.send_command = AsyncMock(return_value={"lanes": [_lane("other", "other-model", 1)]})
+    assert not await scheduler.recovery_worker_idle({"provider_id": 20})
+
+
+async def test_unhealthy_worker_blocks_recovery(scheduler):
+    scheduler.registry.send_command = AsyncMock(
+        return_value={"lanes": [_lane("lane", "model")], "node_health": {"healthy": False}}
+    )
+    assert not await scheduler.recovery_worker_idle({"provider_id": 20, "lane_id": "lane", "model": "model"})
 
 
 async def test_terminal_orphan_job_still_requires_worker_cleanup_before_restore(scheduler, rotation):

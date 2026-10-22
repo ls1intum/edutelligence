@@ -148,6 +148,28 @@ It marks the job as failed only after the worker confirms that its requests ende
 The original worker configuration is then restored. Unknown worker status keeps the recovery journal active.
 Job age alone never permits recovery.
 
+Recovery waits only for the lane it restores, and for other lanes of the same model.
+It reads the request counters from the worker itself.
+Production traffic on other lanes of the worker does not hold the recovery back.
+The worker also refuses the restart while the lane still has requests.
+
+### Release a recovery
+
+A recovery that cannot finish keeps the maintenance slot.
+The **Maintenance** status on the statistics page offers **Release recovery** for it.
+Logos first asks the worker for its lanes.
+It releases the recovery only if the lane runs its original settings again.
+Then it marks the recovery as `interrupted_recovered` and frees the worker.
+Open benchmark jobs of this recovery are marked as failed.
+
+If the worker is offline, the lane is missing, or its settings differ, Logos refuses (HTTP 409).
+The box then offers **Force release**.
+A forced release does not check the lane.
+The lane keeps whatever settings it runs now, and those can be benchmark settings.
+Check or restore the lane on the worker before you force the release.
+Logos refuses both actions while a recovery or one of its jobs is running.
+The orchestrator log and the audit log (`provider.nightly_recovery_released`) record every release.
+
 Metal workers with valid measured telemetry support `max_num_seqs` and `max_num_batched_tokens` changes.
 Metal does not permit GPU topology, memory, or attention backend overrides through this benchmark path.
 The scheduler checks worker support before it reserves the worker or consumes a nightly slot.
@@ -229,7 +251,8 @@ An orchestrator crash can leave a manual benchmark claim or an active manual job
 Age alone does not release these records.
 An operator must stop the original benchmark process and verify worker cleanup before database recovery.
 Then mark the affected job as failed and remove its matching `maintenance_benchmark` record.
-Keep every nightly recovery journal until the scheduler restores the original worker configuration.
+Keep every nightly recovery journal until the scheduler restores the original worker configuration,
+or release it with **Release recovery** (see [Release a recovery](#release-a-recovery)).
 
 ## Maintenance capacity
 
@@ -277,6 +300,7 @@ If the web application is not available, use this procedure with database admini
 
 Do not release a claim based only on an offline indicator or a network timeout.
 Do not delete nightly recovery journals or manual benchmark claims through this procedure.
+Use **Release recovery** for a nightly recovery journal.
 The transaction uses the same maintenance lock as the application.
 A changed token prevents deletion of a newer claim.
 

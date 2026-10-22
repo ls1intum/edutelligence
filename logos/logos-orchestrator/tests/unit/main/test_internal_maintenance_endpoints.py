@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from logos.dbutils.dbrequest import InternalReleaseCalibrationClaimRequest
+from logos.dbutils.dbrequest import InternalReleaseCalibrationClaimRequest, InternalReleaseRecoveryRequest
 from logos.logosnode_registry import MaintenanceBusyError
 from logos.routers import internal as module
 
@@ -37,7 +37,13 @@ async def test_both_endpoints_require_the_internal_secret(coordinator, monkeypat
     with pytest.raises(HTTPException) as exc:
         await module.internal_release_calibration_claim(body, _request("Bearer wrong"))
     assert exc.value.status_code == status
+    with pytest.raises(HTTPException) as exc:
+        await module.internal_release_recovery(
+            InternalReleaseRecoveryRequest(model_provider_id=31), _request("Bearer wrong")
+        )
+    assert exc.value.status_code == status
     coordinator.release_claim.assert_not_called()
+    coordinator.release_recovery.assert_not_called()
 
 
 async def test_status_fills_in_missing_provider_names(coordinator):
@@ -79,3 +85,30 @@ async def test_release_reports_whether_the_worker_confirmed(coordinator):
     assert result["forced"] is True
     assert result["provider_id"] == 1
     assert "without confirmation" in result["message"]
+
+
+@pytest.mark.parametrize("error, status", [(LookupError("gone"), 404), (MaintenanceBusyError("running"), 409)])
+async def test_recovery_release_maps_refusals_to_http_errors(coordinator, error, status):
+    coordinator.release_recovery = AsyncMock(side_effect=error)
+    with pytest.raises(HTTPException) as exc:
+        await module.internal_release_recovery(InternalReleaseRecoveryRequest(model_provider_id=31), _request())
+    assert exc.value.status_code == status
+    assert exc.value.detail == str(error)
+
+
+@pytest.mark.parametrize("force", [False, True])
+async def test_recovery_release_passes_force_through(coordinator, force):
+    coordinator.release_recovery = AsyncMock(return_value={"released": True, "forced": force})
+    result = await module.internal_release_recovery(
+        InternalReleaseRecoveryRequest(model_provider_id=31, force=force), _request()
+    )
+    coordinator.release_recovery.assert_awaited_once_with(31, force)
+    assert result["forced"] is force
+    assert result["model_provider_id"] == 31
+
+
+async def test_recovery_release_without_coordinator_is_unavailable(coordinator, monkeypatch):
+    monkeypatch.setattr(module._main, "_maintenance_coordinator", None)
+    with pytest.raises(HTTPException) as exc:
+        await module.internal_release_recovery(InternalReleaseRecoveryRequest(model_provider_id=31), _request())
+    assert exc.value.status_code == 503

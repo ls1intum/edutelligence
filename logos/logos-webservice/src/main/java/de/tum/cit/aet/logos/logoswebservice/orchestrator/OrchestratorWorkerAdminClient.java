@@ -54,6 +54,15 @@ public class OrchestratorWorkerAdminClient {
             Map.of("provider_id", providerId, "claim_token", claimToken));
     }
 
+    /**
+     * Releases a nightly recovery journal. Without force the orchestrator
+     * first checks that the worker runs the lane's original settings.
+     */
+    public ResponseEntity<Map> releaseRecovery(int modelProviderId, boolean force) {
+        return post("/internal/maintenance/recovery/release",
+            Map.of("model_provider_id", modelProviderId, "force", force));
+    }
+
     public ResponseEntity<Map> deleteLane(int providerId, String laneId) {
         return post("/internal/logosnode/lanes/delete", Map.of("provider_id", providerId, "lane_id", laneId));
     }

@@ -1151,6 +1151,21 @@ def _build_vllm_cmd(
         cmd.append("--enforce-eager")
     if disable_custom_all_reduce:
         cmd.append("--disable-custom-all-reduce")
+    # Same attention backend as the serving lane: the plan's attention_backend
+    # (from the model overrides) wins, otherwise the serving auto-detection.
+    from logos_worker_node.vllm_process import (  # noqa: PLC0415
+        attention_backend_args,
+        auto_attention_backend,
+        detect_cuda_arch,
+    )
+
+    cmd.extend(
+        attention_backend_args(
+            str(plan.get("attention_backend") or ""),
+            extra_args,
+            lambda: auto_attention_backend(detect_cuda_arch()),
+        )
+    )
     cmd.extend(extra_args)
     return cmd
 

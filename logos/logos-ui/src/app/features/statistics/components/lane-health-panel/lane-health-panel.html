@@ -100,10 +100,10 @@
                 @if (canUnload) {
                   <button
                     class="btn-unload"
-                    [disabled]="unloadingLaneId() === row.laneId"
+                    [disabled]="unloadingLaneIds().has(row.laneId)"
                     (click)="handleUnload(row.laneId)"
                   >
-                    {{ unloadingLaneId() === row.laneId ? 'Unloading…' : 'Unload' }}
+                    {{ unloadingLaneIds().has(row.laneId) ? 'Unloading…' : 'Unload' }}
                   </button>
                   <!-- Wake/Sleep reach the two states the capacity planner also
                        reaches on its own — the tooltip says so outright, because

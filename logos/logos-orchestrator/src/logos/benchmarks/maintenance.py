@@ -171,6 +171,69 @@ class MaintenanceCoordinator:
             )
             return {"released": True, "forced": True}
 
+    async def release_recovery(self, pair_id, force=False):
+        """Release a nightly recovery journal on an operator's request.
+
+        Without ``force`` the worker must show the journal's lane with its
+        original ``vllm_config``, so releasing only drops bookkeeping. With
+        ``force`` the journal is dropped without that proof; the lane keeps
+        whatever settings it runs now. Either way the recovery's own orphaned
+        benchmark jobs are failed and the worker's reservation is lifted.
+        """
+        import importlib
+
+        from logos.benchmarks.reservations import benchmark_reservations
+        from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, MaintenanceBusyError
+
+        main = importlib.import_module("logos.main")
+        with store.cluster_lock() as connection:
+            if connection is None:
+                raise MaintenanceBusyError("Maintenance command is still in progress")
+            row = next((r for r in store.rows() if r["model_provider_id"] == pair_id and r["recovery"]), None)
+            if row is None:
+                raise LookupError("No nightly recovery is pending for this deployment")
+            recovery = row["recovery"]
+            with store.execution_lock(pair_id) as execution:
+                if execution is None:
+                    raise MaintenanceBusyError("A recovery is running right now")
+                jobs = store.recovery_jobs(pair_id)
+                if any(not task.done() for job, task in main._benchmark_tasks_by_job.items() if job in jobs):
+                    raise MaintenanceBusyError("A benchmark of this recovery is still running")
+                provider_id = recovery.get("provider_id")
+                if not force and recovery.get("mutated", True):
+                    try:
+                        runtime = await self.registry.send_command(provider_id, "get_lanes", {}, timeout_seconds=30)
+                    except (LogosNodeOfflineError, LogosNodeCommandError, TimeoutError) as exc:
+                        raise MaintenanceBusyError(
+                            f"The worker cannot confirm the original settings ({str(exc) or type(exc).__name__})"
+                        ) from exc
+                    lane = next(
+                        (lane for lane in runtime.get("lanes") or [] if lane.get("lane_id") == recovery.get("lane_id")),
+                        None,
+                    )
+                    if lane is None:
+                        raise MaintenanceBusyError("The recovered lane is not loaded on the worker")
+                    if (lane.get("lane_config") or {}).get("vllm_config") != recovery.get("vllm_config"):
+                        raise MaintenanceBusyError("The lane does not run its original settings yet")
+                if not store.lock_held(connection) or not store.execution_lock_held(execution, pair_id):
+                    raise MaintenanceBusyError("Maintenance command is still in progress")
+                if jobs:
+                    store.fence_recovery_jobs(jobs)
+                    store.finish_recovery_jobs(jobs)
+                    for job in jobs:
+                        benchmark_reservations.release(job)
+                store.save(pair_id, "interrupted_recovered", row["report"], None)
+                benchmark_reservations.release(-pair_id)
+        logger.warning(
+            "Nightly recovery %s for provider %s, lane %s released by an operator (forced=%s, jobs=%s)",
+            pair_id,
+            provider_id,
+            recovery.get("lane_id"),
+            bool(force),
+            jobs,
+        )
+        return {"released": True, "forced": bool(force)}
+
     def slot_status(self):
         """Everything that holds the maintenance slot right now."""
         holders = store.maintenance_holders()

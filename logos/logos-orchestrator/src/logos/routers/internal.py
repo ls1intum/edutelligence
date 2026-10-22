@@ -58,6 +58,7 @@ from logos.dbutils.dbrequest import (
     InternalDrainLaneRequest,
     InternalLaneLoadStatusRequest,
     InternalReleaseCalibrationClaimRequest,
+    InternalReleaseRecoveryRequest,
     InternalSleepLaneRequest,
     InternalStopCalibrationRequest,
     InternalWakeLaneRequest,
@@ -1072,6 +1073,26 @@ async def internal_release_calibration_claim(data: InternalReleaseCalibrationCla
         else f"Calibration on {pname} stopped and its claim released"
     )
     return {**result, "provider_id": data.provider_id, "message": message}
+
+
+@router.post("/internal/maintenance/recovery/release", tags=["admin"])
+async def internal_release_recovery(data: InternalReleaseRecoveryRequest, request: Request):
+    """Release a nightly recovery journal, on an administrator's request."""
+    _require_internal_secret(request)
+    if _main._maintenance_coordinator is None:
+        raise HTTPException(status_code=503, detail="Maintenance coordination is unavailable")
+    try:
+        result = await _main._maintenance_coordinator.release_recovery(data.model_provider_id, data.force)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MaintenanceBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    message = (
+        "Nightly recovery released without confirming the original settings"
+        if result["forced"]
+        else "Nightly recovery released; the worker runs its original settings"
+    )
+    return {**result, "model_provider_id": data.model_provider_id, "message": message}
 
 
 @router.post("/internal/logosnode/lanes/delete", tags=["admin"])

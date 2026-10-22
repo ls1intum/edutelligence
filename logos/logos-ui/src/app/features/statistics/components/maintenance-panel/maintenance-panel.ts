@@ -35,8 +35,11 @@ export interface MaintenanceHolderRow {
   providerId: number | null;
   claimToken: string | null;
   jobId: number | null;
+  /** The nightly deployment a recovery belongs to. */
+  modelProviderId: number | null;
   canStop: boolean;
   canCancel: boolean;
+  canReleaseRecovery: boolean;
   /** Offered without a failed stop first: the provider cannot confirm a stop at all. */
   releaseOffered: boolean;
 }
@@ -71,8 +74,10 @@ export function calibrationRow(c: MaintenanceCalibration): MaintenanceHolderRow 
     providerId: c.provider_id,
     claimToken: c.claim_token,
     jobId: null,
+    modelProviderId: null,
     canStop: c.online,
     canCancel: false,
+    canReleaseRecovery: false,
     releaseOffered: !!c.claim_token && (!c.online || !c.status_supported),
   };
 }
@@ -93,8 +98,10 @@ export function benchmarkRow(b: MaintenanceBenchmark): MaintenanceHolderRow {
     providerId: b.provider_id,
     claimToken: null,
     jobId: b.job_id,
+    modelProviderId: null,
     canStop: false,
     canCancel: active,
+    canReleaseRecovery: false,
     releaseOffered: false,
   };
 }
@@ -115,8 +122,10 @@ export function recoveryRow(r: MaintenanceRecovery): MaintenanceHolderRow {
     providerId: r.provider_id,
     claimToken: null,
     jobId: null,
+    modelProviderId: r.model_provider_id,
     canStop: false,
     canCancel: false,
+    canReleaseRecovery: true,
     releaseOffered: false,
   };
 }
@@ -165,6 +174,10 @@ export class MaintenancePanel implements OnChanges {
   readonly stopFailed = signal<ReadonlySet<string>>(new Set());
   readonly releaseTarget = signal<MaintenanceHolderRow | null>(null);
   readonly releaseError = signal<string | null>(null);
+  /** Recoveries whose normal release was refused: Force release is offered from then on. */
+  readonly forceOffered = signal<ReadonlySet<string>>(new Set());
+  readonly forceTarget = signal<MaintenanceHolderRow | null>(null);
+  readonly forceError = signal<string | null>(null);
 
   readonly formatTimeAgo = formatTimeAgo;
 
@@ -261,6 +274,67 @@ export class MaintenancePanel implements OnChanges {
     } finally {
       this.busyKey.set(null);
     }
+  }
+
+  /**
+   * Release a nightly recovery. The server first checks that the worker runs
+   * the original settings; after a refusal the row offers Force release.
+   */
+  async releaseRecovery(row: MaintenanceHolderRow): Promise<void> {
+    if (row.modelProviderId == null || this.busyKey() !== null) return;
+    this.busyKey.set(row.key);
+    this.notice.set(null);
+    try {
+      await this.statisticsService.releaseRecovery(row.modelProviderId, false);
+      this.notice.set({ kind: 'success', text: `Recovery on ${row.provider} released. It runs its original settings.` });
+      await this.refresh();
+    } catch (err: unknown) {
+      const refused = (err as { status?: number })?.status === 409;
+      if (refused) this.markForceOffered(row.key);
+      this.notice.set({
+        kind: 'error',
+        text: `Releasing the recovery on ${row.provider} failed: ${failureDetail(err)}`
+          + (refused ? '. If you are sure the settings are right, force the release.' : ''),
+      });
+      if ((err as { status?: number })?.status === 404) await this.refresh();
+    } finally {
+      this.busyKey.set(null);
+    }
+  }
+
+  askForceRelease(row: MaintenanceHolderRow): void {
+    this.forceError.set(null);
+    this.forceTarget.set(row);
+  }
+
+  closeForceRelease(visible: boolean): void {
+    if (!visible && this.busyKey() === null) this.forceTarget.set(null);
+  }
+
+  async confirmForceRelease(): Promise<void> {
+    const row = this.forceTarget();
+    if (!row || row.modelProviderId == null || this.busyKey() !== null) return;
+    this.busyKey.set(row.key);
+    this.forceError.set(null);
+    try {
+      await this.statisticsService.releaseRecovery(row.modelProviderId, true);
+      this.forceTarget.set(null);
+      this.notice.set({
+        kind: 'success',
+        text: `Recovery on ${row.provider} released without checking its settings.`,
+      });
+      await this.refresh();
+    } catch (err: unknown) {
+      this.forceError.set(failureDetail(err));
+    } finally {
+      this.busyKey.set(null);
+    }
+  }
+
+  private markForceOffered(key: string): void {
+    const next = new Set(this.forceOffered());
+    next.add(key);
+    this.forceOffered.set(next);
   }
 
   private markStopFailed(key: string): void {

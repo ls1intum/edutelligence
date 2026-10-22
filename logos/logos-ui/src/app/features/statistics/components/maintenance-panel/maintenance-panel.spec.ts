@@ -33,6 +33,11 @@ function status(overrides: Partial<MaintenanceStatus> = {}): MaintenanceStatus {
 
 const FREE = status({ free: true });
 
+const RECOVERY = {
+  model_provider_id: 31, status: 'restoring', provider_id: 3, provider_name: 'gpu-a',
+  model_name: 'Qwen', since: SINCE, age_s: 5,
+};
+
 describe('maintenance holder rows', () => {
   it('offers only a stop for a running calibration on a reachable provider', () => {
     const row = calibrationRow(calibration());
@@ -92,13 +97,13 @@ describe('maintenance holder rows', () => {
     expect(cleanup.canCancel).toBe(false);
   });
 
-  it('shows a recovery without an action, since it finishes on its own', () => {
-    const row = recoveryRow({
-      model_provider_id: 31, status: 'restoring', provider_id: 3, provider_name: 'gpu-a',
-      model_name: 'Qwen', since: SINCE, age_s: 5,
-    });
+  it('offers only the recovery release for a recovery', () => {
+    const row = recoveryRow(RECOVERY);
     expect(row.label).toBe('Nightly recovery');
+    expect(row.modelProviderId).toBe(31);
+    expect(row.canReleaseRecovery).toBe(true);
     expect(row.canStop || row.canCancel || row.releaseOffered).toBe(false);
+    expect(calibrationRow(calibration()).canReleaseRecovery).toBe(false);
   });
 
   it('lists every holder, calibrations first, when several share the slot', () => {
@@ -124,6 +129,7 @@ describe('MaintenancePanel', () => {
   let stopCalibration: ReturnType<typeof vi.fn>;
   let releaseCalibrationClaim: ReturnType<typeof vi.fn>;
   let cancelBenchmark: ReturnType<typeof vi.fn>;
+  let releaseRecovery: ReturnType<typeof vi.fn>;
 
   async function render(initial: MaintenanceStatus): Promise<HTMLElement> {
     getMaintenanceStatus.mockResolvedValue(initial);
@@ -144,10 +150,11 @@ describe('MaintenancePanel', () => {
     stopCalibration = vi.fn().mockResolvedValue({ was_active: true });
     releaseCalibrationClaim = vi.fn().mockResolvedValue({ released: true, forced: true });
     cancelBenchmark = vi.fn().mockResolvedValue({ job_id: 7, status: 'failed' });
+    releaseRecovery = vi.fn().mockResolvedValue({ released: true, forced: false });
     await TestBed.configureTestingModule({
       imports: [MaintenancePanel],
       providers: [
-        { provide: StatisticsService, useValue: { getMaintenanceStatus, stopCalibration, releaseCalibrationClaim } },
+        { provide: StatisticsService, useValue: { getMaintenanceStatus, stopCalibration, releaseCalibrationClaim, releaseRecovery } },
         { provide: ModelManagementService, useValue: { cancelBenchmark } },
       ],
     }).compileComponents();
@@ -246,5 +253,74 @@ describe('MaintenancePanel', () => {
     fixture.detectChanges();
     expect(cancelBenchmark).toHaveBeenCalledWith(7);
     expect(root.textContent).toContain('Benchmark on gpu-a cancelled.');
+  });
+
+  it('releases a recovery once the worker confirms the original settings', async () => {
+    const root = await render(status({ recoveries: [RECOVERY] }));
+    expect(buttons(root)).toEqual(['Release recovery']);
+    getMaintenanceStatus.mockResolvedValue(FREE);
+    await component.releaseRecovery(component.rows()[0]);
+    fixture.detectChanges();
+    expect(releaseRecovery).toHaveBeenCalledWith(31, false);
+    expect(root.textContent).toContain('Recovery on gpu-a released.');
+    expect(buttons(root)).toEqual([]);
+  });
+
+  it('offers Force release only after the normal release is refused', async () => {
+    const held = status({ recoveries: [RECOVERY] });
+    const root = await render(held);
+    releaseRecovery.mockRejectedValue({ status: 409, error: { detail: 'The lane does not run its original settings yet' } });
+    getMaintenanceStatus.mockResolvedValue(held);
+    await component.releaseRecovery(component.rows()[0]);
+    fixture.detectChanges();
+    expect(root.textContent).toContain('The lane does not run its original settings yet');
+    expect(root.textContent).toContain('force the release');
+    expect(buttons(root)).toEqual(['Release recovery', 'Force release']);
+    expect(component.forceTarget()).toBeNull();
+  });
+
+  it('does not offer Force release for other failures', async () => {
+    const root = await render(status({ recoveries: [RECOVERY] }));
+    releaseRecovery.mockRejectedValue({ status: 503, error: { error: 'Orchestrator down' } });
+    await component.releaseRecovery(component.rows()[0]);
+    fixture.detectChanges();
+    expect(root.textContent).toContain('Orchestrator down');
+    expect(buttons(root)).toEqual(['Release recovery']);
+  });
+
+  it('forces the release after confirmation and closes the dialog', async () => {
+    const root = await render(status({ recoveries: [RECOVERY] }));
+    releaseRecovery.mockRejectedValueOnce({ status: 409, error: { detail: 'The worker is offline' } });
+    await component.releaseRecovery(component.rows()[0]);
+    component.askForceRelease(component.rows()[0]);
+    fixture.detectChanges();
+    expect(document.body.textContent).toContain('may be benchmark settings');
+    releaseRecovery.mockResolvedValueOnce({ released: true, forced: true });
+    getMaintenanceStatus.mockResolvedValue(FREE);
+    await component.confirmForceRelease();
+    fixture.detectChanges();
+    expect(releaseRecovery).toHaveBeenLastCalledWith(31, true);
+    expect(component.forceTarget()).toBeNull();
+    expect(root.textContent).toContain('released without checking its settings');
+  });
+
+  it('keeps the force dialog open with the reason when the forced release fails', async () => {
+    await render(status({ recoveries: [RECOVERY] }));
+    component.askForceRelease(component.rows()[0]);
+    releaseRecovery.mockRejectedValue({ status: 409, error: { detail: 'A recovery is running right now' } });
+    await component.confirmForceRelease();
+    expect(component.forceTarget()).not.toBeNull();
+    expect(component.forceError()).toBe('A recovery is running right now');
+  });
+
+  it('ignores a second recovery action while one is in flight', async () => {
+    await render(status({ recoveries: [RECOVERY] }));
+    let finish!: (v: unknown) => void;
+    releaseRecovery.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    const first = component.releaseRecovery(component.rows()[0]);
+    await component.releaseRecovery(component.rows()[0]);
+    expect(releaseRecovery).toHaveBeenCalledTimes(1);
+    finish({ released: true, forced: false });
+    await first;
   });
 });

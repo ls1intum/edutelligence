@@ -558,3 +558,137 @@ def test_automatic_calibration_skips_workers_without_the_status_command():
     # A worker that cannot be calibrated automatically does not hold benchmarks back.
     facade.provider_ids.return_value = [1]
     assert not service.benchmarks_must_wait()
+
+
+ORIGINAL = {"max_num_seqs": 16}
+
+
+@pytest.fixture
+def recovery(coordinator, monkeypatch):
+    import importlib
+
+    from logos.benchmarks.reservations import benchmark_reservations
+
+    main = importlib.import_module("logos.main")
+    service, state = coordinator
+    state.update(
+        row={
+            "model_provider_id": 31,
+            "report": [{"status": "ok"}],
+            "recovery": {"provider_id": 20, "lane_id": "lane", "model": "model", "vllm_config": ORIGINAL},
+        },
+        execution_busy=False,
+        jobs=[],
+        saved=[],
+        fenced=[],
+        finished=[],
+    )
+
+    @contextmanager
+    def execution_lock(_pair):
+        yield None if state["execution_busy"] else object()
+
+    monkeypatch.setattr(module.store, "rows", lambda: [state["row"]])
+    monkeypatch.setattr(module.store, "execution_lock", execution_lock)
+    monkeypatch.setattr(module.store, "execution_lock_held", lambda *_: True)
+    monkeypatch.setattr(module.store, "recovery_jobs", lambda _: list(state["jobs"]))
+    monkeypatch.setattr(module.store, "fence_recovery_jobs", lambda ids: state["fenced"].extend(ids))
+    monkeypatch.setattr(module.store, "finish_recovery_jobs", lambda ids: state["finished"].extend(ids))
+    monkeypatch.setattr(module.store, "save", lambda *args: state["saved"].append(args))
+    monkeypatch.setattr(main, "_benchmark_tasks_by_job", {})
+    service.registry.send_command = AsyncMock(
+        return_value={"lanes": [{"lane_id": "lane", "lane_config": {"vllm_config": dict(ORIGINAL)}}]}
+    )
+    benchmark_reservations.reserve(20, "*", -31)
+    yield service, state
+    benchmark_reservations.release(-31)
+
+
+def _reserved():
+    from logos.benchmarks.reservations import benchmark_reservations
+
+    return benchmark_reservations.owner(20, "model") == -31
+
+
+async def test_release_recovery_after_the_worker_shows_the_original_settings(recovery):
+    service, state = recovery
+    assert await service.release_recovery(31) == {"released": True, "forced": False}
+    service.registry.send_command.assert_awaited_once_with(20, "get_lanes", {}, timeout_seconds=30)
+    assert state["saved"] == [(31, "interrupted_recovered", [{"status": "ok"}], None)]
+    assert not _reserved()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"lanes": []},
+        {"lanes": [{"lane_id": "lane", "lane_config": {"vllm_config": {"max_num_seqs": 64}}}]},
+        LogosNodeCommandError("worker offline"),
+        TimeoutError(),
+    ],
+)
+async def test_release_recovery_refuses_without_proof_and_force_releases(recovery, reply):
+    service, state = recovery
+    if isinstance(reply, Exception):
+        service.registry.send_command.side_effect = reply
+    else:
+        service.registry.send_command.return_value = reply
+    with pytest.raises(MaintenanceBusyError):
+        await service.release_recovery(31)
+    assert not state["saved"]
+    assert _reserved()
+    assert await service.release_recovery(31, force=True) == {"released": True, "forced": True}
+    assert state["saved"][-1][1:] == ("interrupted_recovered", [{"status": "ok"}], None)
+    assert not _reserved()
+
+
+async def test_release_recovery_refuses_while_a_recovery_runs(recovery):
+    service, state = recovery
+    state["execution_busy"] = True
+    with pytest.raises(MaintenanceBusyError, match="A recovery is running right now"):
+        await service.release_recovery(31, force=True)
+    assert not state["saved"]
+
+
+async def test_release_recovery_refuses_while_the_cluster_lock_is_taken(recovery):
+    service, state = recovery
+    state["locked"] = True
+    with pytest.raises(MaintenanceBusyError):
+        await service.release_recovery(31, force=True)
+    assert not state["saved"]
+
+
+async def test_release_recovery_without_a_journal_is_not_found(recovery):
+    service, state = recovery
+    state["row"] = {**state["row"], "recovery": None}
+    with pytest.raises(LookupError):
+        await service.release_recovery(31)
+    with pytest.raises(LookupError):
+        await service.release_recovery(99, force=True)
+
+
+async def test_release_recovery_fails_its_orphaned_jobs(recovery):
+    service, state = recovery
+    state["jobs"] = [701]
+    assert (await service.release_recovery(31))["released"]
+    assert state["fenced"] == [701]
+    assert state["finished"] == [701]
+
+
+async def test_release_recovery_refuses_while_one_of_its_jobs_still_runs(recovery, monkeypatch):
+    import importlib
+
+    main = importlib.import_module("logos.main")
+    service, state = recovery
+    state["jobs"] = [701]
+    monkeypatch.setitem(main._benchmark_tasks_by_job, 701, MagicMock(done=lambda: False))
+    with pytest.raises(MaintenanceBusyError):
+        await service.release_recovery(31, force=True)
+    assert not state["saved"]
+
+
+async def test_release_recovery_of_an_unchanged_lane_needs_no_worker(recovery):
+    service, state = recovery
+    state["row"]["recovery"]["mutated"] = False
+    service.registry.send_command.side_effect = LogosNodeCommandError("worker offline")
+    assert await service.release_recovery(31) == {"released": True, "forced": False}

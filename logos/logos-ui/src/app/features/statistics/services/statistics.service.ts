@@ -361,6 +361,20 @@ export class StatisticsService {
     ));
   }
 
+  /**
+   * Release a nightly recovery. Without `force` the server refuses (409) unless
+   * the worker runs the lane's original settings.
+   */
+  releaseRecovery(
+    modelProviderId: number,
+    force: boolean,
+  ): Promise<{ released: boolean; forced: boolean; message?: string }> {
+    return firstValueFrom(this.http.post<{ released: boolean; forced: boolean; message?: string }>(
+      '/api/logosdb/providers/logosnode/maintenance/release_recovery',
+      { model_provider_id: modelProviderId, force },
+    ));
+  }
+
   stopCalibration(
     providerId: number
   ): Promise<{ was_active?: boolean; current_model?: string; error?: string }> {

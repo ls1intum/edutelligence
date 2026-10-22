@@ -673,6 +673,93 @@ class ProviderControllerTest {
             "SELECT COUNT(*) FROM audit_log WHERE action = 'provider.calibration_claim_released'", Integer.class));
     }
 
+    @Test
+    void releaseRecovery_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"model_provider_id\":31}"))
+           .andExpect(status().isForbidden());
+        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"model_provider_id\":31,\"force\":true}"))
+           .andExpect(status().isForbidden());
+        verify(workerAdminClient, never()).releaseRecovery(anyInt(), anyBoolean());
+    }
+
+    @Test
+    void releaseRecovery_requiresTheDeployment() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"force\":true}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("model_provider_id is required"));
+        verify(workerAdminClient, never()).releaseRecovery(anyInt(), anyBoolean());
+    }
+
+    @Test
+    void releaseRecovery_forwardsAndRecordsTheRelease() throws Exception {
+        jdbc.update("DELETE FROM audit_log WHERE action = 'provider.nightly_recovery_released'");
+        when(workerAdminClient.releaseRecovery(31, false))
+            .thenReturn(ResponseEntity.ok(Map.of("released", true, "forced", false)));
+
+        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_provider_id\":31}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.forced").value(false));
+
+        verify(workerAdminClient).releaseRecovery(31, false);
+        Map<String, Object> entry = jdbc.queryForMap(
+            "SELECT target_type, target_id, CAST(after_state AS text) AS after_state FROM audit_log "
+                + "WHERE action = 'provider.nightly_recovery_released'");
+        assertEquals("model_provider", entry.get("target_type"));
+        assertEquals("31", entry.get("target_id"));
+        assertTrue(entry.get("after_state").toString().contains("\"forced\": false"));
+    }
+
+    @Test
+    void releaseRecovery_forwardsForce() throws Exception {
+        jdbc.update("DELETE FROM audit_log WHERE action = 'provider.nightly_recovery_released'");
+        when(workerAdminClient.releaseRecovery(31, true))
+            .thenReturn(ResponseEntity.ok(Map.of("released", true, "forced", true)));
+
+        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_provider_id\":31,\"force\":true}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.forced").value(true));
+
+        verify(workerAdminClient).releaseRecovery(31, true);
+        String after = jdbc.queryForObject(
+            "SELECT CAST(after_state AS text) FROM audit_log WHERE action = 'provider.nightly_recovery_released'",
+            String.class);
+        assertTrue(after.contains("\"forced\": true"));
+    }
+
+    @Test
+    void releaseRecovery_passesARefusalThroughWithoutAuditEntry() throws Exception {
+        jdbc.update("DELETE FROM audit_log WHERE action = 'provider.nightly_recovery_released'");
+        when(workerAdminClient.releaseRecovery(31, false))
+            .thenThrow(HttpClientErrorException.create(HttpStatus.CONFLICT, "Conflict", HttpHeaders.EMPTY,
+                "{\"detail\":\"The lane does not run its original settings yet\"}".getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8));
+
+        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_provider_id\":31}"))
+           .andExpect(status().isConflict())
+           .andExpect(jsonPath("$.detail").value("The lane does not run its original settings yet"));
+
+        assertEquals(0, jdbc.queryForObject(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'provider.nightly_recovery_released'", Integer.class));
+    }
+
     // ------------------------------------------------------------ lane locks
 
     @Test

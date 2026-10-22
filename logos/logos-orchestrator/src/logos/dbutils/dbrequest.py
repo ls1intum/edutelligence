@@ -218,6 +218,11 @@ class InternalReleaseCalibrationClaimRequest(BaseModel):
     claim_token: str
 
 
+class InternalReleaseRecoveryRequest(BaseModel):
+    model_provider_id: int
+    force: bool = False
+
+
 class InternalDeleteLaneRequest(BaseModel):
     provider_id: int
     lane_id: str
