@@ -8892,6 +8892,17 @@ class CapacityPlanner:
         self._cold_mark_holds.pop(key, None)
         self._unmark_lane_cold(*key)
 
+    @staticmethod
+    def _answer_refused(answer: Optional[asyncio.Future]) -> bool:
+        """Whether the worker answered a lifecycle command with a refusal or a rollback."""
+        if answer is None or not answer.done() or answer.cancelled() or answer.exception() is not None:
+            return False  # no answer yet, or the session ended: the outcome is unknown
+        message = answer.result()
+        if not isinstance(message, dict):
+            return False
+        result = message.get("result")
+        return not message.get("success", False) or (isinstance(result, dict) and bool(result.get("rolled_back")))
+
     def _track_lifecycle_command(self, provider_id: int, lane_id: str) -> Callable[[asyncio.Future], None]:
         def on_dispatched(answer: asyncio.Future) -> None:
             self._lifecycle_commands_sent[(provider_id, lane_id)] = answer
@@ -9507,8 +9518,14 @@ class CapacityPlanner:
                 # The sleep went to the worker: the re-sleep is settled,
                 # whatever its outcome. One that never went out stays due.
                 await self._mark_resleep(action.provider_id, set_on=set(), set_off={action.lane_id})
-            if action.operator_initiated and action.action == "stop" and not confirmed and not sent:
-                # The unload never went out: the lane stays, so record it again.
+            if (
+                action.operator_initiated
+                and action.action == "stop"
+                and not confirmed
+                and (not sent or self._answer_refused(self._lifecycle_commands_sent.get(key)))
+            ):
+                # The unload never went out, or the worker refused or rolled it
+                # back: the lane stays, so record it again. A timeout keeps it out.
                 await self.unload_refused(action.provider_id, action.lane_id)
         finally:
             if marks_cold:

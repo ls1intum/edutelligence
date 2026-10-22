@@ -574,3 +574,41 @@ def test_a_re_sleep_of_an_earlier_lock_does_not_carry_over_to_a_new_one():
     planner.apply_lane_lock(PROVIDER, WORKER_LOCK_ID, True, 11, record=None)  # a new lock
     registry.lanes = [_runtime_lane(EMBED_LANE, EMBED, "0")]
     assert _restore(planner) == []
+
+
+def _answered(message):
+    async def build():
+        future = asyncio.get_running_loop().create_future()
+        future.set_result(message)
+        return future
+
+    return asyncio.run(build())
+
+
+def test_a_refused_or_rolled_back_stop_counts_as_refused_and_a_silent_one_does_not():
+    refused = CapacityPlanner._answer_refused
+    assert refused(_answered({"success": False, "error": "busy"}))
+    assert refused(_answered({"success": True, "result": {"rolled_back": True}}))
+    assert not refused(_answered({"success": True, "result": {}}))
+    assert not refused(None)
+
+
+def test_an_operator_stop_the_worker_refused_records_the_lane_again():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    planner = _planner(registry, _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None)]))
+    _restore(planner)
+    stop = CapacityPlanAction(
+        action="stop", provider_id=PROVIDER, lane_id=LANE, model_name=MODEL, operator_initiated=True
+    )
+
+    async def refused_stop(action, **kwargs):
+        future = asyncio.get_running_loop().create_future()
+        future.set_result({"success": False, "error": "refused"})
+        planner._lifecycle_commands_sent[(PROVIDER, LANE)] = future
+        return False
+
+    planner._execute_action_core = refused_stop
+    asyncio.run(planner._execute_action_with_confirmation(stop))
+    _restore(planner)
+    registry.lanes = []
+    assert [a.lane_id for a in _restore(planner)] == [LANE]
