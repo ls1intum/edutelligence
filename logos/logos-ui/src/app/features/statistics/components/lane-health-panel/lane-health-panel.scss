@@ -104,7 +104,8 @@
 
 // Wake/Sleep: unlike Unload they are not destructive, so they share one
 // neutral treatment — the labels (and tooltips) carry the semantics.
-.btn-lane-lock {
+.btn-lane-lock,
+.btn-worker-lock {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -141,6 +142,31 @@
     stroke-width: 2;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+}
+
+// Worker lock: the same control as a lane lock, with a label, above the lanes.
+.worker-lock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 8px;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+
+  .btn-worker-lock {
+    width: auto;
+    height: 24px;
+    gap: 6px;
+    padding: 0 10px;
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+  }
+
+  &__hint {
+    flex: 1 1 200px;
+    min-width: 0;
   }
 }
 

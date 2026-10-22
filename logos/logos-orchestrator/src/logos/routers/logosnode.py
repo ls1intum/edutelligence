@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from fastapi.responses import JSONResponse
 
 import logos.main as _main
+from logos.capacity.capacity_planner import RestoreRecordError
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import (
     LogosKeyModel,
@@ -1089,11 +1090,39 @@ async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest):
 @router.post("/logosdb/providers/logosnode/lanes/delete", tags=["logosnode"])
 async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
     await asyncio.to_thread(_require_root_access, data.logos_key)
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="delete_lane",
-        params={"lane_id": data.lane_id},
-    )
+    attempt = None
+    if _main._capacity_planner is not None:
+        # An operator unloads on purpose: a locked lane must not come back.
+        try:
+            attempt = await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
+        except RestoreRecordError as exc:
+            return JSONResponse(status_code=503, content={"error": str(exc)})
+    dispatched = []
+    planner = _main._capacity_planner
+    try:
+        result = await _dispatch_logosnode_command(
+            provider_id=data.provider_id,
+            action="delete_lane",
+            params={"lane_id": data.lane_id},
+            on_dispatched=dispatched.append,
+        )
+    except BaseException:
+        # Cancelled before an answer: settle the attempt all the same, or the
+        # live lane would stay out of the restore records.
+        if planner is not None and attempt is not None:
+            await asyncio.shield(
+                planner.settle_unload_attempt(
+                    data.provider_id, data.lane_id, attempt, dispatched[0] if dispatched else None
+                )
+            )
+        raise
+    # Not unloaded, or not known yet: one never sent records the lane again,
+    # a sent one is decided by its answer, also a late one.
+    if planner is not None and attempt is not None and getattr(result, "status_code", 200) >= 400:
+        await planner.settle_unload_attempt(
+            data.provider_id, data.lane_id, attempt, dispatched[0] if dispatched else None
+        )
+    return result
 
 
 @router.post("/logosdb/providers/logosnode/lanes/reconfigure", tags=["logosnode"])

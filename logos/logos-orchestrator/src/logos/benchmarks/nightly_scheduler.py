@@ -21,6 +21,7 @@ from logos.benchmarks.nightly import (
 )
 from logos.benchmarks.reservations import benchmark_reservations
 from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
+from logos.capacity.capacity_planner import MAINTENANCE_RECOVERY
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import InternalBenchmarkRequest
 from logos.maintenance_window import maintenance_node_limit
@@ -131,6 +132,10 @@ class NightlyScheduler:
                         store.save(pair_id, "unavailable", [{"status": "skipped", "reason": str(exc)[:1000]}], None)
                         continue
                     provider_id = int(target["provider_id"])
+                    if self.planner.is_worker_locked(provider_id):
+                        # The run waits for the next night the worker is not locked.
+                        logger.info("Skipping nightly benchmark %s: worker %s is locked", pair_id, provider_id)
+                        continue
                     if provider_id in providers:
                         deferred.append(row)
                         continue
@@ -189,7 +194,12 @@ class NightlyScheduler:
             or (result.get("lane_config") or {}).get("vllm_config") != recovery["vllm_config"]
         ):
             raise RuntimeError("Worker did not confirm its original configuration")
-        if not await self.planner.prepare_benchmark_lane(provider_id, recovery["model"], timeout_seconds=900):
+        token = MAINTENANCE_RECOVERY.set(True)
+        try:
+            ready = await self.planner.prepare_benchmark_lane(provider_id, recovery["model"], timeout_seconds=900)
+        finally:
+            MAINTENANCE_RECOVERY.reset(token)
+        if not ready:
             raise RuntimeError("Restored production model is not ready")
 
     def target_lane(self, pair_id):
