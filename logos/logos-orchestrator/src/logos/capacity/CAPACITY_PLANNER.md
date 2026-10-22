@@ -199,6 +199,21 @@ An operator can lock a lane warm from the statistics page. Locks live in the `la
 
 `_execute_action_with_confirmation` refuses a planner-initiated `sleep_l1`, `sleep_l2` or `stop` on a locked lane as a last line of defence. Actions an operator asked for (`CapacityPlanAction.operator_initiated`, set by the panel's drain) still run, and the panel's direct sleep and unload buttons are not planner actions at all; a lane slept that way is woken again on the next cycle while the lock stands.
 
+### 6.3 Worker locks
+
+A lock with lane id `*` (`lane_restore.WORKER_LOCK_ID`) locks a whole worker; it travels through the same table, push and revisions as a lane lock. `is_worker_locked` reads it. On a locked worker:
+
+- the cycle computes no idle, lock-wake, demand or demand-drain action, and the worker takes part in neither the cross-provider ranking nor speculative replication;
+- `_execute_action_with_confirmation` refuses every action that is neither `operator_initiated` (manual load, drain) nor `restore` (§6.4);
+- the scheduler (`set_worker_lock_check`) scores a deployment there only while a lane of the model is awake, since nothing would wake or load one;
+- automatic calibration (`CalibrationOrchestrator._pick_next_provider`) and nightly benchmarks skip the worker, and `prepare_benchmark_lane` / `prepare_configured_benchmark_lane` refuse it.
+
+### 6.4 Restoring locked lanes after a worker restart
+
+A worker that restarts comes back without its dynamic lanes. `_compute_restore_actions` runs first for every plannable worker. It records, in `lane_locks.restore_lanes`, each locked lane, and for a worker lock every lane, as the worker reports it: the `lane_config` the worker started it with (model, resolved `gpu_devices`, vLLM settings) and whether it sleeps (`lane_restore.observed_lanes`). Lanes in a transition, stopped or failed are not recorded. A recorded lane the worker does not report is loaded again with that config (`restore=True`), so it lands on the same GPUs; a lane of a locked worker that slept is put to sleep again once, after it runs.
+
+The record is written through `lane_restore_writer` only while the lock still holds the revision the planner read, and the webservice clears it when a lane is locked anew, so a new lock never inherits the lanes of an earlier one. A record keeps a lane that is gone; it forgets it only when an operator unloads it (`forget_restored_lane`, called before the unload is sent, and for an operator-initiated `stop`) or the lock is released.
+
 ---
 
 ## 7. Demand-based actions — wake and cold load

@@ -866,7 +866,7 @@ def test_replan_triggered_on_lane_add_establishes_reserve_before_first_sleep(mon
 
     # Stub the spawn + status I/O so add_lane registers a handle without a
     # real vLLM process.
-    async def _fake_add(lid: str, lane_config: LaneConfig) -> None:
+    async def _fake_add(lid: str, lane_config: LaneConfig, claim=None) -> None:
         manager._handles[lid] = handle  # noqa: SLF001
 
     monkeypatch.setattr(manager, "_add_lane_unlocked", _fake_add)

@@ -46,3 +46,19 @@ describe('request feed REST filters', () => {
     http.verify();
   });
 });
+
+describe('nightly recovery release', () => {
+  it.each([false, true])('posts the deployment and force=%s', async (force) => {
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    const http = TestBed.inject(HttpTestingController);
+    const result = TestBed.inject(StatisticsService).releaseRecovery(31, force);
+    const request = http.expectOne('/api/logosdb/providers/logosnode/maintenance/release_recovery');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({ model_provider_id: 31, force });
+    request.flush({ released: true, forced: force });
+    expect((await result).forced).toBe(force);
+    http.verify();
+  });
+});

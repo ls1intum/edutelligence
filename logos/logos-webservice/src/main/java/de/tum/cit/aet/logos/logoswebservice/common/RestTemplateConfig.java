@@ -41,6 +41,19 @@ public class RestTemplateConfig {
     }
 
     /**
+     * Template for the on-demand full calibration log fetch. The worker reads
+     * up to 10 MB and ships it over the websocket within the orchestrator's
+     * 20 s command budget, so the shared 5 s read timeout would cut it off.
+     */
+    @Bean
+    public RestTemplate calibrationLogRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(3_000);
+        factory.setReadTimeout(30_000);
+        return new RestTemplate(factory);
+    }
+
+    /**
      * Template for the batch proxy.
      *
      * A redirect would carry the request's credential along — the connection

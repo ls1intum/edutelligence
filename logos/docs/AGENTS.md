@@ -231,6 +231,7 @@ flows use a **concept** name (no role prefix); role-only list pages keep the
 |---|---|---|---|
 | `logos-admin-statistics.png` | `tobias.wasner` | `/statistics` | `roles/logos-admin.md` |
 | `logos-admin-statistics-lanes.png` | `tobias.wasner` | `/statistics` — **Local Providers**, a lane locked (needs a connected worker: the e2e stack, `../e2e`, with a lane loaded) | `roles/logos-admin.md#idle-lanes-and-lane-locks` |
+| `logos-admin-statistics-worker-lock.png` | `tobias.wasner` | `/statistics` — **Local Providers**, a worker locked with two lanes (e2e stack; capture the lane panel) | `roles/logos-admin.md#worker-locks` |
 | `logos-admin-statistics-requesters.png` | `tobias.wasner` | `/statistics?tab=requests` — **Requesters** list open | `roles/logos-admin.md` |
 | `logos-admin-models.png` | `tobias.wasner` | `/models` | `roles/logos-admin.md` |
 | `logos-admin-nightly-enable.png` | `tobias.wasner` | `/models/<id>/details?tab=performance` — activation dialog | `roles/logos-admin.md#nightly-benchmarks` |

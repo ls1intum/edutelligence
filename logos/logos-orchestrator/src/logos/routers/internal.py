@@ -41,6 +41,7 @@ from logos.benchmarks.nightly import (
 from logos.benchmarks.progress import observe_response
 from logos.benchmarks.reservations import benchmark_reservations
 from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
+from logos.capacity.capacity_planner import RestoreRecordError
 from logos.client_tags import cancel as cancel_client_tag
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
@@ -56,6 +57,8 @@ from logos.dbutils.dbrequest import (
     InternalDeleteLaneRequest,
     InternalDrainLaneRequest,
     InternalLaneLoadStatusRequest,
+    InternalReleaseCalibrationClaimRequest,
+    InternalReleaseRecoveryRequest,
     InternalSleepLaneRequest,
     InternalStopCalibrationRequest,
     InternalWakeLaneRequest,
@@ -64,7 +67,7 @@ from logos.dbutils.dbrequest import (
 )
 from logos.dbutils.types import Deployment
 from logos.hf_reachability import check_hf_reachability
-from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
+from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, MaintenanceBusyError
 from logos.logosnode_snapshot import _logosnode_snapshot_is_connected
 from logos.main import (
     _INTERNAL_SECRET,
@@ -198,7 +201,17 @@ async def internal_lane_lock_changed(data: LaneLockChangedRequest, request: Requ
     _require_internal_secret(request, disabled_detail="Internal lane lock endpoint disabled")
     if _main._capacity_planner is None:
         raise HTTPException(status_code=503, detail="Capacity planner not initialized")
-    _main._capacity_planner.apply_lane_lock(data.provider_id, data.lane_id, data.locked, data.revision)
+    if "restore_lanes_json" in data.model_fields_set:
+        record = json.loads(data.restore_lanes_json) if data.restore_lanes_json else None
+        _main._capacity_planner.apply_lane_lock(
+            data.provider_id,
+            data.lane_id,
+            data.locked,
+            data.revision,
+            record=record if isinstance(record, dict) else None,
+        )
+    else:
+        _main._capacity_planner.apply_lane_lock(data.provider_id, data.lane_id, data.locked, data.revision)
     return {"status": "ok"}
 
 
@@ -1028,15 +1041,97 @@ async def internal_logosnode_stop_calibration(data: InternalStopCalibrationReque
     return JSONResponse(content=result, status_code=200)
 
 
+@router.get("/internal/maintenance/status", tags=["admin"])
+async def internal_maintenance_status(request: Request):
+    """What holds the cluster-wide maintenance slot: calibrations, benchmarks and nightly recoveries."""
+    _require_internal_secret(request)
+    if _main._maintenance_coordinator is None:
+        raise HTTPException(status_code=503, detail="Maintenance coordination is unavailable")
+    status = _main._maintenance_coordinator.slot_status()
+    for holder in status["calibrations"] + status["benchmarks"] + status["recoveries"]:
+        if not holder.get("provider_name") and holder.get("provider_id") is not None:
+            holder["provider_name"] = _resolve_provider_name(int(holder["provider_id"]))
+    return jsonable_encoder(status)
+
+
+@router.post("/internal/maintenance/calibration/release", tags=["admin"])
+async def internal_release_calibration_claim(data: InternalReleaseCalibrationClaimRequest, request: Request):
+    """Release one calibration claim after a normal stop, on an administrator's request."""
+    _require_internal_secret(request)
+    if _main._maintenance_coordinator is None:
+        raise HTTPException(status_code=503, detail="Maintenance coordination is unavailable")
+    try:
+        result = await _main._maintenance_coordinator.release_claim(data.provider_id, data.claim_token)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MaintenanceBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    pname = _resolve_provider_name(data.provider_id)
+    message = (
+        f"Calibration claim on {pname} released without confirmation from the worker"
+        if result["forced"]
+        else f"Calibration on {pname} stopped and its claim released"
+    )
+    return {**result, "provider_id": data.provider_id, "message": message}
+
+
+@router.post("/internal/maintenance/recovery/release", tags=["admin"])
+async def internal_release_recovery(data: InternalReleaseRecoveryRequest, request: Request):
+    """Release a nightly recovery journal, on an administrator's request."""
+    _require_internal_secret(request)
+    if _main._maintenance_coordinator is None:
+        raise HTTPException(status_code=503, detail="Maintenance coordination is unavailable")
+    try:
+        result = await _main._maintenance_coordinator.release_recovery(data.model_provider_id, data.force)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MaintenanceBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    message = (
+        "Nightly recovery released without confirming the original settings"
+        if result["forced"]
+        else "Nightly recovery released; the worker runs its original settings"
+    )
+    return {**result, "model_provider_id": data.model_provider_id, "message": message}
+
+
 @router.post("/internal/logosnode/lanes/delete", tags=["admin"])
 async def internal_logosnode_delete_lane(data: InternalDeleteLaneRequest, request: Request):
     """Unload a lane on a worker, called by Spring after JWT validation."""
     _require_internal_secret(request)
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="delete_lane",
-        params={"lane_id": data.lane_id},
-    )
+    attempt = None
+    if _main._capacity_planner is not None:
+        # An operator unloads on purpose: a locked lane must not come back.
+        try:
+            attempt = await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
+        except RestoreRecordError as exc:
+            return JSONResponse(status_code=503, content={"error": str(exc)})
+    dispatched = []
+    planner = _main._capacity_planner
+    try:
+        result = await _dispatch_logosnode_command(
+            provider_id=data.provider_id,
+            action="delete_lane",
+            params={"lane_id": data.lane_id},
+            on_dispatched=dispatched.append,
+        )
+    except BaseException:
+        # Cancelled before an answer: settle the attempt all the same, or the
+        # live lane would stay out of the restore records.
+        if planner is not None and attempt is not None:
+            await asyncio.shield(
+                planner.settle_unload_attempt(
+                    data.provider_id, data.lane_id, attempt, dispatched[0] if dispatched else None
+                )
+            )
+        raise
+    # Not unloaded, or not known yet: one never sent records the lane again,
+    # a sent one is decided by its answer, also a late one.
+    if planner is not None and attempt is not None and getattr(result, "status_code", 200) >= 400:
+        await planner.settle_unload_attempt(
+            data.provider_id, data.lane_id, attempt, dispatched[0] if dispatched else None
+        )
+    return result
 
 
 @router.post("/internal/logosnode/lanes/add", tags=["admin"])

@@ -66,6 +66,7 @@ import type {
 import { ChartPanel } from './components/chart-panel/chart-panel';
 import { EmptyState } from './components/empty-state/empty-state';
 import { LaneHealthPanel } from './components/lane-health-panel/lane-health-panel';
+import { MaintenancePanel } from './components/maintenance-panel/maintenance-panel';
 import { LaneMemoryPieComponent } from './components/lane-memory-pie/lane-memory-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 import { MultiSelectComponent } from '../../shared/components/multi-select/multi-select';
@@ -129,6 +130,7 @@ type ProviderGlassRow = {
     EmptyState,
     LaneHealthPanel,
     LaneMemoryPieComponent,
+    MaintenancePanel,
     SelectComponent,
     MultiSelectComponent,
     SearchableSelectComponent,
@@ -1220,6 +1222,8 @@ export class Statistics implements OnInit, OnDestroy {
 
   onRefresh(): void {
     this.refreshing.set(true);
+    // Also re-reads what moves with the clock, such as the maintenance status.
+    this.nowMs.set(Date.now());
     this.markRangeChanged();
     this.statsWs.reconnect();
   }
