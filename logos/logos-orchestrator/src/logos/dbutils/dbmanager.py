@@ -4103,22 +4103,37 @@ class DBManager:
                 return None
         return [(int(row[0]), str(row[1]), bool(row[2]), int(row[3]), _json_object(row[4])) for row in rows]
 
-    def set_lane_restore_record(self, provider_id: int, lane_id: str, revision: int, record: dict) -> bool:
-        """Store what a lock puts back after a worker restart; False when the lock changed since *revision*.
+    def set_lane_restore_records(self, changes: list[tuple[int, str, int, dict]]) -> bool:
+        """Store what locks put back after a worker restart, all or none.
 
-        The revision guard keeps a record observed under one lock from
-        reaching a lock taken later: a lock does not inherit the lanes of an
-        earlier one.
+        Each change is ``(provider_id, lane_id, revision, record)``. Returns
+        False, and stores nothing, when one lock changed since its revision:
+        the revision guard keeps a record observed under one lock from
+        reaching a lock taken later, and a mark that spans several locks
+        (an unload) must not land in only some of them.
         """
-        result = self.session.execute(
-            text(
-                "UPDATE lane_locks SET restore_lanes = CAST(:record AS JSONB) "
-                "WHERE provider_id = :provider_id AND lane_id = :lane_id AND locked AND revision = :revision"
-            ),
-            {"record": _json_for_jsonb(record), "provider_id": provider_id, "lane_id": lane_id, "revision": revision},
-        )
-        self.session.commit()
-        return bool(result.rowcount)
+        try:
+            for provider_id, lane_id, revision, record in changes:
+                result = self.session.execute(
+                    text(
+                        "UPDATE lane_locks SET restore_lanes = CAST(:record AS JSONB) "
+                        "WHERE provider_id = :provider_id AND lane_id = :lane_id AND locked AND revision = :revision"
+                    ),
+                    {
+                        "record": _json_for_jsonb(record),
+                        "provider_id": provider_id,
+                        "lane_id": lane_id,
+                        "revision": revision,
+                    },
+                )
+                if not result.rowcount:
+                    self.session.rollback()
+                    return False
+            self.session.commit()
+            return True
+        except Exception:
+            self.session.rollback()
+            raise
 
     # ADMIN ONLY
     def get_all_deployments(self) -> list[Deployment]:

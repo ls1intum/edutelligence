@@ -80,12 +80,13 @@ class _Table:
     def read(self):
         return [tuple(row) for row in self.rows.values()]
 
-    def write(self, provider_id, lane_id, revision, record):
-        self.writes.append((provider_id, lane_id, revision, record))
-        row = self.rows.get((provider_id, lane_id))
-        if row is None or not row[2] or row[3] != revision:
-            return False
-        row[4] = record
+    def write(self, changes):
+        rows = [self.rows.get((provider_id, lane_id)) for provider_id, lane_id, _revision, _record in changes]
+        if any(row is None or not row[2] or row[3] != change[2] for row, change in zip(rows, changes)):
+            return False  # all or none
+        for row, change in zip(rows, changes):
+            self.writes.append(change)
+            row[4] = change[3]
         return True
 
 
@@ -685,4 +686,30 @@ def test_a_planned_restore_is_dropped_when_its_lock_changed_before_dispatch():
     planner.apply_lane_lock(PROVIDER, WORKER_LOCK_ID, True, 11, record=None)  # unlocked and locked again
     planner._execute_action_core = AsyncMock(return_value=True)
     assert asyncio.run(planner._execute_action_with_confirmation(sleeps[0])) is False
+    planner._execute_action_core.assert_not_awaited()
+
+
+def test_an_unload_marked_in_two_locks_is_written_all_or_none():
+    registry = _Registry([_runtime_lane(LANE, MODEL, "0,1")])
+    table = _Table([(PROVIDER, WORKER_LOCK_ID, True, 9, None), (PROVIDER, LANE, True, 5, None)])
+    planner = _planner(registry, table)
+    _restore(planner)
+    table.rows[(PROVIDER, LANE)][3] = 6  # the lane lock changed meanwhile
+    import pytest
+
+    from logos.capacity.capacity_planner import RestoreRecordError
+
+    with pytest.raises(RestoreRecordError):
+        asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
+    assert "unloading" not in (table.rows[(PROVIDER, WORKER_LOCK_ID)][4] or {}).get(LANE, {})
+
+
+def test_a_queued_restore_load_is_dropped_when_the_operator_unloads_the_lane_first():
+    record = updated_record(None, observed_lanes([_runtime_lane(LANE, MODEL, "0,1")]), LANE)
+    planner = _planner(_Registry([]), _Table([(PROVIDER, LANE, True, 5, record)]))
+    loads = _restore(planner)
+    assert [a.lane_id for a in loads] == [LANE]
+    asyncio.run(planner.forget_restored_lane(PROVIDER, LANE))
+    planner._execute_action_core = AsyncMock(return_value=True)
+    assert asyncio.run(planner._execute_action_with_confirmation(loads[0])) is False
     planner._execute_action_core.assert_not_awaited()

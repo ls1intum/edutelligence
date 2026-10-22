@@ -1212,10 +1212,10 @@ def _read_lane_locks() -> Optional[list[tuple]]:
         return db.get_lane_locks()
 
 
-def _write_lane_restore_record(provider_id: int, lane_id: str, revision: int, record: dict) -> bool:
-    """Store a lock's restore record for the capacity planner (see logos.capacity.lane_restore)."""
+def _write_lane_restore_records(changes: list[tuple[int, str, int, dict]]) -> bool:
+    """Store locks' restore records for the capacity planner, all or none (see logos.capacity.lane_restore)."""
     with DBManager() as db:
-        return db.set_lane_restore_record(provider_id, lane_id, revision, record)
+        return db.set_lane_restore_records(changes)
 
 
 async def start_pipeline():
@@ -1277,7 +1277,7 @@ async def start_pipeline():
         on_state_change=scheduler.reevaluate_model_queues,
         latency_store=_latency_store,
         lane_lock_reader=_read_lane_locks,
-        lane_restore_writer=_write_lane_restore_record,
+        lane_restore_writer=_write_lane_restore_records,
     )
     scheduler.set_worker_lock_check(_capacity_planner.is_worker_locked)
     # Every worker report restores the forwarding gate's budget, so it is

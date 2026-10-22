@@ -327,7 +327,7 @@ class CapacityPlanner:
         on_state_change: Optional[Any] = None,
         latency_store: Optional[LatencyStore] = None,
         lane_lock_reader: Optional[Callable[[], Optional[List[tuple]]]] = None,
-        lane_restore_writer: Optional[Callable[[int, str, int, dict], bool]] = None,
+        lane_restore_writer: Optional[Callable[[list[tuple[int, str, int, dict]]], bool]] = None,
     ) -> None:
         self._facade = logosnode_facade
         self._registry = logosnode_registry
@@ -340,8 +340,8 @@ class CapacityPlanner:
         # None when they could not be read. Wired to the database at startup;
         # without one no lane is ever locked.
         self._lane_lock_reader = lane_lock_reader
-        # Writes a lock's restore record: (provider_id, lane_id, revision,
-        # record) -> whether the lock still held that revision.
+        # Writes locks' restore records, all or none: a list of (provider_id,
+        # lane_id, revision, record) -> whether every lock still held its revision.
         self._lane_restore_writer = lane_restore_writer
         self._lane_idle_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
@@ -931,12 +931,21 @@ class CapacityPlanner:
             return await self._save_restore_record(provider_id, WORKER_LOCK_ID, entry[1], record)
 
     def _restore_lock_holds(self, action: CapacityPlanAction) -> bool:
-        """Whether the lock a restore action was planned for still holds, unchanged."""
+        """Whether a restore action is still wanted: its lock unchanged, and its record still asking for it.
+
+        An operator may unload the lane, or a sleep may settle, while the
+        action waits behind others in the cycle.
+        """
         if not isinstance(action.restore_lock, tuple):
             return True
         lock_id, revision = action.restore_lock
         held = self._lock_cache().peek().get((int(action.provider_id), lock_id))
-        return held is not None and held[0] and held[1] == revision
+        if held is None or not held[0] or held[1] != revision:
+            return False
+        entry = (held[2] or {}).get(action.lane_id)
+        if not isinstance(entry, dict) or UNLOADING in entry:
+            return False
+        return bool(entry.get(RESLEEP)) if action.action == "sleep_l1" else True
 
     def _kept_asleep(self, provider_id: int) -> set[str]:
         return {lane_id for pid, lane_id in self._restore_sleep_pending() if pid == provider_id}
@@ -1054,23 +1063,30 @@ class CapacityPlanner:
 
         Returns whether it was stored.
         """
+        return await self._save_restore_records(provider_id, [(lock_id, revision, record)])
+
+    async def _save_restore_records(self, provider_id: int, changes: list[tuple[str, int, dict]]) -> bool:
+        """Store several locks' records of one worker, all or none. Returns whether they were stored."""
+        if not changes:
+            return True
         writer = getattr(self, "_lane_restore_writer", None)
         if writer is not None:
             try:
-                if not await asyncio.to_thread(writer, provider_id, lock_id, revision, record):
+                rows = [(int(provider_id), lock_id, revision, record) for lock_id, revision, record in changes]
+                if not await asyncio.to_thread(writer, rows):
                     return False  # unlocked or locked again since: the next read brings the new state
             except Exception:
-                logger.warning(
-                    "Could not store the restore record of lock %s on worker=%s", lock_id, provider_id, exc_info=True
-                )
+                logger.warning("Could not store the restore records of worker=%s", provider_id, exc_info=True)
                 return False
-        key = (int(provider_id), lock_id)
 
         def apply(locks: LaneLockState) -> LaneLockState:
-            held = locks.get(key)
-            if held is None or not held[0] or held[1] != revision:
-                return locks
-            return {**locks, key: (True, revision, record)}
+            updated = dict(locks)
+            for lock_id, revision, record in changes:
+                key = (int(provider_id), lock_id)
+                held = updated.get(key)
+                if held is not None and held[0] and held[1] == revision:
+                    updated[key] = (True, revision, record)
+            return updated
 
         self._lock_cache().update(apply)
         return True
@@ -1109,7 +1125,7 @@ class CapacityPlanner:
         Setting adds *since* as one more attempt; clearing removes *attempt*
         and keeps the mark while another attempt may still unload the lane.
         """
-        ok = True
+        changes: list[tuple[str, int, dict]] = []
         async with self._restore_record_lock(provider_id):
             for (pid, lock_id), (locked, revision, record) in list(self._lock_cache().peek().items()):
                 if pid != int(provider_id) or not locked:
@@ -1137,8 +1153,10 @@ class CapacityPlanner:
                     # Only the mark was there: drop the entry, so the lane is recorded again.
                     new_record = {k: v for k, v in (record or {}).items() if k != lane_id}
                 if new_record != record:
-                    ok = await self._save_restore_record(pid, lock_id, revision, new_record) and ok
-        return ok
+                    changes.append((lock_id, revision, new_record))
+            # One write for every lock: an unload marked in some of them only
+            # would keep the lane out of the records although none went out.
+            return await self._save_restore_records(provider_id, changes)
 
     def _compute_lock_wake_actions(
         self,
