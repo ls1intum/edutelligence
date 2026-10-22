@@ -41,6 +41,7 @@ def scheduler(monkeypatch):
     planner = MagicMock()
     planner._facade.model_inflight_requests.return_value = 0
     planner._drain_lane = AsyncMock(return_value=True)
+    planner.is_worker_locked.return_value = False
     service = module.NightlyScheduler(registry, planner)
     service.restore = AsyncMock()
     db = MagicMock()
