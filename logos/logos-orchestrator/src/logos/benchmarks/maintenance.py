@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 
 from logos.benchmarks import nightly_store as store
-from logos.maintenance_window import maintenance_claim_max_age_s, maintenance_node_limit
+from logos.maintenance_window import maintenance_node_limit
 
 logger = logging.getLogger(__name__)
 
@@ -27,59 +27,28 @@ SESSION_ALREADY_RUNNING = "calibration session already in progress"
 UNSUPPORTED_COMMAND = "Unsupported bridge command"
 
 
-def _age_s(claim):
-    age_s = claim.get("age_s")
-    if age_s is not None:
-        return float(age_s)
-    created = claim.get("created_at")
-    if not isinstance(created, datetime):
-        return None
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=UTC)
-    return (datetime.now(UTC) - created).total_seconds()
-
-
-def _when(moment):
-    return moment.strftime("%d.%m. %H:%M") if hasattr(moment, "strftime") else str(moment)
-
-
 class MaintenanceCoordinator:
-    def __init__(self, registry, name_of=None):
+    def __init__(self, registry):
         self.registry = registry
-        self.name_of = name_of
 
     def live_calibration(self):
         return any(self.registry.is_calibrating(pid) for pid in self.registry.active_provider_ids())
 
     async def start_calibration(self, provider_id, send):
-        from logos.logosnode_registry import (
-            LogosNodeCommandError,
-            LogosNodeCommandRejectedError,
-            LogosNodeOfflineError,
-            MaintenanceBusyError,
-        )
+        from logos.logosnode_registry import LogosNodeCommandError, LogosNodeCommandRejectedError, MaintenanceBusyError
 
         with store.cluster_lock() as connection:
             if connection is None:
-                raise MaintenanceBusyError("Another maintenance command is in progress; retry shortly")
-            claims = store.calibration_claims()
-            live = {pid for pid in self.registry.active_provider_ids() if self.registry.is_calibrating(pid)}
-            own = next((claim for claim in claims if claim["provider_id"] == provider_id), None)
-            if own is not None and not own["confirmed"] and provider_id not in live:
-                # Unconfirmed: the start reply was lost. The worker refuses a
-                # second session itself, so a fresh idle answer is enough.
-                try:
-                    if await self._release_if_finished(own):
-                        logger.info("Released stale calibration claim of provider %s", provider_id)
-                        claims = store.calibration_claims()
-                except (LogosNodeOfflineError, LogosNodeCommandError, TimeoutError):
-                    pass  # Uncertainty keeps the claim and the refusal explains it.
-            occupied = {claim["provider_id"] for claim in claims} | live
-            benchmarks, recovery = store.has_active_benchmarks(), store.has_recovery()
-            if provider_id in occupied or len(occupied) >= maintenance_node_limit() or benchmarks or recovery:
-                raise MaintenanceBusyError(
-                    self._busy_message(provider_id, claims, live, occupied, benchmarks, recovery)
-                )
+                raise MaintenanceBusyError("Calibration or benchmarks already own the maintenance slot")
+            occupied = {claim["provider_id"] for claim in store.calibration_claims()}
+            occupied.update(pid for pid in self.registry.active_provider_ids() if self.registry.is_calibrating(pid))
+            if (
+                provider_id in occupied
+                or len(occupied) >= maintenance_node_limit()
+                or store.has_active_benchmarks()
+                or store.has_recovery()
+            ):
+                raise MaintenanceBusyError("Calibration, benchmarks or recovery already own the maintenance slot")
             token = str(uuid.uuid4())
             store.claim_calibration(provider_id, token, AUTOMATIC_CALIBRATION.get())
             dispatched = False
@@ -113,51 +82,6 @@ class MaintenanceCoordinator:
             store.confirm_calibration(token)
             return result
 
-    def _label(self, provider_id):
-        name = self.name_of(provider_id) if self.name_of else None
-        return name or f"provider {provider_id}"
-
-    def _busy_message(self, provider_id, claims, live, occupied, benchmarks, recovery):
-        claimed = {claim["provider_id"] for claim in claims}
-        lines = []
-        for claim in claims:
-            state = "confirmed" if claim["confirmed"] else "unconfirmed"
-            kind = "automatic" if claim.get("automatic") else "manual"
-            since = _when(claim.get("created_at"))
-            lines.append(f"{self._label(claim['provider_id'])}: {state} {kind} claim since {since}")
-        lines += [f"{self._label(pid)}: calibration running" for pid in sorted(live - claimed)]
-        lines += self._benchmark_lines(benchmarks, recovery)
-        bullets = "\n".join(f"• {line}" for line in lines)
-        message = f"Calibration on {self._label(provider_id)} is blocked:\n{bullets}"
-        holders = sorted(claimed | live)
-        if holders:
-            names = ", ".join(self._label(pid) for pid in holders)
-            message += f"\nStop calibration on {names} to release it."
-            limit = maintenance_node_limit()
-            if provider_id not in occupied and len(occupied) >= limit:
-                allowed = "one node" if limit == 1 else f"{limit} nodes"
-                message += f" Only {allowed} may run maintenance at a time."
-        return message
-
-    def _benchmark_lines(self, benchmarks, recovery):
-        try:
-            details = store.blocker_details()
-        except Exception:  # noqa: BLE001
-            details = {"jobs": [], "claims": [], "recovery_pairs": []}
-        lines = []
-        if benchmarks:
-            lines += [f"benchmark job #{job_id} ({status})" for job_id, status in details["jobs"]]
-            lines += [
-                f"benchmark job #{job} holds the slot on {self._label(pid)} since {_when(at)}"
-                for job, pid, at in details["claims"]
-            ]
-            if not details["jobs"] and not details["claims"]:
-                lines.append("benchmarks are active")
-        if recovery:
-            pairs = ", ".join(str(pair) for pair in details["recovery_pairs"])
-            lines.append("nightly worker recovery pending" + (f" (model/worker pair {pairs})" if pairs else ""))
-        return lines
-
     async def stop_calibration(self, provider_id, send):
         from logos.logosnode_registry import MaintenanceBusyError
 
@@ -180,7 +104,6 @@ class MaintenanceCoordinator:
             if connection is None:
                 return completed
             for claim in store.calibration_claims():
-                age = _age_s(claim)
                 if not claim["confirmed"] and not _past_grace(claim):
                     continue
                 try:
@@ -189,16 +112,6 @@ class MaintenanceCoordinator:
                     if await self._release_if_finished(claim) and claim["confirmed"]:
                         completed.append(claim["provider_id"])
                 except (LogosNodeOfflineError, LogosNodeCommandError, TimeoutError) as exc:
-                    if age is not None and age > maintenance_claim_max_age_s():
-                        logger.warning(
-                            "Releasing calibration claim %s of provider %s after %.0f min without an answer (%s)",
-                            claim["token"],
-                            claim["provider_id"],
-                            age / 60,
-                            exc,
-                        )
-                        store.release_calibration(claim["token"])
-                        continue
                     logger.warning(
                         "Calibration status unavailable for provider %s (%s); claim %s remains reserved. "
                         "Reconnect and stop calibration, or follow the offline calibration recovery procedure.",

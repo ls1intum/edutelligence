@@ -1319,7 +1319,7 @@ async def start_pipeline():
         worker_locked=_capacity_planner.is_worker_locked,
     )
     global _nightly_scheduler, _maintenance_coordinator
-    _maintenance_coordinator = MaintenanceCoordinator(_logosnode_registry, _logosnode_facade.get_provider_name)
+    _maintenance_coordinator = MaintenanceCoordinator(_logosnode_registry)
     _logosnode_registry.maintenance = _maintenance_coordinator
     _logosnode_registry.subscribe_to_events(_calibration_orchestrator._on_provider_event)
     _nightly_scheduler = NightlyScheduler(

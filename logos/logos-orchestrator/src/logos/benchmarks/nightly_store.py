@@ -216,28 +216,6 @@ def has_recovery():
         )
 
 
-def blocker_details():
-    """Rows behind a refused calibration start, for the error message only."""
-    with DBManager() as db:
-        jobs = db.session.execute(
-            text(
-                "SELECT id, status FROM jobs WHERE environment = 'model-provider-benchmark' "
-                "AND status IN ('pending', 'running') ORDER BY id"
-            )
-        ).all()
-        claims = db.session.execute(
-            text("SELECT job_id, provider_id, created_at FROM maintenance_benchmark ORDER BY job_id")
-        ).all()
-        recovery = db.session.execute(
-            text("SELECT model_provider_id FROM nightly_benchmarks WHERE recovery IS NOT NULL ORDER BY 1")
-        ).scalars()
-        return {
-            "jobs": [(row[0], row[1]) for row in jobs],
-            "claims": [(row[0], row[1], row[2]) for row in claims],
-            "recovery_pairs": list(recovery),
-        }
-
-
 def calibration_claims():
     with DBManager() as db:
         return [

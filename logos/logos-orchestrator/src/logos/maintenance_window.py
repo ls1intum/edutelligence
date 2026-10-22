@@ -15,15 +15,6 @@ def maintenance_node_limit() -> int:
     return limit
 
 
-def maintenance_claim_max_age_s() -> float:
-    """Age after which a claim whose worker cannot be asked is released."""
-    raw = _env("LOGOS_MAINTENANCE_CLAIM_MAX_AGE_MINUTES", "360")
-    minutes = float(raw)
-    if minutes <= 0:
-        raise ValueError("LOGOS_MAINTENANCE_CLAIM_MAX_AGE_MINUTES must be positive")
-    return minutes * 60
-
-
 def _env(name: str, default: str) -> str:
     return (os.getenv(name) or "").strip() or default
 
