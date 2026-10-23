@@ -716,3 +716,29 @@ def test_the_wait_for_an_answer_post_is_bounded(config, registry, clock, monkeyp
 
     assert (failed, finished) == (0, 0)
     assert time.monotonic() - started < 3
+
+
+def test_a_run_whose_answer_starts_during_the_close_still_gets_the_drain(
+    config, registry, clock
+):
+    watchdog = _watchdog(config, registry, clock)
+    callback = _callback()
+    _chat_run(registry, clock, callback)
+    real_fail = callback.watchdog_fail
+
+    def answer_starts_first(message, code):
+        # The pipeline enters answer delivery right before the watchdog's claim.
+        callback._enter_answer_sending()
+        threading.Timer(0.3, finish_post).start()
+        return real_fail(message, code)
+
+    def finish_post():
+        with callback._running_update_lock:
+            callback._answer_post_in_flight = False
+
+    callback.watchdog_fail = answer_starts_first
+
+    failed, finished = watchdog._close_open_runs(registry.snapshot(), "m", "c")
+
+    assert (failed, finished) == (0, 1)
+    assert _posted(callback)[-1]["runState"] == "FINISHED"

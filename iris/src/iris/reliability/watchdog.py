@@ -445,21 +445,20 @@ class Watchdog:  # pylint: disable=too-many-instance-attributes
         wait_until = time.monotonic() + _CLOSE_RUNS_BUDGET_SECONDS - 2
 
         def close(record: RunRecord) -> str:
-            phase = getattr(record.callback, "phase", None)
-            if phase is RunPhase.RUNNING:
-                if record.callback.watchdog_fail(message, code):
+            callback = record.callback
+            if getattr(callback, "phase", None) is RunPhase.RUNNING:
+                if callback.watchdog_fail(message, code):
                     return "failed"
-            elif phase is RunPhase.ANSWER_SENDING:
+            # Read again: the answer may have started between the read above and the
+            # failed claim, and then it has to land before the exit like any other.
+            if getattr(callback, "phase", None) is RunPhase.ANSWER_SENDING:
                 # An answer POST in flight must land before the exit, or the answer and the
                 # run's end are lost: wait for it (bounded), then finish the run.
-                while (
-                    record.callback.answer_post_in_flight
-                    and time.monotonic() < wait_until
-                ):
+                while callback.answer_post_in_flight and time.monotonic() < wait_until:
                     time.sleep(_ANSWER_POST_POLL_SECONDS)
-                if record.callback.watchdog_finish():
+                if callback.watchdog_finish():
                     return "finished"
-                if record.callback.answer_post_in_flight:
+                if callback.answer_post_in_flight:
                     logger.warning(
                         "Run %s: answer still being sent when the close budget ran out",
                         record.run_id,
