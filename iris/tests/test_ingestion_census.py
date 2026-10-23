@@ -387,6 +387,24 @@ def test_census_requests_the_lecture_id_from_every_content_scan():
     assert LectureUnitPageChunkSchema.LECTURE_ID.value in requested
 
 
+def test_census_unit_discovery_is_not_capped_at_weaviates_default_of_100_groups():
+    # Without an explicit limit Weaviate returns 100 groups, so the segments of
+    # every further unit in a large course looked missing and were re-ingested.
+    db = SimpleNamespace(
+        lecture_units=_unit_rows_collection([]),
+        lectures=_aggregating_collection([]),
+        transcriptions=_aggregating_collection([]),
+        lecture_segments=_aggregating_collection([]),
+    )
+
+    with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
+        get_course_ingestion_census(1, base_url="https://artemis.example")
+
+    for collection in (db.lectures, db.transcriptions, db.lecture_segments):
+        group_by = collection.aggregate.over_all.call_args.kwargs["group_by"]
+        assert group_by.limit == 10_000
+
+
 def test_census_passes_the_configured_confirm_concurrency_to_every_confirmation():
     unit_row = SimpleNamespace(
         uuid="ur-3",
