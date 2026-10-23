@@ -434,6 +434,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     )
             except Exception as e:
                 logger.error("Error generating deferred session title", exc_info=e)
+            if self._closed_by_watchdog(state):
+                return result
 
             # Generate and send suggestions separately (async from user's perspective)
             if self.chat_mode in [
@@ -870,6 +872,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     language=answer_language,
                     base_url=base_url,
                 )
+            if self._closed_by_watchdog(state):
+                return result
 
             # Add lecture content citations. Merge the content the student is
             # currently viewing (stored before the agent ran) with whatever the

@@ -230,13 +230,18 @@ class StatusCallback:
             return True
 
     def _enter_answer_sending(self) -> bool:
-        """Mark that the final answer is on its way; False once the run is terminal."""
+        """Mark that the final answer is on its way; False once the run is terminal.
+
+        The in-flight flag is set in the same step as the phase, so watchdog_finish() can never
+        see ANSWER_SENDING without the answer POST it must wait for.
+        """
         with self._running_update_lock:
             if self._phase is RunPhase.TERMINAL:
                 return False
             if self._phase is RunPhase.RUNNING:
                 self._phase = RunPhase.ANSWER_SENDING
                 self._answer_sent_at = time.perf_counter()
+            self._answer_post_in_flight = True
             return True
 
     def watchdog_fail(self, message: str, code: str) -> bool:
@@ -549,7 +554,6 @@ class ChatRunCallback(StatusCallback):
         if not self._enter_answer_sending():
             self._reject_after_terminal("result")
             return False
-        self._answer_post_in_flight = True
         success = False
         try:
             success = self._send_chat_fields(

@@ -172,7 +172,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     @staticmethod
     def _closed_by_watchdog(state) -> bool:
         """Whether the watchdog already closed this run; then no further model calls."""
-        return getattr(state.callback, "closed_by_watchdog", False) is True
+        callback = getattr(state, "callback", None)
+        return getattr(callback, "closed_by_watchdog", False) is True
 
     def __init__(self, *args, **kwargs):
         """
@@ -985,6 +986,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
             # 7.1. Run pre agent hook
             self.pre_agent_hook(state)
+            if self._closed_by_watchdog(state):
+                # Closed while the run was being prepared: do not start the agent.
+                return
 
             # 7.2. Run the agent with the provided DTO
             if self.should_stream_agent_response(state):

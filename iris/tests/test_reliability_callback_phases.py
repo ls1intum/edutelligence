@@ -174,3 +174,27 @@ def test_heartbeat_is_a_bare_running_frame():
     callback._drain_running_updates()  # pylint: disable=protected-access
 
     assert _posted(callback)[-1] == {"runState": "RUNNING"}
+
+
+def test_entering_answer_sending_marks_the_post_in_flight_in_one_step():
+    callback = _callback()
+    seen = {}
+
+    def post(payload, **_kwargs):
+        if payload.get("result") == "the answer":
+            # The watchdog looking now must see the POST in flight and keep away.
+            seen["finish_during_post"] = callback.watchdog_finish()
+            seen["in_flight"] = callback.answer_post_in_flight
+        return MagicMock(status_code=200, raise_for_status=MagicMock())
+
+    callback._post_status_payload = MagicMock(  # pylint: disable=protected-access
+        side_effect=post
+    )
+    assert callback._enter_answer_sending()  # pylint: disable=protected-access
+    assert callback.answer_post_in_flight is True
+    assert callback.watchdog_finish() is False
+    callback._answer_post_in_flight = False  # pylint: disable=protected-access
+
+    assert callback.send_result("the answer") is True
+    assert seen == {"finish_during_post": False, "in_flight": True}
+    assert callback.answer_post_in_flight is False

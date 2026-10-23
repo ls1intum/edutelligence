@@ -135,3 +135,17 @@ def test_a_run_closed_during_the_post_agent_hook_does_not_finish():
     _run(_MiniPipeline(), callback, lambda _s: "answer", post_hook=closed_in_hook)
 
     callback.finish.assert_not_called()
+
+
+def test_a_run_closed_during_preparation_does_not_start_the_agent():
+    callback = MagicMock(closed_by_watchdog=False)
+    pipeline = _MiniPipeline()
+    execute_agent = MagicMock(return_value="answer")
+
+    def closing_pre_hook(state):  # pylint: disable=unused-argument
+        callback.closed_by_watchdog = True
+
+    with patch.object(pipeline, "pre_agent_hook", side_effect=closing_pre_hook):
+        _run(pipeline, callback, execute_agent)
+
+    execute_agent.assert_not_called()
