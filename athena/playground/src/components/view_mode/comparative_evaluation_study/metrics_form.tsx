@@ -161,6 +161,7 @@ export default function MetricsForm(metricsFormProps: MetricsFormProps) {
                 onClick={() => startEditMetric(index)}
                 className={`bg-gray-500 text-white rounded-md p-2 hover:bg-gray-600 flex items-center gap-2 ${buttonDisabledStyle}`}
                 disabled={disabled}
+                aria-label={`Edit ${metric.title}`}
               >
                 <FontAwesomeIcon icon={faEdit} />
               </button>
@@ -168,6 +169,7 @@ export default function MetricsForm(metricsFormProps: MetricsFormProps) {
                 onClick={() => removeMetric(index)}
                 className={`bg-red-500 text-white rounded-md p-2 hover:bg-red-600 flex items-center gap-2 ${buttonDisabledStyle}`}
                 disabled={disabled}
+                aria-label={`Delete ${metric.title}`}
               >
                 <FontAwesomeIcon icon={faTrash} />
               </button>
