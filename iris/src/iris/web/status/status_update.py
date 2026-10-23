@@ -115,6 +115,9 @@ class StatusCallback:
         self._answer_sent_at: Optional[float] = None
         self._answer_post_in_flight = False
         self._last_frame_at = time.perf_counter()
+        # The pipeline's running usage list, so a watchdog terminal frame can still bill the
+        # calls a stuck or slow run already made (see attach_usage).
+        self._usage_source: Optional[list[TokenUsageDTO]] = None
         self._running_update_executor: Optional[TracedThreadPoolExecutor] = None
         self._running_update_futures: list[Future] = []
         self._running_update_lock = Lock()
@@ -244,6 +247,16 @@ class StatusCallback:
             self._answer_post_in_flight = True
             return True
 
+    def attach_usage(self, tokens: list[TokenUsageDTO]) -> None:
+        """Let watchdog terminal frames report the usage the pipeline accrues in ``tokens``."""
+        self._usage_source = tokens
+
+    def _accrued_usage(self) -> list[TokenUsageDTO]:
+        return list(self._usage_source or [])
+
+    def _on_watchdog_terminal_delivered(self) -> None:
+        """Hook for callbacks that track which usage Artemis already has."""
+
     def watchdog_fail(self, message: str, code: str) -> bool:
         """FAILED from the watchdog: only while no answer has been sent, bounded in time."""
         with self._running_update_lock:
@@ -299,9 +312,10 @@ class StatusCallback:
         self, run_state: RunStateEnum, error: Optional[StatusErrorDTO]
     ) -> dict[str, Any]:
         # A copy: the stuck pipeline thread still owns self.status.
-        return self.status.model_copy(
-            update={"run_state": run_state, "error": error}
-        ).model_dump(by_alias=True)
+        update: dict[str, Any] = {"run_state": run_state, "error": error}
+        if self._usage_source is not None:
+            update["tokens"] = self._accrued_usage()
+        return self.status.model_copy(update=update).model_dump(by_alias=True)
 
     def _send_watchdog_terminal(self, payload: dict[str, Any]) -> bool:
         try:
@@ -311,6 +325,7 @@ class StatusCallback:
                         payload, timeout=WATCHDOG_POST_TIMEOUT_SECONDS
                     )
                     resp.raise_for_status()
+                    self._on_watchdog_terminal_delivered()
                     return True
                 except requests.exceptions.RequestException as e:
                     logger.warning(
@@ -522,6 +537,8 @@ class ChatRunCallback(StatusCallback):
         # every send, but Artemis adds each send's tokens to the trace, so each usage
         # object must be delivered exactly once.
         self._delivered_tokens: list[TokenUsageDTO] = []
+        # Usage the watchdog's terminal frame carries; marked delivered once it went out.
+        self._watchdog_tokens: list[TokenUsageDTO] = []
 
     def activity_snapshot(self, activities: list[ActivityDTO], seq: int) -> None:
         payload = self._payload(
@@ -720,7 +737,18 @@ class ChatRunCallback(StatusCallback):
         self, run_state: RunStateEnum, error: Optional[StatusErrorDTO]
     ) -> dict[str, Any]:
         fields, _ = self._merge_undelivered_result({})
+        # Usage of an undelivered answer plus whatever the run accrued since, each once.
+        candidates = list(fields.get("tokens") or [])
+        for token in self._accrued_usage():
+            if not any(token is known for known in candidates):
+                candidates.append(token)
+        self._watchdog_tokens = self._undelivered_tokens(candidates)
+        fields = {**fields, "tokens": self._watchdog_tokens}
         return self._payload(run_state=run_state, error=error, **fields)
+
+    def _on_watchdog_terminal_delivered(self) -> None:
+        self._delivered_tokens.extend(self._watchdog_tokens)
+        self._undelivered_result_fields = None
 
     @staticmethod
     def _payload(

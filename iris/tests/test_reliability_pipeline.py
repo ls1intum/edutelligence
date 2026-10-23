@@ -149,3 +149,62 @@ def test_a_run_closed_during_preparation_does_not_start_the_agent():
         _run(pipeline, callback, execute_agent)
 
     execute_agent.assert_not_called()
+
+
+def test_a_run_closed_before_the_pre_agent_hook_does_not_run_it():
+    callback = MagicMock(closed_by_watchdog=False)
+    pipeline = _MiniPipeline()
+
+    def closing_prepare(state):  # pylint: disable=unused-argument
+        callback.closed_by_watchdog = True
+
+    with (
+        patch.object(pipeline, "prepare_state", side_effect=closing_prepare),
+        patch.object(pipeline, "pre_agent_hook") as pre_agent_hook,
+    ):
+        _run(pipeline, callback, MagicMock(return_value="answer"))
+
+    pre_agent_hook.assert_not_called()
+
+
+def test_the_pipeline_hands_its_usage_list_to_the_callback():
+    callback = MagicMock(closed_by_watchdog=False)
+    pipeline = _MiniPipeline()
+
+    _run(pipeline, callback, lambda _s: "answer")
+
+    callback.attach_usage.assert_called_once_with(pipeline.tokens)
+
+
+def test_mcq_generation_is_not_started_for_a_run_closed_during_retrieval():
+    from iris.pipeline.chat import (  # pylint: disable=import-outside-toplevel
+        mcq_chat_mixin,
+    )
+
+    callback = MagicMock(closed_by_watchdog=False)
+    state = SimpleNamespace(
+        mcq_parallel=True,
+        callback=callback,
+        dto=SimpleNamespace(settings=None, user=SimpleNamespace(lang_key="en")),
+    )
+    mcq_pipeline = MagicMock()
+
+    def closing_retrieval(*_args, **_kwargs):
+        callback.closed_by_watchdog = True
+        return [], None
+
+    with patch.object(
+        mcq_chat_mixin,
+        "retrieve_lecture_content_for_mcq",
+        side_effect=closing_retrieval,
+    ):
+        mcq_chat_mixin.mcq_pre_agent_hook(
+            state,
+            mcq_pipeline,
+            lambda _s: "quiz me",
+            db=None,
+            course_id=1,
+            chat_history=[],
+        )
+
+    mcq_pipeline.run_in_thread.assert_not_called()

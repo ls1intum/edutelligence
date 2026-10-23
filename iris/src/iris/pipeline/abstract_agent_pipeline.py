@@ -872,6 +872,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         # what it spent up to that point, and never the leftovers of the instance's previous run.
         state.tokens = []
         self.tokens = state.tokens
+        attach_usage = getattr(callback, "attach_usage", None)
+        if callable(attach_usage):
+            attach_usage(state.tokens)
         state.dto = dto
         state.db = VectorDatabase()
         state.variant = variant
@@ -984,7 +987,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             else:
                 logger.info("Using cloud model with tool calling support")
 
-            # 7.1. Run pre agent hook
+            # 7.1. Run pre agent hook (it may start MCQ generation)
+            if self._closed_by_watchdog(state):
+                return
             self.pre_agent_hook(state)
             if self._closed_by_watchdog(state):
                 # Closed while the run was being prepared: do not start the agent.

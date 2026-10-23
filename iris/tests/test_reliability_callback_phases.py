@@ -1,5 +1,7 @@
 """Run phases of the status callbacks: one terminal frame per run, and the watchdog's sends."""
 
+# pylint: disable=protected-access
+
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -198,3 +200,61 @@ def test_entering_answer_sending_marks_the_post_in_flight_in_one_step():
     assert callback.send_result("the answer") is True
     assert seen == {"finish_during_post": False, "in_flight": True}
     assert callback.answer_post_in_flight is False
+
+
+def test_watchdog_fail_bills_the_usage_the_run_accrued_once():
+    from iris.common.token_usage_dto import (  # pylint: disable=import-outside-toplevel
+        TokenUsageDTO,
+    )
+
+    callback = _callback()
+    usage = []
+    callback.attach_usage(usage)
+    first, second = TokenUsageDTO(numInputTokens=10), TokenUsageDTO(numInputTokens=20)
+    usage.append(first)
+    callback.send_suggestions(["s"])  # a RUNNING frame without tokens
+    usage.append(second)
+
+    assert callback.watchdog_fail("too slow", "timeout") is True
+
+    payload = _posted(callback)[-1]
+    assert [t["numInputTokens"] for t in payload["tokens"]] == [10, 20]
+
+
+def test_watchdog_finish_does_not_bill_usage_the_answer_already_carried():
+    from iris.common.token_usage_dto import (  # pylint: disable=import-outside-toplevel
+        TokenUsageDTO,
+    )
+
+    callback = _callback()
+    usage = [TokenUsageDTO(numInputTokens=10)]
+    callback.attach_usage(usage)
+    callback.send_result("the answer", tokens=usage)
+    usage.append(TokenUsageDTO(numInputTokens=5))  # e.g. the title call
+
+    assert callback.watchdog_finish() is True
+
+    payload = _posted(callback)[-1]
+    assert [t["numInputTokens"] for t in payload["tokens"]] == [5]
+
+
+def test_non_chat_watchdog_frames_carry_the_accrued_usage():
+    from iris.common.token_usage_dto import (  # pylint: disable=import-outside-toplevel
+        TokenUsageDTO,
+    )
+    from iris.web.status.status_update import (  # pylint: disable=import-outside-toplevel
+        StruggleInterventionCallback,
+    )
+
+    callback = StruggleInterventionCallback(run_id="run-token", base_url="http://a")
+    callback._post_status_payload = MagicMock(  # pylint: disable=protected-access
+        return_value=_ok()
+    )
+    callback.attach_usage([TokenUsageDTO(numInputTokens=7)])
+
+    assert callback.watchdog_fail("too slow", "timeout") is True
+
+    payload = callback._post_status_payload.call_args.args[
+        0
+    ]  # pylint: disable=protected-access
+    assert [t["numInputTokens"] for t in payload["tokens"]] == [7]
