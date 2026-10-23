@@ -6,7 +6,7 @@ authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = ">=3.11,<3.12.dev0"
+python = ">=3.15,<3.16"
 athena = { path = "../../../athena", develop = true }
 # athena = { git = "https://github.com/ls1intum/Athena.git", rev = "2da2d33", subdirectory = "athena"}
 llm_core = { path = "../../../llm_core", develop = true }

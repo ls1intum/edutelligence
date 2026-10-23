@@ -6,7 +6,7 @@ authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = ">=3.11,<3.12.dev0"
+python = ">=3.15,<3.16"
 athena = { path = "../athena", develop = true }
 langsmith = "0.14.12"
 langchain = "1.4.7"

@@ -6,7 +6,7 @@ authors = ["Aniruddh Zaveri <aniruddh.zaveri@tum.de>", "Konrad Weiß <konrad2002
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = ">=3.11,<3.12.dev0"
+python = ">=3.15,<3.16"
 # if you have local changes in the common Athena module, use the line below. Otherwise, please use a VCS stable version. Also, a version with tag = "" is possible.
 # athena = { path = "../athena", develop = true }
 athena = { path = "../../../athena", develop = true }
