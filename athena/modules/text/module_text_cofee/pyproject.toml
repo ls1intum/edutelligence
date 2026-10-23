@@ -14,9 +14,9 @@ protobuf = "6.33.5" # if this version is updated, you also need to update the us
 requests = "2.34.2"
 
 [tool.poetry.group.dev.dependencies]
-pydantic = "2.13.4"
+pydantic = "2.14.1"
 prospector = { version = "1.19.1", extras = ["with_mypy"] }
-types-requests = "2.33.0.20260712"
+types-requests = "2.33.0.20261006"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
