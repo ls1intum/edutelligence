@@ -829,3 +829,32 @@ def test_an_orphan_whose_caller_never_fails_it_is_dropped_later(
     watchdog._check_runs(clock.now)
 
     assert not registry.snapshot()
+
+
+def test_a_trip_waits_for_a_deadline_fail_the_watchdog_just_started(
+    config, registry, clock
+):
+    watchdog = _watchdog(config, registry, clock)
+    callback = _callback()
+    _chat_run(registry, clock, callback)
+    release, in_post = threading.Event(), threading.Event()
+
+    def slow_fail(*_args, **_kwargs):
+        in_post.set()
+        release.wait(5)
+        return _ok()
+
+    callback._post_status_payload = MagicMock(side_effect=slow_fail)
+    helper = threading.Thread(
+        target=callback.watchdog_fail, args=("too slow", "timeout")
+    )
+    helper.start()
+    assert in_post.wait(5)
+    threading.Timer(0.5, release.set).start()
+
+    started = time.monotonic()
+    watchdog._close_open_runs(registry.snapshot(), "m", "c")
+    helper.join(5)
+
+    assert time.monotonic() - started >= 0.4
+    assert callback.terminal_post_in_flight is False

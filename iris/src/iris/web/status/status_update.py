@@ -2,7 +2,7 @@ import time
 from concurrent.futures import Future
 from enum import Enum
 from threading import Lock
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
 from sentry_sdk import capture_exception, capture_message
@@ -276,9 +276,10 @@ class StatusCallback:
                 return False
             self._phase = RunPhase.TERMINAL
             self._closed_by_watchdog = True
+            self._terminal_post_in_flight = True
         error = StatusErrorDTO(message=message, code=code)
         return self._send_watchdog_terminal(
-            self._watchdog_payload(RunStateEnum.FAILED, error)
+            lambda: self._watchdog_payload(RunStateEnum.FAILED, error)
         )
 
     def watchdog_finish(self) -> bool:
@@ -295,8 +296,9 @@ class StatusCallback:
                 return False
             self._phase = RunPhase.TERMINAL
             self._closed_by_watchdog = True
+            self._terminal_post_in_flight = True
         return self._send_watchdog_terminal(
-            self._watchdog_payload(RunStateEnum.FINISHED, None)
+            lambda: self._watchdog_payload(RunStateEnum.FINISHED, None)
         )
 
     def watchdog_heartbeat(self) -> bool:
@@ -329,8 +331,12 @@ class StatusCallback:
             update["tokens"] = self._accrued_usage()
         return self.status.model_copy(update=update).model_dump(by_alias=True)
 
-    def _send_watchdog_terminal(self, payload: dict[str, Any]) -> bool:
+    def _send_watchdog_terminal(
+        self, build_payload: Callable[[], dict[str, Any]]
+    ) -> bool:
+        """Send the watchdog's terminal frame; the terminal-post flag is set by the caller's claim."""
         try:
+            payload = build_payload()
             for attempt in range(WATCHDOG_POST_ATTEMPTS):
                 try:
                     resp = self._post_status_payload(
@@ -349,6 +355,7 @@ class StatusCallback:
         finally:
             # Frames still queued would only arrive after the terminal one.
             self._shutdown_running_update_executor(cancel_queued=True)
+            self._end_terminal_post()
 
     def _enqueue_running_update(self, payload: Optional[dict[str, Any]] = None) -> None:
         """Queue a running status update without blocking the pipeline."""

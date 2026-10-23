@@ -241,3 +241,57 @@ def test_runs_started_during_a_restart_are_failed_at_once():
     )
     execute_agent.assert_not_called()
     assert not registry.snapshot()
+
+
+def test_a_run_whose_terminal_post_is_still_in_flight_stays_visible():
+    callback = MagicMock(closed_by_watchdog=False, terminal_post_in_flight=True)
+    registry = RunRegistry()
+
+    _run(_MiniPipeline(), callback, lambda _s: "answer", registry=registry)
+
+    records = registry.snapshot()
+    assert len(records) == 1 and records[0].orphaned is True
+
+
+def test_without_a_watchdog_no_run_is_kept():
+    from iris.config import settings  # pylint: disable=import-outside-toplevel
+
+    callback = MagicMock(closed_by_watchdog=False)
+    registry = RunRegistry()
+
+    def boom(state):  # pylint: disable=unused-argument
+        raise RuntimeError("agent failed")
+
+    with patch.object(settings.reliability, "enabled", False):
+        with pytest.raises(RuntimeError):
+            _run(_MiniPipeline(), callback, boom, registry=registry)
+
+    assert not registry.snapshot()
+
+
+def test_every_run_is_either_in_the_closing_snapshot_or_refused():
+    import threading  # pylint: disable=import-outside-toplevel
+
+    for _ in range(20):
+        registry = RunRegistry()
+        outcomes = {}
+        start = threading.Barrier(9)
+
+        def start_run(index, reg, barrier, out):
+            record = SimpleNamespace(index=index)
+            barrier.wait()
+            out[index] = (record, reg.admit(record))
+
+        threads = [
+            threading.Thread(target=start_run, args=(i, registry, start, outcomes))
+            for i in range(8)
+        ]
+        for thread in threads:
+            thread.start()
+        start.wait()
+        snapshot = registry.refuse_and_snapshot(("restart", "restart"))
+        for thread in threads:
+            thread.join(5)
+
+        for record, refusal in outcomes.values():
+            assert (record in snapshot) != (refusal is not None)

@@ -409,7 +409,6 @@ class Watchdog:  # pylint: disable=too-many-instance-attributes
         )
         if restart:
             self._exiting = True
-            self._registry.refusal = (RESTART_MESSAGE, RESTART_CODE)
             self._guard.write_marker(MARKER_WATCHDOG)
             timer = threading.Timer(
                 self._config.exit_timer_seconds, self._exit_fn, args=(EXIT_CODE,)
@@ -417,7 +416,11 @@ class Watchdog:  # pylint: disable=too-many-instance-attributes
             timer.daemon = True
             timer.start()
 
-        runs = self._registry.snapshot()
+        if restart:
+            # Atomic with admission: every run is either in this snapshot or refused.
+            runs = self._registry.refuse_and_snapshot((RESTART_MESSAGE, RESTART_CODE))
+        else:
+            runs = self._registry.snapshot()
         dump = write_thread_dump(
             self._config.diagnostics_dir, reason, runs, self._pools_fn, first_thread_id
         )

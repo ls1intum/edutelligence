@@ -912,32 +912,30 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         set_current_context(state.tracing_context)
         self._update_langfuse_trace(state.tracing_context)
 
-        refusal = run_registry.refusal
-        if refusal is not None:
-            # Iris is about to restart; a run started now would be cut off without a word.
-            callback.fail(refusal[0], code=refusal[1])
-            return
-
         variant_id = getattr(variant, "id", "default")
         reliability = settings.reliability
-        run_record = run_registry.register(
-            RunRecord(
-                # The request id from the log lines, not the run token (a credential).
-                run_id=get_request_id() or "-",
-                pipeline=pipeline_name,
-                variant=variant_id,
-                local=local,
-                callback=callback,
-                thread_id=threading.get_ident(),
-                started_at=start_time,
-                deadline_seconds=(
-                    chat_deadline_seconds(reliability, variant_id, local)
-                    if self.ANSWER_DEADLINE and reliability.enabled
-                    else None
-                ),
-                is_chat=self.ANSWER_DEADLINE,
-            )
+        run_record = RunRecord(
+            # The request id from the log lines, not the run token (a credential).
+            run_id=get_request_id() or "-",
+            pipeline=pipeline_name,
+            variant=variant_id,
+            local=local,
+            callback=callback,
+            thread_id=threading.get_ident(),
+            started_at=start_time,
+            deadline_seconds=(
+                chat_deadline_seconds(reliability, variant_id, local)
+                if self.ANSWER_DEADLINE and reliability.enabled
+                else None
+            ),
+            is_chat=self.ANSWER_DEADLINE,
         )
+        refusal = run_registry.admit(run_record)
+        if refusal is not None:
+            # Iris is about to restart; a run started now would be cut off without a word.
+            clear_current_context()
+            callback.fail(refusal[0], code=refusal[1])
+            return
 
         try:
             # Registered first: a slow first status POST must not hide the run from the watchdog.
@@ -1060,10 +1058,16 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             if getattr(callback, "phase", None) is not RunPhase.TERMINAL:
                 # The caller sends the FAILED after this returns; stay visible until then.
                 run_record.orphaned = True
-                run_record.orphaned_at = time.perf_counter()
             raise
         finally:
-            if not run_record.orphaned:
+            # A terminal frame still on its way (the watchdog's own, too) must stay visible
+            # to a restart, so the watchdog drops the run once it landed. Only a running
+            # watchdog cleans up, so without one the run goes at once.
+            if getattr(callback, "terminal_post_in_flight", False) is True:
+                run_record.orphaned = True
+            if run_record.orphaned and reliability.enabled:
+                run_record.orphaned_at = time.perf_counter()
+            else:
                 run_registry.unregister(run_record)
             # Clean up tracing context to prevent memory leaks
             clear_current_context()

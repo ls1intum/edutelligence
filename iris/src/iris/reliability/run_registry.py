@@ -56,6 +56,23 @@ class RunRegistry:
             self._runs.append(record)
         return record
 
+    def admit(self, record: RunRecord) -> Optional[tuple[str, str]]:
+        """Register the run unless a restart is under way; then return the refusal instead.
+
+        Atomic with refuse_and_snapshot, so every run is either in the closing snapshot or
+        refused.
+        """
+        with self._lock:
+            if self.refusal is not None:
+                return self.refusal
+            self._runs.append(record)
+            return None
+
+    def refuse_and_snapshot(self, refusal: tuple[str, str]) -> list[RunRecord]:
+        with self._lock:
+            self.refusal = refusal
+            return list(self._runs)
+
     def unregister(self, record: RunRecord) -> None:
         with self._lock:
             if record in self._runs:

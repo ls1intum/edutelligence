@@ -291,3 +291,30 @@ def test_a_retried_answer_blocks_the_watchdog_until_it_is_booked():
     assert payload["runState"] == "FINISHED"
     assert payload["tokens"] == []  # the retry already billed them
     assert "result" not in payload or payload["result"] in (None, "")
+
+
+def test_the_watchdogs_own_terminal_post_counts_as_in_flight():
+    callback = _callback()
+    seen = {}
+
+    def post(*_args, **_kwargs):
+        seen["in_flight"] = callback.terminal_post_in_flight
+        return _ok()
+
+    callback._post_status_payload = MagicMock(side_effect=post)
+    assert callback.watchdog_fail("too slow", "timeout") is True
+
+    assert seen == {"in_flight": True}
+    assert callback.terminal_post_in_flight is False
+
+
+def test_a_failing_payload_build_does_not_leave_the_terminal_flag_set():
+    callback = _callback()
+    callback._watchdog_payload = MagicMock(side_effect=ValueError("bad status"))
+
+    try:
+        callback.watchdog_fail("too slow", "timeout")
+    except ValueError:
+        pass
+
+    assert callback.terminal_post_in_flight is False
