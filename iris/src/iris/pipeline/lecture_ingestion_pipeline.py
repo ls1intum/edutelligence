@@ -728,7 +728,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 # The visibility read at the start of the run is minutes old by now:
                 # a visibility webhook that hid a slide during vision or embedding
                 # would otherwise be reverted by this replacement. Re-read it under
-                # the same lock the visibility pipeline writes under and stamp it on
+                # the unit lock the visibility pipeline writes under and stamp it on
                 # every chunk, including the ones a convergence escalation rewrites.
                 self._load_existing_slide_visibility()
                 for chunk, _ in prepared_chunks:

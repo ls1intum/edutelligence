@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
+import de.tum.cit.aet.logos.logoswebservice.common.ForbiddenException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ConnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
@@ -78,7 +79,7 @@ public class ProviderService {
         List<ProviderProjection> projections = admin
             ? providerRepository.findAllForAdmin()
             : providerRepository.findAllForUser(auth.userId());
-        return projections.stream().map(ProviderService::toProviderMap).toList();
+        return projections.stream().map(p -> toProviderMap(p, admin)).toList();
     }
 
     @Transactional
@@ -235,14 +236,24 @@ public class ProviderService {
         return Map.of("result", "Model refresh triggered.");
     }
 
-    public List<Map<String, Object>> getProviderModels(Integer providerId) {
-        return modelProviderRepository.findModelsForProvider(providerId).stream()
+    public List<Map<String, Object>> getProviderModels(Integer providerId, AuthContext auth) {
+        boolean admin = Role.LOGOS_ADMIN.matches(auth.role());
+        if (!admin && (auth.userId() == null
+                || !providerRepository.isAccessibleToUser(providerId, auth.userId()))) {
+            throw new ForbiddenException("Provider access required");
+        }
+        List<ProviderModelProjection> projections = admin
+            ? modelProviderRepository.findModelsForProviderWithCredentials(providerId)
+            : modelProviderRepository.findModelsForProvider(providerId);
+        return projections.stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("model_id", p.getModelId());
                 m.put("model_name", p.getModelName());
                 m.put("endpoint", p.getEndpoint() != null ? p.getEndpoint() : "");
-                m.put("api_key", p.getApiKey() != null ? p.getApiKey() : "");
+                if (admin) {
+                    m.put("api_key", p.getApiKey() != null ? p.getApiKey() : "");
+                }
                 return m;
             })
             .toList();
@@ -293,12 +304,14 @@ public class ProviderService {
         catch (IllegalArgumentException e) { return null; }
     }
 
-    private static Map<String, Object> toProviderMap(ProviderProjection p) {
+    private static Map<String, Object> toProviderMap(ProviderProjection p, boolean admin) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", p.getId());
         m.put("name", p.getName());
         m.put("base_url", p.getBaseUrl());
-        m.put("api_key", p.getApiKey());
+        if (admin) {
+            m.put("api_key", p.getApiKey());
+        }
         m.put("provider_type", p.getProviderType());
         m.put("cloud_provider_type", p.getCloudProviderType());
         m.put("privacy_level", p.getPrivacyLevel());
