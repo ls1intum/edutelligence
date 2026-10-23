@@ -30,7 +30,13 @@ class _MiniPipeline(AbstractAgentPipeline):
 
 
 def _run(  # pylint: disable=too-many-arguments
-    pipeline, callback, execute_agent, registry=None, seen=None, post_hook=None
+    pipeline,
+    callback,
+    execute_agent,
+    registry=None,
+    seen=None,
+    post_hook=None,
+    vector_database=None,
 ):
     variant = SimpleNamespace(id="default", model=lambda _role, _local: "m")
     registry = registry if registry is not None else RunRegistry()
@@ -38,7 +44,10 @@ def _run(  # pylint: disable=too-many-arguments
     with (
         patch.object(registry_module, "run_registry", registry),
         patch("iris.pipeline.abstract_agent_pipeline.run_registry", registry),
-        patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
+        patch(
+            "iris.pipeline.abstract_agent_pipeline.VectorDatabase",
+            side_effect=vector_database,
+        ),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
         patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel"),
         patch.object(pipeline, "_load_history", return_value=[]),
@@ -406,3 +415,53 @@ def test_the_mcq_tool_turns_a_late_stop_into_its_stopped_answer():
     tool = create_tool_generate_mcq_questions(mcq_pipeline, [], callback, {})
 
     assert "stopped" in tool("one question about heaps")
+
+
+def test_a_run_is_watched_while_the_database_connects_and_stops_if_closed():
+    callback = MagicMock(closed_by_watchdog=False)
+    registry, seen = RunRegistry(), {}
+    execute_agent = MagicMock(return_value="answer")
+
+    def slow_first_connection():
+        seen["runs_during_connect"] = registry.snapshot()
+        callback.closed_by_watchdog = True
+        return MagicMock()
+
+    _run(
+        _MiniPipeline(),
+        callback,
+        execute_agent,
+        registry=registry,
+        seen=seen,
+        vector_database=slow_first_connection,
+    )
+
+    assert len(seen["runs_during_connect"]) == 1
+    callback.update.assert_not_called()
+    execute_agent.assert_not_called()
+
+
+def test_a_direct_quiz_call_stops_if_the_run_closes_during_its_status_posts():
+    from iris.pipeline.shared.mcq_generation_pipeline import (  # pylint: disable=import-outside-toplevel
+        McqGenerationPipeline,
+        McqGenerationStopped,
+    )
+
+    with patch.object(
+        McqGenerationPipeline, "__init__", lambda self, local=False: None
+    ):
+        pipeline = McqGenerationPipeline()
+    pipeline.prompt_template = MagicMock()
+    pipeline.pipeline = MagicMock()
+    callback = MagicMock(closed_by_watchdog=False)
+
+    def slow_status_post():
+        if callback.update.call_count == 2:
+            callback.closed_by_watchdog = True
+
+    callback.update.side_effect = slow_status_post
+
+    with pytest.raises(McqGenerationStopped):
+        pipeline(command="one question", chat_history=[], callback=callback)
+
+    pipeline.pipeline.invoke.assert_not_called()

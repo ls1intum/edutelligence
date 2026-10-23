@@ -896,7 +896,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         if callable(attach_usage):
             attach_usage(state.tokens)
         state.dto = dto
-        state.db = VectorDatabase()
+        # Connected after admission: the first connection can block on schema setup.
+        state.db = None
         state.variant = variant
         state.callback = callback
         state.message_history = []
@@ -958,7 +959,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             return
 
         try:
-            # Registered first: a slow first status POST must not hide the run from the watchdog.
+            # Registered first: a slow database connection or first status POST must not hide
+            # the run from the watchdog.
+            state.db = VectorDatabase()
+            if self._closed_by_watchdog(state):
+                return
             state.callback.update()
             if self._closed_by_watchdog(state):
                 return

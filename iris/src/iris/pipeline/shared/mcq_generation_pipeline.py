@@ -80,10 +80,7 @@ class McqGenerationPipeline(SubPipeline):
         :param lecture_content: Pre-retrieved lecture content to base questions on
         :return: JSON string with MCQ data
         """
-        if self._should_stop() or (
-            getattr(callback, "closed_by_watchdog", False) is True
-        ):
-            raise McqGenerationStopped()
+        self._raise_if_stopped(callback)
         if callback:
             callback.update()
 
@@ -101,12 +98,20 @@ class McqGenerationPipeline(SubPipeline):
         if callback:
             callback.update()
 
+        # The status POSTs above can each wait long; check again right before the paid call.
+        self._raise_if_stopped(callback)
         response = self.pipeline.invoke([SystemMessage(content=rendered_prompt)])
         self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE)
 
         # Validate JSON
         result = self._extract_and_validate_json(response)
         return result
+
+    def _raise_if_stopped(self, callback: Optional[StatusCallback]) -> None:
+        if self._should_stop() or (
+            getattr(callback, "closed_by_watchdog", False) is True
+        ):
+            raise McqGenerationStopped()
 
     def run_in_thread(
         self,
