@@ -6,7 +6,7 @@ authors = ["Matthias Lehner <ga59bip@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
+python = ">=3.11,<3.12.dev0"
 athena = { path = "../../../athena", develop = true }
 #athena = { git = "https://github.com/ls1intum/Athena.git", rev = "d9ff3bd", subdirectory = "athena"}
 llm_core = { path = "../../../llm_core", develop = true }
