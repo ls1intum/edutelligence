@@ -31,11 +31,29 @@ public interface ProviderRepository extends JpaRepository<Provider, Integer> {
             JOIN api_keys ak ON akpp.api_key_id = ak.id
             WHERE ak.user_id = :userId AND ak.is_active = true AND ak.use_custom_permissions = true
         )
-        SELECT DISTINCT p.id, p.name, p.base_url, p.api_key, p.provider_type::text,
+        SELECT DISTINCT p.id, p.name, p.base_url, NULL::text AS api_key, p.provider_type::text,
                p.cloud_provider_type::text, p.privacy_level::text, p.auth_name, p.auth_format
         FROM providers p
         JOIN effective_provider_ids ep ON p.id = ep.id
         ORDER BY p.name ASC
         """, nativeQuery = true)
     List<ProviderProjection> findAllForUser(@Param("userId") Integer userId);
+
+    @Query(value = """
+        SELECT EXISTS (
+            SELECT 1
+            FROM team_provider_permissions tpp
+            JOIN team_members tm ON tm.team_id = tpp.team_id
+            WHERE tm.user_id = :userId AND tpp.provider_id = :providerId
+            UNION ALL
+            SELECT 1
+            FROM api_key_provider_permissions akpp
+            JOIN api_keys ak ON ak.id = akpp.api_key_id
+            WHERE ak.user_id = :userId
+              AND ak.is_active = true
+              AND ak.use_custom_permissions = true
+              AND akpp.provider_id = :providerId
+        )
+        """, nativeQuery = true)
+    boolean isAccessibleToUser(@Param("providerId") int providerId, @Param("userId") int userId);
 }
