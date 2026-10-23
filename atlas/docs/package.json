@@ -28,7 +28,7 @@
     "@docusaurus/module-type-aliases": "3.9.1",
     "@docusaurus/tsconfig": "3.9.1",
     "@docusaurus/types": "3.9.1",
-    "typescript": "~5.6.2"
+    "typescript": "~7.0.0"
   },
   "browserslist": {
     "production": [
@@ -48,6 +48,6 @@
   "overrides": {
     "serialize-javascript": "^7.1.1",
     "webpackbar": "^7.0.0",
-    "uuid": "^11.1.1"
+    "uuid": "^14.0.0"
   }
 }
