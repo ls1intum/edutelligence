@@ -6,8 +6,8 @@ import { RequestLatencyScope, RequestLatencyStats } from './request-latency.mode
 
 /**
  * Lane-picker view of POST /api/logosdb/get_provider_models. The endpoint also
- * returns `endpoint`/`api_key`; both are deliberately left out here so the
- * credential never enters this feature's data flow.
+ * returns `endpoint`/`api_key` to Logos admins; both are deliberately left out
+ * here so the credential never enters this feature's data flow.
  */
 export interface ProviderModel {
   model_id: number;

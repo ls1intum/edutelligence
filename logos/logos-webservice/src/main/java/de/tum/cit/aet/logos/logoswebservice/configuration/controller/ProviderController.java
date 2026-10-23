@@ -162,9 +162,10 @@ public class ProviderController {
 
     @PostMapping("/get_provider_models")
     public ResponseEntity<?> getProviderModels(
-            @RequestBody GetProviderModelsRequestDTO req) {
+            @RequestBody GetProviderModelsRequestDTO req,
+            @RequestAttribute("authContext") AuthContext auth) {
         if (req.providerId() == null) return ResponseEntity.badRequest().body(Map.of("error", "provider_id is required"));
-        return ResponseEntity.ok(providerService.getProviderModels(req.providerId()));
+        return ResponseEntity.ok(providerService.getProviderModels(req.providerId(), auth));
     }
 
     @PostMapping("/get_general_provider_stats")
