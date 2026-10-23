@@ -60,6 +60,7 @@ _GC_THRESHOLD_FACTOR = 10
 _LOOP_STALL_SECONDS = 30.0
 _CLOSE_RUNS_WORKERS = 16
 _CLOSE_RUNS_BUDGET_SECONDS = 30.0
+_ANSWER_POST_POLL_SECONDS = 0.2
 _RESTART_LOOP_COUNT = 3
 _DUMP_TRIGGER = "dump-now"
 
@@ -440,21 +441,43 @@ class Watchdog:  # pylint: disable=too-many-instance-attributes
     def _close_open_runs(
         self, runs: list[RunRecord], message: str, code: str
     ) -> tuple[int, int]:
+        # Leave a little of the budget for collecting the results.
+        wait_until = time.monotonic() + _CLOSE_RUNS_BUDGET_SECONDS - 2
+
         def close(record: RunRecord) -> str:
             phase = getattr(record.callback, "phase", None)
             if phase is RunPhase.RUNNING:
                 if record.callback.watchdog_fail(message, code):
                     return "failed"
             elif phase is RunPhase.ANSWER_SENDING:
+                # An answer POST in flight must land before the exit, or the answer and the
+                # run's end are lost: wait for it (bounded), then finish the run.
+                while (
+                    record.callback.answer_post_in_flight
+                    and time.monotonic() < wait_until
+                ):
+                    time.sleep(_ANSWER_POST_POLL_SECONDS)
                 if record.callback.watchdog_finish():
                     return "finished"
+                if record.callback.answer_post_in_flight:
+                    logger.warning(
+                        "Run %s: answer still being sent when the close budget ran out",
+                        record.run_id,
+                    )
             return "none"
 
         executor = ThreadPoolExecutor(
             max_workers=_CLOSE_RUNS_WORKERS, thread_name_prefix="pyris-watchdog-close"
         )
         try:
-            futures = [executor.submit(close, record) for record in runs]
+            # Fail the waiting students first: a slow answer POST below must not hold
+            # the close workers while their runs queue behind it.
+            ordered = sorted(
+                runs,
+                key=lambda r: getattr(r.callback, "phase", None)
+                is not RunPhase.RUNNING,
+            )
+            futures = [executor.submit(close, record) for record in ordered]
             done, _ = wait_futures(futures, timeout=_CLOSE_RUNS_BUDGET_SECONDS)
         finally:
             executor.shutdown(wait=False, cancel_futures=True)

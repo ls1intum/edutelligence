@@ -11,6 +11,7 @@ import pytest
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.config import ReliabilitySettings  # noqa: E402
+from iris.reliability import watchdog as watchdog_module  # noqa: E402
 from iris.reliability.alerts import QUIET, URGENT  # noqa: E402
 from iris.reliability.pools import PoolView  # noqa: E402
 from iris.reliability.restart_guard import (  # noqa: E402
@@ -673,3 +674,45 @@ def test_start_survives_a_history_with_foreign_entries(config, registry, clock):
     watchdog._on_process_start()
 
     watchdog._alert_async.assert_called_once()
+
+
+def test_a_trip_waits_for_an_answer_post_in_flight_then_finishes(
+    config, registry, clock
+):
+    watchdog = _watchdog(config, registry, clock)
+    callback = _callback()
+    release, in_post = threading.Event(), threading.Event()
+
+    def slow_answer(payload, **_kwargs):
+        if payload.get("result") == "the answer":
+            in_post.set()
+            release.wait(5)
+        return _ok()
+
+    callback._post_status_payload = MagicMock(side_effect=slow_answer)
+    _chat_run(registry, clock, callback)
+    sender = threading.Thread(target=callback.send_result, args=("the answer",))
+    sender.start()
+    assert in_post.wait(5)
+    threading.Timer(0.5, release.set).start()
+
+    failed, finished = watchdog._close_open_runs(registry.snapshot(), "m", "c")
+    sender.join(5)
+
+    assert (failed, finished) == (0, 1)
+    states = [p["runState"] for p in _posted(callback)]
+    assert states[-2:] == ["RUNNING", "FINISHED"]  # the answer landed, then the end
+
+
+def test_the_wait_for_an_answer_post_is_bounded(config, registry, clock, monkeypatch):
+    monkeypatch.setattr(watchdog_module, "_CLOSE_RUNS_BUDGET_SECONDS", 2.5)
+    watchdog = _watchdog(config, registry, clock)
+    callback = _callback()
+    _chat_run(registry, clock, callback)
+    assert callback._enter_answer_sending()  # a POST that never returns
+
+    started = time.monotonic()
+    failed, finished = watchdog._close_open_runs(registry.snapshot(), "m", "c")
+
+    assert (failed, finished) == (0, 0)
+    assert time.monotonic() - started < 3
