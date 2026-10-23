@@ -12,8 +12,8 @@ athena = { path = "../../../athena", develop = true }
 # athena = { git = "https://github.com/ls1intum/Athena.git", rev = "bbb2bb0", subdirectory = "athena"}
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.33.0.20260712"
-pydantic = "2.13.4"
+types-requests = "2.33.0.20261006"
+pydantic = "2.14.1"
 prospector = { version = "1.19.1", extras = ["with_mypy"] }
 
 [tool.poetry.scripts]
