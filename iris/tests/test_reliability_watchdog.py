@@ -5,9 +5,10 @@ import asyncio
 import json
 import threading
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.config import ReliabilitySettings  # noqa: E402
@@ -742,3 +743,37 @@ def test_a_run_whose_answer_starts_during_the_close_still_gets_the_drain(
 
     assert (failed, finished) == (0, 1)
     assert _posted(callback)[-1]["runState"] == "FINISHED"
+
+
+def test_a_trip_lets_an_answer_bearing_finish_land(config, registry, clock):
+    watchdog = _watchdog(config, registry, clock)
+    callback = _callback()
+    failing = MagicMock()
+    failing.raise_for_status.side_effect = requests.exceptions.HTTPError("502")
+    callback._post_status_payload.return_value = failing
+    with patch("time.sleep"):
+        assert callback.send_result("the answer") is False
+    _chat_run(registry, clock, callback)
+
+    release, in_post = threading.Event(), threading.Event()
+
+    def slow_terminal(payload, **_kwargs):
+        if payload["runState"] == "FINISHED":
+            in_post.set()
+            release.wait(5)
+        return _ok()
+
+    callback._post_status_payload = MagicMock(side_effect=slow_terminal)
+    finisher = threading.Thread(target=callback.finish)
+    finisher.start()
+    assert in_post.wait(5)
+    assert callback.terminal_post_in_flight is True
+    threading.Timer(0.5, release.set).start()
+
+    started = time.monotonic()
+    watchdog._close_open_runs(registry.snapshot(), "m", "c")
+    finisher.join(5)
+
+    assert time.monotonic() - started >= 0.4  # it waited for the frame
+    assert callback.terminal_post_in_flight is False
+    assert _posted(callback)[-1]["result"] == "the answer"

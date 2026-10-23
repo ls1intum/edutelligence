@@ -114,6 +114,9 @@ class StatusCallback:
         self._closed_by_watchdog = False
         self._answer_sent_at: Optional[float] = None
         self._answer_post_in_flight = False
+        # The pipeline's own terminal frame is on its way (it may carry an undelivered
+        # answer); the watchdog lets it land before a restart.
+        self._terminal_post_in_flight = False
         self._last_frame_at = time.perf_counter()
         # The pipeline's running usage list, so a watchdog terminal frame can still bill the
         # calls a stuck or slow run already made (see attach_usage).
@@ -220,6 +223,10 @@ class StatusCallback:
     def answer_post_in_flight(self) -> bool:
         return self._answer_post_in_flight
 
+    @property
+    def terminal_post_in_flight(self) -> bool:
+        return self._terminal_post_in_flight
+
     def seconds_since_last_frame(self, now: float) -> float:
         return now - self._last_frame_at
 
@@ -230,7 +237,12 @@ class StatusCallback:
                 return False
             self._phase = RunPhase.TERMINAL
             self._closed_by_watchdog = by_watchdog
+            self._terminal_post_in_flight = not by_watchdog
             return True
+
+    def _end_terminal_post(self) -> None:
+        with self._running_update_lock:
+            self._terminal_post_in_flight = False
 
     def _enter_answer_sending(self) -> bool:
         """Mark that the final answer is on its way; False once the run is terminal.
@@ -412,14 +424,15 @@ class StatusCallback:
         if not self._claim_terminal():
             self._reject_after_terminal("finish")
             return False
-        self.status.run_state = RunStateEnum.FINISHED
-        self.status.error = None
-        self._apply_fields(fields)
-        self._drain_running_updates()
         try:
+            self.status.run_state = RunStateEnum.FINISHED
+            self.status.error = None
+            self._apply_fields(fields)
+            self._drain_running_updates()
             return self.on_status_update()
         finally:
             self._shutdown_running_update_executor()
+            self._end_terminal_post()
 
     def fail(
         self,
@@ -432,16 +445,17 @@ class StatusCallback:
         if not self._claim_terminal():
             self._reject_after_terminal("fail")
             return False
-        self.status.run_state = RunStateEnum.FAILED
-        self.status.error = StatusErrorDTO(message=message, code=code)
-        if tokens is not None:
-            self.status.tokens = tokens
-        self._apply_fields(fields)
-        self._drain_running_updates()
         try:
+            self.status.run_state = RunStateEnum.FAILED
+            self.status.error = StatusErrorDTO(message=message, code=code)
+            if tokens is not None:
+                self.status.tokens = tokens
+            self._apply_fields(fields)
+            self._drain_running_updates()
             success = self.on_status_update()
         finally:
             self._shutdown_running_update_executor()
+            self._end_terminal_post()
         exception = fields.get("exception")
         if exception:
             capture_exception(exception)
@@ -710,6 +724,8 @@ class ChatRunCallback(StatusCallback):
             if owns_answer_flag:
                 with self._running_update_lock:
                     self._answer_post_in_flight = False
+            if terminal_send:
+                self._end_terminal_post()
 
     def _post_chat_fields(  # pylint: disable=too-many-arguments
         self,

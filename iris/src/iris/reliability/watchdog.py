@@ -444,6 +444,10 @@ class Watchdog:  # pylint: disable=too-many-instance-attributes
         # Leave a little of the budget for collecting the results.
         wait_until = time.monotonic() + _CLOSE_RUNS_BUDGET_SECONDS - 2
 
+        def wait_while(still_sending: Callable[[], bool]) -> None:
+            while still_sending() and time.monotonic() < wait_until:
+                time.sleep(_ANSWER_POST_POLL_SECONDS)
+
         def close(record: RunRecord) -> str:
             callback = record.callback
             if getattr(callback, "phase", None) is RunPhase.RUNNING:
@@ -454,15 +458,21 @@ class Watchdog:  # pylint: disable=too-many-instance-attributes
             if getattr(callback, "phase", None) is RunPhase.ANSWER_SENDING:
                 # An answer POST in flight must land before the exit, or the answer and the
                 # run's end are lost: wait for it (bounded), then finish the run.
-                while callback.answer_post_in_flight and time.monotonic() < wait_until:
-                    time.sleep(_ANSWER_POST_POLL_SECONDS)
+                wait_while(lambda: callback.answer_post_in_flight is True)
                 if callback.watchdog_finish():
                     return "finished"
-                if callback.answer_post_in_flight:
-                    logger.warning(
-                        "Run %s: answer still being sent when the close budget ran out",
-                        record.run_id,
-                    )
+            # The pipeline's own terminal frame (possibly carrying an undelivered answer)
+            # may still be on its way; let it land too.
+            wait_while(
+                lambda: getattr(callback, "terminal_post_in_flight", False) is True
+            )
+            if (
+                getattr(callback, "answer_post_in_flight", False) is True
+                or getattr(callback, "terminal_post_in_flight", False) is True
+            ):
+                logger.warning(
+                    "Run %s: still sending when the close budget ran out", record.run_id
+                )
             return "none"
 
         executor = ThreadPoolExecutor(
