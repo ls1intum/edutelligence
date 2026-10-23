@@ -348,3 +348,61 @@ def test_the_mcq_tool_generates_nothing_for_a_run_closed_during_retrieval():
     assert "stopped" in tool("one question about heaps")
     mcq_pipeline.assert_not_called()
     assert not storage
+
+
+def test_a_background_quiz_stops_before_each_model_call_once_closed():
+    from iris.pipeline.shared.mcq_generation_pipeline import (  # pylint: disable=import-outside-toplevel
+        McqGenerationPipeline,
+    )
+
+    stop = {"now": False}
+    with patch.object(
+        McqGenerationPipeline, "__init__", lambda self, local=False: None
+    ):
+        pipeline = McqGenerationPipeline()
+    pipeline.local = False
+    pipeline.tokens = []
+    calls = []
+
+    def extract(*_args, **_kwargs):
+        calls.append("subtopics")
+        stop["now"] = True  # the watchdog closes the run during this call
+        return ["a", "b", "c"]
+
+    with (
+        patch.object(McqGenerationPipeline, "_extract_subtopics", side_effect=extract),
+        patch.object(
+            McqGenerationPipeline,
+            "__init__",
+            lambda self, local=False: setattr(self, "tokens", []),
+        ),
+        patch.object(
+            McqGenerationPipeline,
+            "_serialize_chat_history",
+            side_effect=lambda *_a, **_k: calls.append("question") or "",
+        ),
+    ):
+        storage = {}
+        thread = pipeline.run_in_thread(
+            "quiz me", [], "English", storage, count=3, should_stop=lambda: stop["now"]
+        )
+        thread.join(5)
+
+    assert calls == ["subtopics"]  # no question was generated afterwards
+    assert "error" not in storage
+
+
+def test_the_mcq_tool_turns_a_late_stop_into_its_stopped_answer():
+    from iris.pipeline.shared.mcq_generation_pipeline import (  # pylint: disable=import-outside-toplevel
+        McqGenerationStopped,
+    )
+    from iris.tools.mcq_generation import (  # pylint: disable=import-outside-toplevel
+        create_tool_generate_mcq_questions,
+    )
+
+    callback = MagicMock(closed_by_watchdog=False)
+    mcq_pipeline = MagicMock(side_effect=McqGenerationStopped())
+
+    tool = create_tool_generate_mcq_questions(mcq_pipeline, [], callback, {})
+
+    assert "stopped" in tool("one question about heaps")

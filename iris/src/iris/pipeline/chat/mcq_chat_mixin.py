@@ -321,6 +321,7 @@ def mcq_pre_agent_hook(
             result_storage=getattr(state, "mcq_result_storage", {}),
             count=count,
             lecture_content=lecture_content,
+            should_stop=lambda: getattr(callback, "closed_by_watchdog", False) is True,
         ),
     )
 
