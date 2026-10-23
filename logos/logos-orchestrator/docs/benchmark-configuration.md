@@ -225,4 +225,11 @@ Conflicting manual starts return HTTP 409 rather than queueing.
 Migration `065_nightly_benchmarks.xml` and workers with
 `get_calibration_status` support are required. Calibration completion and
 benchmark cleanup must finish before their claims are released.
+`GET /internal/maintenance/status` lists the current holders, and
+`POST /internal/maintenance/calibration/release` releases one calibration claim
+after a normal stop on an administrator's request.
+`POST /internal/maintenance/recovery/release {model_provider_id, force}` releases
+a nightly recovery journal. Without `force` the worker must show the journal's
+lane with its original `vllm_config`; otherwise it returns 409. It returns 404
+when no recovery is pending and 409 while a recovery or one of its jobs runs.
 See the [operator guide](../../docs/admin/nightly-benchmarks.md#calibration-priority-and-shared-execution).

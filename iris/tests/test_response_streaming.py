@@ -767,7 +767,7 @@ def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
 
     return SimpleNamespace(
         chat_history=[],
-        user=SimpleNamespace(id=1, lang_key="en", memiris_enabled=False),
+        user=SimpleNamespace(id=1, lang_key="en"),
         course=SimpleNamespace(
             id=7,
             name="Test Course",
@@ -885,7 +885,6 @@ def _run_stubbed_pipeline_details(
 
     with (
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
-        patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
         patch(
             "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",

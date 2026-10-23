@@ -148,6 +148,30 @@ It marks the job as failed only after the worker confirms that its requests ende
 The original worker configuration is then restored. Unknown worker status keeps the recovery journal active.
 Job age alone never permits recovery.
 
+Recovery waits only for the lane it restores, and for other lanes of the same model.
+It reads the request counters from the worker itself.
+Production traffic on other lanes of the worker does not hold the recovery back.
+The worker also refuses the restart while the lane still has requests.
+A lane pinned to its GPUs restarts while holding only that lane and those GPUs, so requests on other lanes finish normally.
+The orchestrator's own request counter does not delay a recovery.
+
+### Release a recovery
+
+A recovery that cannot finish keeps the maintenance slot.
+The **Maintenance** status on the statistics page offers **Release recovery** for it.
+Logos first asks the worker for its lanes.
+It releases the recovery only if the lane runs its original settings again.
+Then it marks the recovery as `interrupted_recovered` and frees the worker.
+Open benchmark jobs of this recovery are marked as failed.
+
+If the worker is offline, the lane is missing, or its settings differ, Logos refuses (HTTP 409).
+The box then offers **Force release**.
+A forced release does not check the lane.
+The lane keeps whatever settings it runs now, and those can be benchmark settings.
+Check or restore the lane on the worker before you force the release.
+Logos refuses both actions while a recovery or one of its jobs is running.
+The orchestrator log and the audit log (`provider.nightly_recovery_released`) record every release.
+
 Metal workers with valid measured telemetry support `max_num_seqs` and `max_num_batched_tokens` changes.
 Metal does not permit GPU topology, memory, or attention backend overrides through this benchmark path.
 The scheduler checks worker support before it reserves the worker or consumes a nightly slot.
@@ -208,11 +232,17 @@ PostgreSQL stores the active calibration and manual benchmark claims.
 A worker must confirm that calibration ended before the orchestrator releases its claim.
 A timeout or a terminal event alone does not release it.
 Update workers before use: the coordinator requires the `get_calibration_status` command.
+Automatic calibration skips a worker that does not list this command.
 Manual benchmarks retain their claim until process cleanup completes.
 
-If the worker explicitly refuses calibration, the coordinator requests fresh calibration status.
+If the worker refuses calibration because a session is already running, the coordinator requests fresh calibration status.
 It releases the claim only when the worker confirms that no calibration is active.
 If this status request fails, reconciliation retries later and the claim stays active.
+Any other refusal releases the claim at once. The worker did not start a session.
+
+A worker without the `get_calibration_status` command answers it with `Unsupported bridge command`.
+The coordinator then uses the calibration state from the worker's status reports.
+It releases the claim when the worker reports no calibration session.
 
 If a calibration start has no reply, the claim stays active.
 Use the calibration stop action after the worker reconnects.
@@ -223,7 +253,8 @@ An orchestrator crash can leave a manual benchmark claim or an active manual job
 Age alone does not release these records.
 An operator must stop the original benchmark process and verify worker cleanup before database recovery.
 Then mark the affected job as failed and remove its matching `maintenance_benchmark` record.
-Keep every nightly recovery journal until the scheduler restores the original worker configuration.
+Keep every nightly recovery journal until the scheduler restores the original worker configuration,
+or release it with **Release recovery** (see [Release a recovery](#release-a-recovery)).
 
 ## Maintenance capacity
 
@@ -248,7 +279,16 @@ The scheduler continues its cycle and checks other calibration claims.
 Benchmarks remain blocked until all calibration claims are released.
 Reconnection and a confirmed calibration stop are the preferred recovery path.
 
-If a worker cannot reconnect, use this procedure with database administrator access.
+The **Maintenance** status on the statistics page shows every claim.
+For an offline worker, or a worker that cannot report its calibration status, it offers **Release claim**.
+This action first tries a normal stop. It keeps the claim while the worker still reports a session.
+It also keeps the claim of an online worker that does not answer the stop, because no answer does not prove a stop.
+Try again, or release the claim once the worker shows as offline.
+It keeps an unconfirmed start on an online worker for 20 minutes, because the start can still run.
+Otherwise it releases the claim. The orchestrator log and the audit log record the release.
+Before you release the claim of an offline worker, make sure that the worker cannot resume calibration.
+
+If the web application is not available, use this procedure with database administrator access.
 
 1. Identify the affected `provider_id` and `token` in `maintenance_calibration`.
 2. Stop the worker and its inference processes through the host management system.
@@ -264,6 +304,7 @@ If a worker cannot reconnect, use this procedure with database administrator acc
 
 Do not release a claim based only on an offline indicator or a network timeout.
 Do not delete nightly recovery journals or manual benchmark claims through this procedure.
+Use **Release recovery** for a nightly recovery journal.
 The transaction uses the same maintenance lock as the application.
 A changed token prevents deletion of a newer claim.
 

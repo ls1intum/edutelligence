@@ -28,6 +28,12 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  * the model name and keeps the original lock, unlocking an unlocked lane is a
  * no-op. Both are recorded in the audit trail.
  *
+ * <p>The lane id {@value #WORKER_LANE_ID} locks a whole worker: the planner
+ * then neither loads, wakes, sleeps nor unloads anything there on its own.
+ * For a locked lane, and every lane of a locked worker, the planner records
+ * the lane in {@code restore_lanes} and puts it back after a worker restart;
+ * a new lock starts with no record.
+ *
  * <p>Every change draws a new revision from {@code lane_lock_revision_seq}
  * and is pushed with it, because the pushes are asynchronous and can arrive
  * out of order; the planner ignores a change older than the one it holds.
@@ -36,6 +42,9 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  */
 @Service
 public class LaneLockService {
+
+    /** The lane id of a lock on a whole worker. No worker lane has this id. */
+    public static final String WORKER_LANE_ID = "*";
 
     private final NamedParameterJdbcTemplate jdbc;
     private final UserRepository userRepository;
@@ -82,7 +91,8 @@ public class LaneLockService {
             INSERT INTO lane_locks (provider_id, lane_id, model_name, locked_by, locked, revision)
             VALUES (:providerId, :laneId, :modelName, :lockedBy, TRUE, nextval('lane_lock_revision_seq'))
             ON CONFLICT (provider_id, lane_id) DO NOTHING
-            RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision
+            RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision,
+                CAST(restore_lanes AS TEXT) AS restore_lanes
             """, params);
         if (!inserted.isEmpty()) {
             after = inserted.get(0);
@@ -103,19 +113,23 @@ public class LaneLockService {
                                       ELSE CAST(:modelName AS TEXT) END,
                     locked_by = CASE WHEN locked THEN locked_by ELSE CAST(:lockedBy AS TEXT) END,
                     locked_at = CASE WHEN locked THEN locked_at ELSE now() END,
+                    restore_lanes = CASE WHEN locked THEN restore_lanes ELSE NULL END,
                     locked = TRUE,
                     revision = nextval('lane_lock_revision_seq')
                 WHERE provider_id = :providerId AND lane_id = :laneId
-                RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision
+                RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision,
+                    CAST(restore_lanes AS TEXT) AS restore_lanes
                 """, params).get(0);
         }
         // record() drops a transition whose two states are equal, so a repeat
         // lock that changes nothing leaves no entry.
-        auditLog.record("lane.locked", "lane", providerId + "/" + laneId, null,
+        auditLog.record(auditAction(laneId, "locked"), auditTarget(laneId), auditId(providerId, laneId), null,
             auditState(before), auditState(after));
-        orchestratorNotification.notifyLaneLock(providerId, laneId, true, revisionOf(after));
+        orchestratorNotification.notifyLaneLock(providerId, laneId, true, revisionOf(after),
+            (String) after.get("restore_lanes"));
         Map<String, Object> stored = new LinkedHashMap<>(after);
         stored.remove("revision");
+        stored.remove("restore_lanes");
         return stored;
     }
 
@@ -136,10 +150,22 @@ public class LaneLockService {
         if (released.isEmpty()) {
             return false;
         }
-        auditLog.record("lane.unlocked", "lane", providerId + "/" + laneId, null,
+        auditLog.record(auditAction(laneId, "unlocked"), auditTarget(laneId), auditId(providerId, laneId), null,
             auditState(released.get(0)), Map.of());
         orchestratorNotification.notifyLaneLock(providerId, laneId, false, revisionOf(released.get(0)));
         return true;
+    }
+
+    private static String auditAction(String laneId, String change) {
+        return auditTarget(laneId) + "." + change;
+    }
+
+    private static String auditTarget(String laneId) {
+        return WORKER_LANE_ID.equals(laneId) ? "worker" : "lane";
+    }
+
+    private static String auditId(int providerId, String laneId) {
+        return WORKER_LANE_ID.equals(laneId) ? String.valueOf(providerId) : providerId + "/" + laneId;
     }
 
     private static long revisionOf(Map<String, Object> row) {

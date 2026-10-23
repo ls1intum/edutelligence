@@ -8,10 +8,10 @@ Iris is configured through two YAML files and environment variables. This page d
 
 ## Configuration Files
 
-| File                                        | Purpose                                             | Env Variable           |
-| ------------------------------------------- | --------------------------------------------------- | ---------------------- |
-| `application.yml` / `application.local.yml` | App settings: API keys, Weaviate, Memiris, LangFuse | `APPLICATION_YML_PATH` |
-| `llm_config.yml` / `llm_config.local.yml`   | LLM model definitions                               | `LLM_CONFIG_PATH`      |
+| File                                        | Purpose                                    | Env Variable           |
+| ------------------------------------------- | ------------------------------------------ | ---------------------- |
+| `application.yml` / `application.local.yml` | App settings: API keys, Weaviate, LangFuse | `APPLICATION_YML_PATH` |
+| `llm_config.yml` / `llm_config.local.yml`   | LLM model definitions                      | `LLM_CONFIG_PATH`      |
 
 Both paths are specified via environment variables. The `.local.yml` variants are for development and are gitignored.
 
@@ -26,7 +26,6 @@ class Settings(BaseModel):
     api_keys: list[APIKeyConfig]
     env_vars: dict[str, str]
     weaviate: WeaviateSettings
-    memiris: MemirisSettings
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
 
     @classmethod
@@ -56,10 +55,6 @@ weaviate:
   host: "localhost"
   port: "8001"
   grpc_port: "50051"
-
-memiris:
-  enabled: true
-  sleep_enabled: true
 
 langfuse:
   enabled: false
@@ -93,16 +88,6 @@ Connection settings for the Weaviate vector database:
 | `host`      | string | Weaviate hostname (e.g., `localhost`) |
 | `port`      | int    | REST API port (default: `8001`)       |
 | `grpc_port` | int    | gRPC port (default: `50051`)          |
-
-#### `memiris`
-
-Settings for the Memiris memory system:
-
-| Field               | Type | Default | Description                                                                                 |
-| ------------------- | ---- | ------- | ------------------------------------------------------------------------------------------- |
-| `enabled`           | bool | `true`  | Whether Memiris memory creation is active                                                   |
-| `sleep_enabled`     | bool | `true`  | Whether the nightly memory consolidation job runs                                           |
-| `sleep_max_threads` | int  | `20`    | Memory groups the sleep job processes in parallel; keep below the local model's parallelism |
 
 #### `langfuse`
 

@@ -105,4 +105,3 @@ Click the **copy icon** on any Iris response to copy it to your clipboard. This 
 - [Getting Started](./getting-started) — initial setup and AI experience selection
 - [Chat Context](./chat-context) — set and switch the active context
 - [How Iris Helps You Learn](./how-iris-helps) — the pedagogical approach behind Iris
-- [Memory](./memory) — how Iris personalizes over time

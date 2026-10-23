@@ -44,6 +44,38 @@ copy the commit. With this information, you can find which workers have the
 update. If a worker cannot report a commit, the page shows `version: unknown`.
 The icon then shows the reason.
 
+### Maintenance status
+
+Above the workers, the **Maintenance** box shows what holds the maintenance
+slot. Calibration, benchmarks and nightly recovery share this slot. While one
+of them holds it, the others cannot start. The box shows the kind of work, the
+worker and the time when the work started. If nothing holds the slot, the box
+shows **Free**.
+
+- **Calibrating**: click **Stop calibration** to end the calibration.
+- **Benchmarking**: click **Cancel benchmark** to end the benchmark.
+- **Nightly recovery**: the scheduler puts the original settings of the
+  worker back. This usually ends on its own. If it does not, click
+  **Release recovery**. Logos checks that the model runs its original settings
+  again, and then frees the slot.
+
+A worker confirms the end of its calibration before the slot is free again. An
+offline worker cannot confirm it, and neither can a worker with old software.
+For these workers, and after a stop that did not free the slot, the box shows
+**Release claim**. Logos tries a normal stop first. If the worker still reports
+a calibration, the claim stays. The claim also stays if the worker is online
+but does not answer. Try again later, or wait until the worker is offline. Otherwise Logos releases it and records the
+release in the audit log. Release the claim of an offline worker only if the
+worker cannot continue the calibration.
+
+If Logos cannot check the settings, for example because the worker is
+offline, it refuses the release. The box then shows **Force release**. A forced
+release frees the slot without the check. The model keeps the settings it has
+now, and these can be benchmark settings. Check the model on the worker first.
+The audit log records every release.
+
+The box updates together with the rest of the page.
+
 ### Idle lanes and lane locks
 
 The capacity planner puts a lane to sleep after the lane has no requests for
@@ -59,11 +91,39 @@ other models. If a locked lane sleeps, the planner wakes it. To release the
 lane, click the lock icon again. The lock stays after a restart of Logos. Only a
 Logos admin can lock or unlock a lane.
 
+A worker that restarts comes back without lanes. The capacity planner then loads
+each locked lane again. It uses the same model, the same GPUs and the same
+settings as before the restart. If you unload a locked lane, the planner does
+not load it again.
+
 ![Lanes of two workers, the upper lane locked](/img/roles/logos-admin-statistics-lanes.png)
 
 The **Sleep** action on a locked lane still puts the lane to sleep. Use it only
 if you must make memory free at once. The planner then wakes the locked lane
 again.
+
+### Worker locks
+
+To keep all lanes of a worker as they are, lock the worker. Above the lane list
+of the worker, click **Lock worker**. While the worker is locked, the capacity
+planner does not load, wake, put to sleep or unload a lane on that worker.
+Requests go to a lane of the worker only while that lane is awake. Automatic
+calibration and nightly benchmarks skip the worker, and you cannot start a
+benchmark there.
+
+Your own actions in the lane list still work: **Load lane**, **Unload**,
+**Sleep**, **Wake** and **Drain**. After a restart of the worker, the planner
+loads all lanes again on the same GPUs. A lane that was asleep before the
+restart goes to sleep again. To release the worker, click **Worker locked**.
+
+![A locked worker with two lanes](/img/roles/logos-admin-statistics-worker-lock.png)
+
+### Parallel lane actions
+
+A worker unloads a lane at once, also while it loads or wakes another lane. It
+loads two lanes at the same time only if they use different GPUs. If the only
+GPUs that fit are in use by a lane that loads, the second lane waits until the
+first lane has started.
 
 ![Statistics page](/img/roles/logos-admin-statistics.png)
 

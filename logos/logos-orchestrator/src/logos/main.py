@@ -13,7 +13,7 @@ import threading
 import time
 from contextlib import aclosing, asynccontextmanager, nullcontext, suppress
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 import grpc
 from fastapi import FastAPI, HTTPException, Request
@@ -1206,10 +1206,16 @@ def _prefer_deployments_with_context_room(
     return fitting or deployments
 
 
-def _read_lane_locks() -> Optional[list[tuple[int, str, bool, int]]]:
+def _read_lane_locks() -> Optional[list[tuple]]:
     """Operator lane locks for the capacity planner; ``None`` when unreadable."""
     with DBManager() as db:
         return db.get_lane_locks()
+
+
+def _write_lane_restore_records(changes: list[tuple[int, str, int, dict]]) -> bool:
+    """Store locks' restore records for the capacity planner, all or none (see logos.capacity.lane_restore)."""
+    with DBManager() as db:
+        return db.set_lane_restore_records(changes)
 
 
 async def start_pipeline():
@@ -1271,7 +1277,9 @@ async def start_pipeline():
         on_state_change=scheduler.reevaluate_model_queues,
         latency_store=_latency_store,
         lane_lock_reader=_read_lane_locks,
+        lane_restore_writer=_write_lane_restore_records,
     )
+    scheduler.set_worker_lock_check(_capacity_planner.is_worker_locked)
     # Every worker report restores the forwarding gate's budget, so it is
     # also the moment to reconsider requests being held for it.
     _logosnode_registry.set_on_runtime_updated(scheduler.on_worker_report)
@@ -1308,6 +1316,7 @@ async def start_pipeline():
         registry=_logosnode_registry,
         facade=_logosnode_facade,
         config=CalibrationConfig.from_env(),
+        worker_locked=_capacity_planner.is_worker_locked,
     )
     global _nightly_scheduler, _maintenance_coordinator
     _maintenance_coordinator = MaintenanceCoordinator(_logosnode_registry)
@@ -4797,14 +4806,21 @@ _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
 }
 
 
-async def _dispatch_logosnode_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
+async def _dispatch_logosnode_command(
+    provider_id: int,
+    action: str,
+    params: dict[str, Any] | None = None,
+    on_dispatched: Callable[[asyncio.Future], None] | None = None,
+):
     try:
         timeout = _LOGOSNODE_CMD_TIMEOUTS.get(action, 20)
+        extra = {"on_dispatched": on_dispatched} if on_dispatched is not None else {}
         return await _logosnode_registry.send_command(
             provider_id,
             action=action,
             params=params or {},
             timeout_seconds=timeout,
+            **extra,
         )
     except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})

@@ -5,6 +5,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -29,6 +30,7 @@ public class OrchestratorCalibrationLogsClient {
     private static final Logger log = LoggerFactory.getLogger(OrchestratorCalibrationLogsClient.class);
 
     private final RestTemplate restTemplate;
+    private final RestTemplate fullLogRestTemplate;
 
     @Value("${logos.orchestrator.url:}")
     private String orchestratorUrl;
@@ -36,8 +38,11 @@ public class OrchestratorCalibrationLogsClient {
     @Value("${logos.orchestrator.internal-secret:}")
     private String internalSecret;
 
-    public OrchestratorCalibrationLogsClient(RestTemplate restTemplate) {
+    public OrchestratorCalibrationLogsClient(
+            RestTemplate restTemplate,
+            @Qualifier("calibrationLogRestTemplate") RestTemplate fullLogRestTemplate) {
         this.restTemplate = restTemplate;
+        this.fullLogRestTemplate = fullLogRestTemplate;
     }
 
     /**
@@ -90,7 +95,7 @@ public class OrchestratorCalibrationLogsClient {
             .queryParam("model_name", modelName)
             .toUriString();
         try {
-            return restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<Void>(headers), Map.class);
+            return fullLogRestTemplate.exchange(url, HttpMethod.GET, new HttpEntity<Void>(headers), Map.class);
         } catch (HttpClientErrorException | HttpServerErrorException e) {
             log.warn(
                 "Failed to fetch full calibration log for model {} provider {}: {} {}",

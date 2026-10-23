@@ -226,6 +226,9 @@ export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   return null;
 }
 
+/** The lane id of a lock on a whole worker. No worker lane has this id. */
+export const WORKER_LOCK_LANE_ID = '*';
+
 /** Identity of a lane lock: the lane id is only unique within its provider. */
 export function laneLockKey(providerId: number, laneId: string): string {
   return `${providerId}/${laneId}`;
@@ -246,7 +249,8 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
 
   private statisticsService = inject(StatisticsService);
 
-  unloadingLaneId = signal<string | null>(null);
+  /** Lanes of the selected provider with an unload in flight; workers unload lanes in parallel. */
+  unloadingLaneIds = signal<ReadonlySet<string>>(new Set());
   unloadError = signal<string | null>(null);
 
   // ── Sleep/drain/wake state ───────────────────────────────────────────────
@@ -269,6 +273,8 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
   lockedLanes = signal<Set<string>>(new Set());
   lockingLaneId = signal<string | null>(null);
   lockError = signal<string | null>(null);
+  /** Bumped by every lock toggle and provider switch; only the current toggle may settle its state. */
+  private lockAttempt = 0;
   private locksRequested = false;
 
   // ── Load-lane state ──────────────────────────────────────────────────────
@@ -444,7 +450,8 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
   }
 
   /**
-   * Monotonic attempt counters, one per action kind.
+   * Monotonic attempt counters for sleep, drain and wake, one per action
+   * kind. Unloads keep one attempt per lane instead (see unloadAttempts).
    *
    * (provider, lane id) is not a unique attempt identity: a lane id is
    * per-worker and can collide across workers, and an A → B → A switch
@@ -457,16 +464,28 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
    * newer attempt of the kind has started and no switch has happened since it
    * began.
    */
-  private unloadAttempt = 0;
   private sleepAttempt = 0;
   private drainAttempt = 0;
   private wakeAttempt = 0;
 
+  /**
+   * Unload attempts in flight, keyed by laneLockKey(provider, lane). Unloads
+   * run in parallel, so each lane has its own attempt: the value is the
+   * attempt's number from `unloadSeq`, and a settling attempt may touch its
+   * lane's spinner and the error only while the entry still holds its number
+   * and the operator is still on its provider. A provider switch clears the
+   * map, which abandons every attempt in flight.
+   */
+  private unloadAttempts = new Map<string, number>();
+  private unloadSeq = 0;
+
   async handleUnload(laneId: string): Promise<void> {
     const pid = this.providerId;
-    if (pid == null || this.unloadingLaneId() != null) return;
-    const attempt = ++this.unloadAttempt;
-    this.unloadingLaneId.set(laneId);
+    if (pid == null || this.unloadingLaneIds().has(laneId)) return;
+    const key = laneLockKey(pid, laneId);
+    const attempt = ++this.unloadSeq;
+    this.unloadAttempts.set(key, attempt);
+    this.setUnloading(laneId, true);
     this.unloadError.set(null);
 
     let failed: unknown = null;
@@ -475,19 +494,23 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     } catch (err: unknown) {
       failed = err;
     }
-    // A newer attempt or a provider switch superseded this one while the call
-    // was in flight — see unloadAttempt. Only the latest attempt may settle
-    // the shared signal and error.
-    if (this.unloadAttempt === attempt) {
-      this.unloadingLaneId.set(null);
-      if (failed === null) return;
-      const e = failed as { status?: number };
-      if (e.status === 404 || e.status === 501 || e.status === 0) {
-        this.unloadError.set('Action not available on this server yet.');
-      } else {
-        this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(failed)}`);
-      }
+    if (this.unloadAttempts.get(key) !== attempt || this.providerId !== pid) return;
+    this.unloadAttempts.delete(key);
+    this.setUnloading(laneId, false);
+    if (failed === null) return;
+    const e = failed as { status?: number };
+    if (e.status === 404 || e.status === 501 || e.status === 0) {
+      this.unloadError.set('Action not available on this server yet.');
+    } else {
+      this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(failed)}`);
     }
+  }
+
+  private setUnloading(laneId: string, unloading: boolean): void {
+    const next = new Set(this.unloadingLaneIds());
+    if (unloading) next.add(laneId);
+    else next.delete(laneId);
+    this.unloadingLaneIds.set(next);
   }
 
   async handleSleep(laneId: string): Promise<void> {
@@ -505,7 +528,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     } catch (err: unknown) {
       failed = err;
     }
-    // Same ownership rule as handleUnload.
+    // Same ownership rule as the attempt counters above.
     if (this.sleepAttempt === attempt) {
       this.sleepingLaneId.set(null);
       if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, failed));
@@ -534,7 +557,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     } catch (err: unknown) {
       failed = err;
     }
-    // Same ownership rule as handleUnload.
+    // Same ownership rule as the attempt counters above.
     if (this.drainAttempt === attempt) {
       this.drainingLaneId.set(null);
       if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Drain', laneId, failed));
@@ -555,7 +578,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     } catch (err: unknown) {
       failed = err;
     }
-    // Same ownership rule as handleUnload.
+    // Same ownership rule as the attempt counters above.
     if (this.wakeAttempt === attempt) {
       this.wakingLaneId.set(null);
       if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, failed));
@@ -654,16 +677,18 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       // error or a still-spinning button from worker A must not sit under
       // worker B's panel after the switch.
       this.unloadError.set(null);
-      this.unloadingLaneId.set(null);
+      this.unloadingLaneIds.set(new Set());
       this.sleepWakeError.set(null);
       this.sleepingLaneId.set(null);
       this.drainingLaneId.set(null);
       this.wakingLaneId.set(null);
       this.lockError.set(null);
+      this.lockingLaneId.set(null);
       // The in-flight calls are abandoned as well: when they settle later,
       // their counters no longer match, so they cannot touch the shared
       // signal or error of the worker the operator is on now.
-      this.unloadAttempt++;
+      this.lockAttempt++;
+      this.unloadAttempts.clear();
       this.sleepAttempt++;
       this.drainAttempt++;
       this.wakeAttempt++;
@@ -701,6 +726,39 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     return pid != null && this.lockedLanes().has(laneLockKey(pid, laneId));
   }
 
+  /** Whether the capacity planner is told to leave this whole worker as it is. */
+  isWorkerLocked(): boolean {
+    return this.isLocked(WORKER_LOCK_LANE_ID);
+  }
+
+  /**
+   * Locks or unlocks the selected worker. While it is locked, the capacity
+   * planner neither loads, wakes, sleeps nor unloads anything there; the
+   * buttons of this panel still work.
+   */
+  async handleToggleWorkerLock(): Promise<void> {
+    const pid = this.providerId;
+    if (pid == null || this.lockingLaneId() !== null) return;
+    const locked = this.isWorkerLocked();
+    const attempt = ++this.lockAttempt;
+    this.lockingLaneId.set(WORKER_LOCK_LANE_ID);
+    this.lockError.set(null);
+    try {
+      if (locked) {
+        await this.statisticsService.unlockLane(pid, WORKER_LOCK_LANE_ID);
+      } else {
+        await this.statisticsService.lockLane(pid, WORKER_LOCK_LANE_ID, null);
+      }
+      await this.refreshLocks();
+    } catch (err: unknown) {
+      if (attempt === this.lockAttempt) {
+        this.lockError.set(`${locked ? 'Unlock' : 'Lock'} of the worker failed: ${this.failureDetail(err)}`);
+      }
+    } finally {
+      if (attempt === this.lockAttempt) this.lockingLaneId.set(null);
+    }
+  }
+
   /** Bumped by every lock read; only the newest read may set the locks. */
   private lockReadSeq = 0;
 
@@ -730,6 +788,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     const pid = this.providerId;
     if (pid == null || this.lockingLaneId() !== null) return;
     const locked = this.isLocked(row.laneId);
+    const attempt = ++this.lockAttempt;
     this.lockingLaneId.set(row.laneId);
     this.lockError.set(null);
     try {
@@ -740,9 +799,11 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       }
       await this.refreshLocks();
     } catch (err: unknown) {
-      this.lockError.set(`${locked ? 'Unlock' : 'Lock'} of ${row.laneId} failed: ${this.failureDetail(err)}`);
+      if (attempt === this.lockAttempt) {
+        this.lockError.set(`${locked ? 'Unlock' : 'Lock'} of ${row.laneId} failed: ${this.failureDetail(err)}`);
+      }
     } finally {
-      this.lockingLaneId.set(null);
+      if (attempt === this.lockAttempt) this.lockingLaneId.set(null);
     }
   }
 

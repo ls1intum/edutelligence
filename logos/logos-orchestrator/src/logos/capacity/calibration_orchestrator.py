@@ -8,7 +8,8 @@ model completes. The orchestrator only:
   * Watches the maintenance window (default 05:00–08:00 Europe/Berlin).
   * When inside the window and no other worker has a session in progress,
     picks one idle, healthy worker that still has uncalibrated models and
-    sends ``start_calibration_session``.
+    lists the calibration commands in its hello, and sends
+    ``start_calibration_session``.
   * When outside the window, sends ``stop_calibration_session`` to the
     provider that holds the active session — the worker tears the in-flight
     vLLM probe down inside ~2s.
@@ -29,7 +30,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 from zoneinfo import ZoneInfo
 
 # Terminal session events that free the active-provider slot. Shared with the
@@ -37,6 +38,9 @@ from zoneinfo import ZoneInfo
 # one definition keeps the two from drifting apart.
 from logos.logosnode_registry import TERMINAL_CALIBRATION_SESSION_EVENTS as _TERMINAL_SESSION_EVENTS
 from logos.maintenance_window import MaintenanceWindow, maintenance_node_limit
+
+# Commands a worker must list in its hello before it is calibrated automatically.
+_CALIBRATION_ACTIONS = ("start_calibration_session", "stop_calibration_session", "get_calibration_status")
 
 logger = logging.getLogger("logos.capacity.calibration_orchestrator")
 
@@ -117,10 +121,13 @@ class CalibrationOrchestrator:
         registry: "LogosNodeRuntimeRegistry",
         facade: "LogosNodeSchedulingDataFacade",
         config: CalibrationConfig | None = None,
+        worker_locked: Callable[[int], bool] | None = None,
     ) -> None:
         self._registry = registry
         self._facade = facade
         self._config = config or CalibrationConfig.from_env()
+        # Whether an operator locked a worker; automatic calibration skips it.
+        self._worker_locked: Callable[[int], bool] = worker_locked or (lambda _provider_id: False)
         self._task: asyncio.Task[None] | None = None
         self._active_provider_ids: set[int] = set()
         # Providers we have already kicked off this window. A worker that
@@ -224,6 +231,9 @@ class CalibrationOrchestrator:
             pid not in self._completed_this_window
             and self._registry.has_received_first_status(pid)
             and not self._provider_is_unhealthy(pid)
+            # A locked worker's calibration cannot start, so it holds up nothing.
+            and not self._worker_locked(pid)
+            and self._supports_calibration(pid)
             and self._provider_has_uncalibrated_models(pid)
             for pid in self._facade.provider_ids()
         )
@@ -247,6 +257,12 @@ class CalibrationOrchestrator:
                 continue
             if self._provider_is_unhealthy(provider_id):
                 continue
+            if self._worker_locked(provider_id):
+                # Calibration stops every lane; on a locked worker only an
+                # operator may start it.
+                continue
+            if not self._supports_calibration(provider_id):
+                continue
             if self._provider_has_active_requests(provider_id):
                 continue
             if not self._provider_has_uncalibrated_models(provider_id):
@@ -256,6 +272,15 @@ class CalibrationOrchestrator:
                 continue
             return provider_id
         return None
+
+    def _supports_calibration(self, provider_id: int) -> bool:
+        """Whether the worker's build lists every command a coordinated session needs.
+
+        Without the status command the coordinator cannot confirm that a
+        session ended, so an automatic start would hold the maintenance slot
+        on that worker's word alone.
+        """
+        return all(bool(self._registry.supports_action(provider_id, action)) for action in _CALIBRATION_ACTIONS)
 
     def _provider_is_unhealthy(self, provider_id: int) -> bool:
         """Return True if the worker's latest runtime status reports

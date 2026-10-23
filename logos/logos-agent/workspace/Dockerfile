@@ -88,7 +88,7 @@ RUN npx --yes playwright@${PLAYWRIGHT_VERSION} install chromium \
 # check nobody told them about.
 #
 # Every config in the monorepo, not just Logos's. The root config delegates
-# to iris/, athena/ and memiris/ through sub-pre-commit, and those pin their
+# to iris/ and athena/ through sub-pre-commit, and those pin their
 # own versions of the same tools — black 26.1.0 where Logos pins 25.1.0.
 # Seeding one config would leave a session working on Iris reformatting its
 # files with the wrong black, which is worse than not linting at all.
@@ -109,7 +109,6 @@ COPY .pre-commit-config.yaml /tmp/hooks/.pre-commit-config.yaml
 COPY logos/.pre-commit-config.yaml /tmp/hooks/logos/.pre-commit-config.yaml
 COPY iris/.pre-commit-config.yaml /tmp/hooks/iris/.pre-commit-config.yaml
 COPY athena/.pre-commit-config.yaml /tmp/hooks/athena/.pre-commit-config.yaml
-COPY memiris/.pre-commit-config.yaml /tmp/hooks/memiris/.pre-commit-config.yaml
 RUN uv venv --python 3.13 /opt/venv \
   && uv pip install --python /opt/venv pre-commit==4.6.2 \
   && cd /tmp/hooks \
@@ -120,8 +119,7 @@ RUN uv venv --python 3.13 /opt/venv \
        .pre-commit-config.yaml \
        logos/.pre-commit-config.yaml \
        iris/.pre-commit-config.yaml \
-       athena/.pre-commit-config.yaml \
-       memiris/.pre-commit-config.yaml; do \
+       athena/.pre-commit-config.yaml; do \
        PRE_COMMIT_HOME=/opt/pre-commit pre-commit install-hooks --config "$config" || exit 1; \
      done \
   && chmod -R a+rX /opt/pre-commit /opt/venv \

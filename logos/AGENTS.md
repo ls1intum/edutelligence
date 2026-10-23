@@ -43,7 +43,7 @@ The older Process/Profile hierarchy (`process`, `profiles`, `profile_model_permi
 
 ### Git workflow (MANDATORY, CI-enforced)
 
-- **PR title** must match: `` ^`(Development|General|Athena|Atlas|AtlasML|Iris|Logos|Memiris)`:\s[A-Z].*$ `` — e.g. `` `Logos`: Add team management endpoints ``.
+- **PR title** must match: `` ^`(Development|General|Athena|Atlas|AtlasML|Iris|Logos)`:\s[A-Z].*$ `` — e.g. `` `Logos`: Add team management endpoints ``.
 - **Commit messages**: `Logos: Description starting with capital letter (#issue_number)`.
 - **Branch names**: `feature/logos/description` or `logos/description`.
 - Never merge to `main` without a PR. After opening a PR, check `gh pr checks` and fix failures immediately.
