@@ -61,6 +61,7 @@ _LOOP_STALL_SECONDS = 30.0
 _CLOSE_RUNS_WORKERS = 16
 _CLOSE_RUNS_BUDGET_SECONDS = 30.0
 _ANSWER_POST_POLL_SECONDS = 0.2
+_ORPHAN_KEEP_SECONDS = 300.0
 _RESTART_LOOP_COUNT = 3
 _DUMP_TRIGGER = "dump-now"
 
@@ -227,6 +228,16 @@ class Watchdog:  # pylint: disable=too-many-instance-attributes
         for record in self._registry.snapshot():
             callback = record.callback
             phase = getattr(callback, "phase", None)
+            if record.orphaned and (
+                (
+                    phase is RunPhase.TERMINAL
+                    and getattr(callback, "terminal_post_in_flight", False) is not True
+                )
+                # A caller that never sends its FAILED must not pin the run forever.
+                or now - (record.orphaned_at or now) > _ORPHAN_KEEP_SECONDS
+            ):
+                self._registry.unregister(record)
+                continue
             if record.action_in_flight or phase is None:
                 continue
             if record.deadline_seconds is not None:
@@ -398,6 +409,7 @@ class Watchdog:  # pylint: disable=too-many-instance-attributes
         )
         if restart:
             self._exiting = True
+            self._registry.refusal = (RESTART_MESSAGE, RESTART_CODE)
             self._guard.write_marker(MARKER_WATCHDOG)
             timer = threading.Timer(
                 self._config.exit_timer_seconds, self._exit_fn, args=(EXIT_CODE,)

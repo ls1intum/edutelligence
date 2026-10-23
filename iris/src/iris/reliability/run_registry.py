@@ -24,6 +24,10 @@ class RunRecord:
     deadline_seconds: Optional[float] = None
     model_id: Optional[str] = None
     is_chat: bool = False
+    # The pipeline returned with an exception before the run was terminal; its caller still
+    # sends the FAILED, so the watchdog keeps the run until that frame went out.
+    orphaned: bool = False
+    orphaned_at: Optional[float] = None
     action_in_flight: bool = False
     last_heartbeat_at: float = field(default_factory=time.perf_counter)
 
@@ -44,6 +48,8 @@ class RunRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._runs: list[RunRecord] = []
+        # Set once the watchdog decided to restart: (message, code) for runs that start now.
+        self.refusal: Optional[tuple[str, str]] = None
 
     def register(self, record: RunRecord) -> RunRecord:
         with self._lock:

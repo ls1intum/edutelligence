@@ -49,7 +49,7 @@ from iris.tracing import (
 )
 from iris.vector_database.database import VectorDatabase
 from iris.web.status.partial_result_sender import PartialResultSender
-from iris.web.status.status_update import StatusCallback
+from iris.web.status.status_update import RunPhase, StatusCallback
 
 logger = get_logger(__name__)
 
@@ -912,6 +912,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         set_current_context(state.tracing_context)
         self._update_langfuse_trace(state.tracing_context)
 
+        refusal = run_registry.refusal
+        if refusal is not None:
+            # Iris is about to restart; a run started now would be cut off without a word.
+            callback.fail(refusal[0], code=refusal[1])
+            return
+
         variant_id = getattr(variant, "id", "default")
         reliability = settings.reliability
         run_record = run_registry.register(
@@ -1050,7 +1056,14 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 duration_ms,
                 len(state.tools),
             )
+        except BaseException:
+            if getattr(callback, "phase", None) is not RunPhase.TERMINAL:
+                # The caller sends the FAILED after this returns; stay visible until then.
+                run_record.orphaned = True
+                run_record.orphaned_at = time.perf_counter()
+            raise
         finally:
-            run_registry.unregister(run_record)
+            if not run_record.orphaned:
+                run_registry.unregister(run_record)
             # Clean up tracing context to prevent memory leaks
             clear_current_context()

@@ -777,3 +777,55 @@ def test_a_trip_lets_an_answer_bearing_finish_land(config, registry, clock):
     assert time.monotonic() - started >= 0.4  # it waited for the frame
     assert callback.terminal_post_in_flight is False
     assert _posted(callback)[-1]["result"] == "the answer"
+
+
+def test_an_orphaned_run_is_dropped_once_its_failed_frame_went_out(
+    config, registry, clock
+):
+    watchdog = _watchdog(config, registry, clock)
+    callback = _callback()
+    record = _chat_run(registry, clock, callback)
+    record.orphaned = True
+
+    watchdog._check_runs(clock.now)
+    assert registry.snapshot() == [record]  # the caller's FAILED is still to come
+
+    callback.fail("Fatal error.")
+    watchdog._check_runs(clock.now)
+
+    assert not registry.snapshot()
+
+
+def test_the_restart_path_refuses_new_runs(config, registry, clock):
+    watchdog = _watchdog(config, registry, clock)
+
+    watchdog._trip("stuck", None)
+
+    assert registry.refusal == ("Iris had to restart. Please try again.", "restart")
+
+
+def test_a_refused_restart_keeps_accepting_runs(config, registry, clock):
+    guard = RestartGuard(config)
+    assert guard.record_and_allow_self_restart(1_800_000_000.0 + clock.now - 600, "x")
+    watchdog = _watchdog(config, registry, clock)
+
+    watchdog._trip("stuck", None)
+
+    assert registry.refusal is None
+
+
+def test_an_orphan_whose_caller_never_fails_it_is_dropped_later(
+    config, registry, clock
+):
+    watchdog = _watchdog(config, registry, clock)
+    callback = _callback()
+    record = _chat_run(registry, clock, callback, deadline=None)
+    record.orphaned, record.orphaned_at = True, clock.now
+
+    clock.now += 299
+    watchdog._check_runs(clock.now)
+    assert registry.snapshot() == [record]
+    clock.now += 2
+    watchdog._check_runs(clock.now)
+
+    assert not registry.snapshot()

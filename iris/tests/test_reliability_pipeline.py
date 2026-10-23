@@ -11,6 +11,7 @@ from iris.pipeline.abstract_agent_pipeline import AbstractAgentPipeline  # noqa:
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
 from iris.reliability import run_registry as registry_module  # noqa: E402
 from iris.reliability.run_registry import RunRegistry  # noqa: E402
+from iris.web.status.status_update import RunPhase  # noqa: E402
 
 
 class _MiniPipeline(AbstractAgentPipeline):
@@ -73,7 +74,10 @@ def test_a_run_is_registered_while_it_runs_and_removed_when_it_raises():
         _run(_MiniPipeline(), callback, boom, registry=registry, seen=seen)
 
     assert len(seen["runs"]) == 1
-    assert not registry.snapshot()
+    # Not terminal yet: the caller still sends the FAILED, so the run stays visible
+    # (as orphaned) until the watchdog sees that frame go out.
+    records = registry.snapshot()
+    assert len(records) == 1 and records[0].orphaned is True
 
 
 def test_registration_and_cleanup():
@@ -208,3 +212,32 @@ def test_mcq_generation_is_not_started_for_a_run_closed_during_retrieval():
         )
 
     mcq_pipeline.run_in_thread.assert_not_called()
+
+
+def test_a_run_that_raised_after_its_terminal_frame_is_unregistered_at_once():
+    callback = MagicMock(closed_by_watchdog=False)
+    registry, seen = RunRegistry(), {}
+
+    def finish_then_boom(state):  # pylint: disable=unused-argument
+        callback.phase = RunPhase.TERMINAL
+        raise RuntimeError("after the end")
+
+    with pytest.raises(RuntimeError):
+        _run(_MiniPipeline(), callback, finish_then_boom, registry=registry, seen=seen)
+
+    assert not registry.snapshot()
+
+
+def test_runs_started_during_a_restart_are_failed_at_once():
+    callback = MagicMock(closed_by_watchdog=False)
+    registry = RunRegistry()
+    registry.refusal = ("Iris had to restart. Please try again.", "restart")
+    execute_agent = MagicMock(return_value="answer")
+
+    _run(_MiniPipeline(), callback, execute_agent, registry=registry)
+
+    callback.fail.assert_called_once_with(
+        "Iris had to restart. Please try again.", code="restart"
+    )
+    execute_agent.assert_not_called()
+    assert not registry.snapshot()
