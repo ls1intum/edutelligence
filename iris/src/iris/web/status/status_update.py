@@ -677,14 +677,48 @@ class ChatRunCallback(StatusCallback):
         attempts: int = 1,
     ) -> bool:
         terminal_send = run_state != RunStateEnum.RUNNING
-        if terminal_send:
-            if not self._claim_terminal():
-                self._reject_after_terminal(run_state.value.lower())
-                return False
-        elif self._terminal_sent:
+        if terminal_send and not self._claim_terminal():
             self._reject_after_terminal(run_state.value.lower())
             return False
 
+        # A RUNNING frame that retries an undelivered answer is an answer POST too: the
+        # watchdog must not finish the run (and bill its usage again) until it is booked.
+        # Taken before the answer is read, together with a fresh TERMINAL check.
+        # send_result() already holds the flag for its own sends.
+        owns_answer_flag = False
+        if not terminal_send:
+            with self._running_update_lock:
+                if self._phase is RunPhase.TERMINAL:
+                    rejected = True
+                else:
+                    rejected = False
+                    if (
+                        self._undelivered_result_fields is not None
+                        and not self._answer_post_in_flight
+                    ):
+                        self._answer_post_in_flight = True
+                        owns_answer_flag = True
+            if rejected:
+                self._reject_after_terminal(run_state.value.lower())
+                return False
+
+        try:
+            return self._post_chat_fields(
+                fields, run_state, error, attempts, terminal_send
+            )
+        finally:
+            if owns_answer_flag:
+                with self._running_update_lock:
+                    self._answer_post_in_flight = False
+
+    def _post_chat_fields(  # pylint: disable=too-many-arguments
+        self,
+        fields: dict[str, Any],
+        run_state: RunStateEnum,
+        error: Optional[StatusErrorDTO],
+        attempts: int,
+        terminal_send: bool,
+    ) -> bool:
         fields, carried_result = self._merge_undelivered_result(fields)
         new_tokens: list[TokenUsageDTO] = []
         if "tokens" in fields:

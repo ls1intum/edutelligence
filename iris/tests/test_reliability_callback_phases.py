@@ -258,3 +258,36 @@ def test_non_chat_watchdog_frames_carry_the_accrued_usage():
         0
     ]  # pylint: disable=protected-access
     assert [t["numInputTokens"] for t in payload["tokens"]] == [7]
+
+
+def test_a_retried_answer_blocks_the_watchdog_until_it_is_booked():
+    from iris.common.token_usage_dto import (  # pylint: disable=import-outside-toplevel
+        TokenUsageDTO,
+    )
+
+    callback = _callback()
+    usage = [TokenUsageDTO(numInputTokens=10)]
+    callback.attach_usage(usage)
+    failing = MagicMock()
+    failing.raise_for_status.side_effect = requests.exceptions.HTTPError("502")
+    callback._post_status_payload.return_value = failing
+    with patch("time.sleep"):
+        assert callback.send_result("the answer", tokens=usage) is False
+
+    seen = {}
+
+    def retry_post(payload, **_kwargs):
+        if payload.get("result") == "the answer" and payload["runState"] == "RUNNING":
+            # Artemis has the retry but the response is not back yet.
+            seen["finish_during_retry"] = callback.watchdog_finish()
+        return _ok()
+
+    callback._post_status_payload = MagicMock(side_effect=retry_post)
+    assert callback.send_suggestions(["s"]) is True
+    assert seen == {"finish_during_retry": False}
+
+    assert callback.watchdog_finish() is True
+    payload = _posted(callback)[-1]
+    assert payload["runState"] == "FINISHED"
+    assert payload["tokens"] == []  # the retry already billed them
+    assert "result" not in payload or payload["result"] in (None, "")
