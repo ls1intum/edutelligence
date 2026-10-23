@@ -295,3 +295,56 @@ def test_every_run_is_either_in_the_closing_snapshot_or_refused():
 
         for record, refusal in outcomes.values():
             assert (record in snapshot) != (refusal is not None)
+
+
+def test_tools_do_nothing_once_the_watchdog_closed_the_run():
+    from iris.pipeline.abstract_agent_pipeline import (  # pylint: disable=import-outside-toplevel
+        STOPPED_TOOL_RESULT,
+        _stop_when_closed,
+    )
+    from iris.pipeline.shared.utils import (  # pylint: disable=import-outside-toplevel
+        generate_structured_tool_from_function,
+    )
+
+    calls = []
+
+    def lecture_content_retrieval(query: str, limit: int = 3) -> str:
+        """Search the lecture slides for the query."""
+        calls.append((query, limit))
+        return "slides"
+
+    callback = MagicMock(closed_by_watchdog=False)
+    guarded = _stop_when_closed(lecture_content_retrieval, callback)
+    tool = generate_structured_tool_from_function(guarded)
+
+    # The agent still sees the original tool.
+    assert tool.name == "lecture_content_retrieval"
+    assert "lecture slides" in tool.description
+    assert set(tool.args) == {"query", "limit"}
+    assert tool.invoke({"query": "heaps"}) == "slides"
+
+    callback.closed_by_watchdog = True
+    assert tool.invoke({"query": "heaps"}) == STOPPED_TOOL_RESULT
+    assert calls == [("heaps", 3)]
+
+
+def test_the_mcq_tool_generates_nothing_for_a_run_closed_during_retrieval():
+    from iris.tools.mcq_generation import (  # pylint: disable=import-outside-toplevel
+        create_tool_generate_mcq_questions,
+    )
+
+    callback = MagicMock(closed_by_watchdog=False)
+    mcq_pipeline = MagicMock(return_value="{}")
+    storage = {}
+
+    def closing_supplier():
+        callback.closed_by_watchdog = True
+        return "lecture text"
+
+    tool = create_tool_generate_mcq_questions(
+        mcq_pipeline, [], callback, storage, lecture_content_supplier=closing_supplier
+    )
+
+    assert "stopped" in tool("one question about heaps")
+    mcq_pipeline.assert_not_called()
+    assert not storage

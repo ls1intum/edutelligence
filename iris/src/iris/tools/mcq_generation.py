@@ -50,6 +50,9 @@ def create_tool_generate_mcq_questions(
         lecture_content = (
             lecture_content_supplier() if lecture_content_supplier else None
         )
+        if getattr(callback, "closed_by_watchdog", False) is True:
+            # Closed during the lecture retrieval: the student already got the timeout.
+            return "This run was stopped; no questions were generated."
         result_json = mcq_pipeline(
             command=command,
             chat_history=chat_history,

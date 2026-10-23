@@ -1,3 +1,4 @@
+import functools
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -153,6 +154,25 @@ def _intermediate_action_text(action: Any) -> str:
 
     message = message_log[-1]
     return _visible_content_text(getattr(message, "content", "")).strip()
+
+
+STOPPED_TOOL_RESULT = "This run was stopped; do not call further tools."
+
+
+def _stop_when_closed(tool: Callable, callback: Any) -> Callable:
+    """Make a tool do nothing once the watchdog closed the run.
+
+    The agent loop checks between steps, but one step can run several tools, and each may
+    start model calls (retrieval, MCQ generation) after the student already got the timeout.
+    """
+
+    @functools.wraps(tool)
+    def guarded_tool(*args, **kwargs):
+        if getattr(callback, "closed_by_watchdog", False) is True:
+            return STOPPED_TOOL_RESULT
+        return tool(*args, **kwargs)
+
+    return guarded_tool
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -978,7 +998,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
             # Load tools for both local and cloud models
             with timed_span(pipeline_name, "build_tools", start_time):
-                state.tools = self.get_tools(state)
+                state.tools = [
+                    _stop_when_closed(tool, state.callback)
+                    for tool in self.get_tools(state)
+                ]
                 if state.compaction_settings is not None:
                     budget = ToolOutputBudget(
                         state.compaction_settings.tool_output_result_bytes,
