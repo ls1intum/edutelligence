@@ -526,11 +526,6 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                     raise
 
         with batch_update_lock:
-            # The slide's visibility is read here, under the lock the visibility update holds as well: the summaries
-            # take minutes, and a slide hidden meanwhile must not get its old visibility back from this write.
-            properties[LectureUnitSegmentSchema.HIDDEN_UNTIL.value] = (
-                self._current_hidden_until(slide_number)
-            )
             with job_handler.current_job_guard(
                 self.lecture_unit_dto.base_url,
                 self.lecture_unit_dto.course_id,
@@ -539,4 +534,10 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 self.cancel_event,
                 "lecture unit segment write",
             ):
+                # The slide's visibility is read here, under the unit lock the visibility update holds as well: the
+                # summaries take minutes, and a slide hidden meanwhile must not get its old visibility back from this
+                # write.
+                properties[LectureUnitSegmentSchema.HIDDEN_UNTIL.value] = (
+                    self._current_hidden_until(slide_number)
+                )
                 retry.run(upsert, description=f"segment upsert slide {slide_number}")
