@@ -14,8 +14,8 @@ dependencies = [
     # The client tier drives the real SDKs on purpose: their parsers are the
     # actual contract Logos' users depend on, and a hand-rolled HTTP client
     # would not notice when we break them.
-    "openai==3.35.1",
-    "anthropic==1.15.0",
+    "openai==3.37.0",
+    "anthropic==1.17.0",
 ]
 
 [project.optional-dependencies]
