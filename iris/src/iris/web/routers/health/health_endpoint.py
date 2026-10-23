@@ -24,6 +24,26 @@ HealthCheckCallable = Callable[[], tuple[str, ModuleStatus]]
 MODULES: list[HealthCheckCallable] = [check_weaviate_status, check_pipelines_health]
 
 
+@router.get("/liveness", include_in_schema=False)
+async def liveness() -> Response:
+    """Whether the process still works; for the container health check.
+
+    Async and lock-free on purpose: sync endpoints share a thread pool that a stall can starve,
+    and this answer must come from in-memory state only. No auth and no data in the body.
+    """
+    from iris.reliability.watchdog import (  # pylint: disable=import-outside-toplevel
+        watchdog,
+    )
+
+    return Response(
+        status_code=(
+            status.HTTP_200_OK
+            if watchdog.healthy
+            else status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+    )
+
+
 @router.get(
     "/",
     response_model=IrisHealthResponse,

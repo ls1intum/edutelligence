@@ -218,6 +218,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     """
 
     PIPELINE_ID = "chat_pipeline"
+    ANSWER_DEADLINE = True
     ROLES = {"chat"}
     VARIANT_DEFS = [
         ("default", "Default", "Uses a smaller model for faster responses."),

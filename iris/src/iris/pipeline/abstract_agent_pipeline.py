@@ -1,3 +1,4 @@
+import threading
 import time
 from abc import ABC, abstractmethod
 from threading import Thread
@@ -6,13 +7,14 @@ from typing import Any, Callable, Generic, List, Optional, TypeVar
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 
-from iris.common.logging_config import get_logger
+from iris.common.logging_config import get_logger, get_request_id
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.reply_language import reply_language
 from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
+from iris.config import settings
 from iris.domain.data.compaction_dto import CompactionDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.status.suggested_context_dto import SuggestedContextDTO
@@ -37,6 +39,7 @@ from iris.pipeline.shared.compaction import (
     without_compactions,
 )
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
+from iris.reliability.run_registry import RunRecord, chat_deadline_seconds, run_registry
 from iris.tracing import (
     TracingContext,
     clear_current_context,
@@ -161,6 +164,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     - CAN override: Optional hooks/utilities to customize behavior.
     - MUST NOT override: Internal implementation methods (private with leading underscore or __call__).
     """
+
+    # Whether a student waits for this run's answer: then the run gets an answer deadline and
+    # keep-alive frames from the watchdog (see iris.reliability).
+    ANSWER_DEADLINE: bool = False
 
     def __init__(self, *args, **kwargs):
         """
@@ -521,6 +528,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         step_count = 0
         for step in agent_executor.iter(params, callbacks=callbacks):
             step_count += 1
+            if getattr(state.callback, "closed_by_watchdog", False) is True:
+                # The student already got an error; stop spending tokens on this run.
+                logger.info("Stopping the agent loop: the watchdog closed this run")
+                break
 
             # Log tool calls from intermediate steps. The real AgentExecutorIterator
             # yields the SINGULAR "intermediate_step" key; tests historically used the
@@ -894,9 +905,31 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         state.callback.update()
 
+        variant_id = getattr(variant, "id", "default")
+        reliability = settings.reliability
+        run_record = run_registry.register(
+            RunRecord(
+                # The request id from the log lines, not the run token (a credential).
+                run_id=get_request_id() or "-",
+                pipeline=pipeline_name,
+                variant=variant_id,
+                local=local,
+                callback=callback,
+                thread_id=threading.get_ident(),
+                started_at=start_time,
+                deadline_seconds=(
+                    chat_deadline_seconds(reliability, variant_id, local)
+                    if self.ANSWER_DEADLINE and reliability.enabled
+                    else None
+                ),
+                is_chat=self.ANSWER_DEADLINE,
+            )
+        )
+
         try:
             # 1. Select the model, then prepare history, user query, LLM, prompt and tools
             selected_version = state.variant.model("chat", local)
+            run_record.model_id = selected_version
             if not selected_version:
                 env = "local" if local else "cloud"
                 raise ValueError(
@@ -955,6 +988,14 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 if state.partial_result_sender is not None:
                     state.partial_result_sender.stop()
 
+            if getattr(state.callback, "closed_by_watchdog", False) is True:
+                # The student already got an error: no compaction, citations or title calls.
+                logger.info(
+                    "Pipeline stopped | pipeline=%s | the watchdog closed this run",
+                    pipeline_name,
+                )
+                return
+
             # Runs next to the post agent hook, off the answer's path.
             state.compaction_thread = self._start_compaction(
                 state, state.compaction_holder
@@ -991,5 +1032,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 len(state.tools),
             )
         finally:
+            run_registry.unregister(run_record)
             # Clean up tracing context to prevent memory leaks
             clear_current_context()

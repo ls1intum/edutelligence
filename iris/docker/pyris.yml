@@ -12,8 +12,30 @@ services:
     environment:
       APPLICATION_YML_PATH: "/config/application.yml"
       LLM_CONFIG_PATH: "/config/llm_config.yml"
+      # Operator alerts (optional): see docs, "Watchdog and alerts".
+      PYRIS_ALERT_NAME: ${PYRIS_ALERT_NAME:-pyris}
+      PYRIS_PUSHOVER_APP_TOKEN: ${PYRIS_PUSHOVER_APP_TOKEN:-}
+      PYRIS_PUSHOVER_USER_KEY: ${PYRIS_PUSHOVER_USER_KEY:-}
     expose:
       - "8000"
+    # The watchdog exits the process when it is broken; Docker then restarts it. A memory limit
+    # keeps an out-of-memory kill inside this container instead of hitting the host's agents.
+    mem_limit: ${PYRIS_MEMORY_LIMIT:-6g}
+    memswap_limit: ${PYRIS_MEMORY_LIMIT:-6g}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-fsS",
+          "--max-time",
+          "5",
+          "http://localhost:8000/api/v1/health/liveness",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     networks:
       - pyris
     command:

@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ from iris.config import settings
 from iris.pipeline.shared.global_search_intent_classifier import (
     warm_up as warm_up_intent_classifier,
 )
+from iris.reliability.watchdog import watchdog
 from iris.tracing import init_langfuse, shutdown_langfuse
 from iris.web.routers.faq_census import router as faq_census_router
 from iris.web.routers.health.health_endpoint import router as health_router
@@ -48,7 +50,10 @@ async def lifespan(_: FastAPI):
     )
 
     ingestion_worker.start()
+    watchdog.start(asyncio.get_running_loop())
     yield
+
+    watchdog.stop()
 
     ingestion_worker.stop()
     shutdown_langfuse()
@@ -90,7 +95,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 # Paths to exclude from request logging (health checks are too noisy)
-EXCLUDED_LOG_PATHS = {"/api/v1/health", "/api/v1/health/"}
+EXCLUDED_LOG_PATHS = {
+    "/api/v1/health",
+    "/api/v1/health/",
+    "/api/v1/health/liveness",
+}
 
 
 @app.middleware("http")
