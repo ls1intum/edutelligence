@@ -169,6 +169,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     # keep-alive frames from the watchdog (see iris.reliability).
     ANSWER_DEADLINE: bool = False
 
+    @staticmethod
+    def _closed_by_watchdog(state) -> bool:
+        """Whether the watchdog already closed this run; then no further model calls."""
+        return getattr(state.callback, "closed_by_watchdog", False) is True
+
     def __init__(self, *args, **kwargs):
         """
         Initialize the agent pipeline.
@@ -528,7 +533,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         step_count = 0
         for step in agent_executor.iter(params, callbacks=callbacks):
             step_count += 1
-            if getattr(state.callback, "closed_by_watchdog", False) is True:
+            if self._closed_by_watchdog(state):
                 # The student already got an error; stop spending tokens on this run.
                 logger.info("Stopping the agent loop: the watchdog closed this run")
                 break
@@ -903,8 +908,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         set_current_context(state.tracing_context)
         self._update_langfuse_trace(state.tracing_context)
 
-        state.callback.update()
-
         variant_id = getattr(variant, "id", "default")
         reliability = settings.reliability
         run_record = run_registry.register(
@@ -927,6 +930,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         )
 
         try:
+            # Registered first: a slow first status POST must not hide the run from the watchdog.
+            state.callback.update()
+            if self._closed_by_watchdog(state):
+                return
+
             # 1. Select the model, then prepare history, user query, LLM, prompt and tools
             selected_version = state.variant.model("chat", local)
             run_record.model_id = selected_version
@@ -988,7 +996,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 if state.partial_result_sender is not None:
                     state.partial_result_sender.stop()
 
-            if getattr(state.callback, "closed_by_watchdog", False) is True:
+            if self._closed_by_watchdog(state):
                 # The student already got an error: no compaction, citations or title calls.
                 logger.info(
                     "Pipeline stopped | pipeline=%s | the watchdog closed this run",
@@ -1004,6 +1012,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             # 7.3. Run post agent hook
             with timed_span(pipeline_name, "post_agent_hook", start_time):
                 self.post_agent_hook(state)
+            if self._closed_by_watchdog(state):
+                return
 
             # A session title generated after the final result was sent still
             # needs to reach the client; attach it to the trailing callback.

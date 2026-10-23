@@ -550,14 +550,18 @@ class ChatRunCallback(StatusCallback):
             self._reject_after_terminal("result")
             return False
         self._answer_post_in_flight = True
+        success = False
         try:
             success = self._send_chat_fields(
                 fields, attempts=self._DELIVERY_RETRY_ATTEMPTS
             )
         finally:
-            self._answer_post_in_flight = False
-        if not success:
-            self._undelivered_result_fields = fields
+            # Under the lock watchdog_finish() checks: it must never see the POST as done
+            # before an undelivered answer is recorded, or it would finish without it.
+            with self._running_update_lock:
+                if not success:
+                    self._undelivered_result_fields = fields
+                self._answer_post_in_flight = False
         return success
 
     def send_intermediate(

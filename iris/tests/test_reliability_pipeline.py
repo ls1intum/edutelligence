@@ -28,7 +28,9 @@ class _MiniPipeline(AbstractAgentPipeline):
         return "system"
 
 
-def _run(pipeline, callback, execute_agent, registry=None, seen=None):
+def _run(  # pylint: disable=too-many-arguments
+    pipeline, callback, execute_agent, registry=None, seen=None, post_hook=None
+):
     variant = SimpleNamespace(id="default", model=lambda _role, _local: "m")
     registry = registry if registry is not None else RunRegistry()
     seen = seen if seen is not None else {}
@@ -42,7 +44,9 @@ def _run(pipeline, callback, execute_agent, registry=None, seen=None):
         patch.object(pipeline, "create_tracing_context", return_value=None),
         patch.object(pipeline, "_update_langfuse_trace"),
         patch.object(pipeline, "execute_agent", side_effect=execute_agent),
-        patch.object(pipeline, "post_agent_hook") as post_agent_hook,
+        patch.object(
+            pipeline, "post_agent_hook", side_effect=post_hook
+        ) as post_agent_hook,
         patch.object(pipeline, "_start_compaction") as start_compaction,
     ):
 
@@ -102,3 +106,32 @@ def test_a_run_closed_by_the_watchdog_skips_the_post_agent_work():
 def test_only_the_chat_pipeline_has_an_answer_deadline():
     assert ChatPipeline.ANSWER_DEADLINE is True
     assert AbstractAgentPipeline.ANSWER_DEADLINE is False
+
+
+def test_a_run_closed_during_the_first_status_post_does_no_work():
+    callback = MagicMock(closed_by_watchdog=False)
+    registry, seen = RunRegistry(), {}
+
+    def slow_first_post(**_fields):
+        seen["runs_during_update"] = registry.snapshot()
+        callback.closed_by_watchdog = True
+
+    callback.update.side_effect = slow_first_post
+    execute_agent = MagicMock(return_value="answer")
+
+    _run(_MiniPipeline(), callback, execute_agent, registry=registry, seen=seen)
+
+    assert len(seen["runs_during_update"]) == 1  # visible to the watchdog already
+    execute_agent.assert_not_called()
+    assert not registry.snapshot()
+
+
+def test_a_run_closed_during_the_post_agent_hook_does_not_finish():
+    callback = MagicMock(closed_by_watchdog=False)
+
+    def closed_in_hook(state):  # pylint: disable=unused-argument
+        callback.closed_by_watchdog = True
+
+    _run(_MiniPipeline(), callback, lambda _s: "answer", post_hook=closed_in_hook)
+
+    callback.finish.assert_not_called()

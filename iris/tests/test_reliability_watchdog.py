@@ -34,8 +34,11 @@ from iris.web.status.status_update import ChatRunCallback, RunPhase  # noqa: E40
 
 
 class Clock:
-    def __init__(self, start=1000.0):
-        self.now = start
+    """Fake clock that starts at the real perf_counter, so times the callbacks stamp
+    themselves stay comparable to it on any machine."""
+
+    def __init__(self, start=None):
+        self.now = time.perf_counter() if start is None else start
 
     def __call__(self):
         return self.now
@@ -139,6 +142,7 @@ def test_a_slow_but_healthy_answer_is_left_alone(config, registry, clock):
 
     clock.now += 85
     callback.send_result("the answer")
+    callback._answer_sent_at = clock.now  # the callback stamps the real clock
     clock.now += 60
     watchdog._check_runs(clock.now)
 
@@ -646,3 +650,26 @@ def test_heartbeat_gives_up_when_the_update_lock_is_busy():
     finally:
         callback._running_update_lock.release()
     assert callback.watchdog_heartbeat() is True
+
+
+@pytest.mark.parametrize("entry", ["not a dict", 42, None, ["list"]])
+def test_a_history_with_foreign_entries_is_treated_as_unusable(config, entry):
+    guard = RestartGuard(config)
+    guard._dir.mkdir(parents=True)
+    (guard._dir / "restart-history.json").write_text(json.dumps([entry]))
+
+    assert guard.record_and_allow_self_restart(1_800_000_000.0, "stuck") is False
+    assert guard.record_unexpected_restart(1_800_000_000.0) == 1
+
+
+def test_start_survives_a_history_with_foreign_entries(config, registry, clock):
+    guard = RestartGuard(config)
+    guard._dir.mkdir(parents=True)
+    (guard._dir / "restart-history.json").write_text('["x"]')
+    guard.write_marker(MARKER_RUNNING)
+    watchdog = _watchdog(config, registry, clock)
+    watchdog._alert_async = MagicMock()
+
+    watchdog._on_process_start()
+
+    watchdog._alert_async.assert_called_once()

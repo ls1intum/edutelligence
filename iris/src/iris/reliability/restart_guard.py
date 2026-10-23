@@ -33,8 +33,10 @@ class RestartGuard:
         if not path.exists():
             return []
         data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, list):
-            raise ValueError("restart history is not a list")
+        if not isinstance(data, list) or not all(
+            isinstance(entry, dict) for entry in data
+        ):
+            raise ValueError("restart history is not a list of entries")
         return data
 
     def _write_history(self, history: list[dict]) -> None:
@@ -73,7 +75,7 @@ class RestartGuard:
             history.append({"at": now, "kind": "watchdog", "reason": reason})
             self._write_history(history)
             return True
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
             logger.exception("Self-restart refused: the restart history is unusable")
             return False
 
@@ -83,7 +85,7 @@ class RestartGuard:
             history = self._recent(self._read_history(), now)
             history.append({"at": now, "kind": "unexpected"})
             self._write_history(history)
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
             logger.exception("Could not record the unexpected restart")
             return 1
         return sum(
