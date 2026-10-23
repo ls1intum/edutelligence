@@ -306,10 +306,6 @@ def mcq_pre_agent_hook(
         lecture_id=lecture_id,
         allow_lecture_tool=getattr(state, "allow_lecture_tool", None),
     )
-    callback = getattr(state, "callback", None)
-    if getattr(callback, "closed_by_watchdog", False) is True:
-        # The watchdog closed the run during retrieval: start no generation.
-        return
 
     setattr(
         state,
@@ -321,7 +317,6 @@ def mcq_pre_agent_hook(
             result_storage=getattr(state, "mcq_result_storage", {}),
             count=count,
             lecture_content=lecture_content,
-            should_stop=lambda: getattr(callback, "closed_by_watchdog", False) is True,
         ),
     )
 

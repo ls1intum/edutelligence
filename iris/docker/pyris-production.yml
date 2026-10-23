@@ -15,9 +15,6 @@ services:
     volumes:
       - ${PYRIS_APPLICATION_YML_FILE}:/config/application.yml:ro
       - ${PYRIS_LLM_CONFIG_YML_FILE}:/config/llm_config.yml:ro
-      # Thread dumps, restart history, exit marker. Use an absolute host path outside the repo
-      # clone, so a redeploy does not delete them.
-      - ${PYRIS_DIAGNOSTICS_DIR:-./diagnostics}:/data/diagnostics
       - ${PYRIS_TRANSCRIPTION_DATA_DIR:-./transcription-data}:/data/transcription
     networks:
       - pyris

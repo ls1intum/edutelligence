@@ -218,7 +218,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     """
 
     PIPELINE_ID = "chat_pipeline"
-    ANSWER_DEADLINE = True
     ROLES = {"chat"}
     VARIANT_DEFS = [
         ("default", "Default", "Uses a smaller model for faster responses."),
@@ -371,8 +370,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             if _effective_chat_mode(state, self.chat_mode) == IrisChatMode.EXERCISE:
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
-            if self._closed_by_watchdog(state):
-                return state.result
 
             # Resolve the answer language once, before citations and quiz JSON are
             # added, so that citations, title and suggestions use the same language.
@@ -401,8 +398,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 )
 
             result = state.result
-            if self._closed_by_watchdog(state):
-                return result
 
             # Send the result first so the user sees the message immediately
             with timed_span("ChatPipeline", "final_result_callback", state.start_time):
@@ -419,8 +414,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 self.chat_mode.value,
                 (time.perf_counter() - state.start_time) * 1000,
             )
-            if self._closed_by_watchdog(state):
-                return result
 
             # The session title is not part of the answer, so it is generated
             # only after the final result was delivered. It reaches the client
@@ -434,8 +427,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     )
             except Exception as e:
                 logger.error("Error generating deferred session title", exc_info=e)
-            if self._closed_by_watchdog(state):
-                return result
 
             # Generate and send suggestions separately (async from user's perspective)
             if self.chat_mode in [
@@ -872,8 +863,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     language=answer_language,
                     base_url=base_url,
                 )
-            if self._closed_by_watchdog(state):
-                return result
 
             # Add lecture content citations. Merge the content the student is
             # currently viewing (stored before the agent ran) with whatever the

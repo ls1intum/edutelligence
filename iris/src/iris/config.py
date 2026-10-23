@@ -245,69 +245,6 @@ class LectureIngestionSettings(BaseModel):
         return self
 
 
-class ReliabilitySettings(BaseModel):
-    """Chat answer deadlines and the stall watchdog.
-
-    A chat run that has not sent its answer by its deadline is failed towards Artemis, so the
-    student sees an error instead of an endless wait. The watchdog restarts the process only on
-    direct signs that it is broken (a model client's pool lock that stays held, garbage
-    collection that stopped, a stuck event loop), never on slow models.
-    """
-
-    enabled: bool = Field(default=True)
-    chat_deadline_seconds: float = Field(
-        gt=0,
-        default=120.0,
-        description="Time from the start of a cloud chat run (default variant) until its "
-        "answer must be sent. Prod 10-20..10-23: p99 44 s, max 102 s.",
-    )
-    chat_advanced_deadline_seconds: float = Field(
-        gt=0,
-        default=270.0,
-        description="Same for the advanced variant. Prod: p99 73 s, max 257 s.",
-    )
-    chat_local_deadline_seconds: float = Field(
-        gt=0,
-        default=360.0,
-        description="Same for local models, which can wait for a sleeping GPU lane.",
-    )
-    post_answer_grace_seconds: float = Field(
-        gt=0,
-        default=120.0,
-        description="After the answer was sent, time left for title, suggestions and "
-        "compaction before the watchdog closes the run as finished.",
-    )
-    heartbeat_after_seconds: float = Field(
-        gt=0,
-        default=60.0,
-        description="Re-send RUNNING for a chat run that sent no status for this long, so "
-        "Artemis does not drop the job (it does so 300 s after the last status).",
-    )
-    tick_seconds: float = Field(default=5.0, gt=0)
-    startup_grace_seconds: float = Field(
-        gt=0,
-        default=300.0,
-        description="The garbage-collection and event-loop checks start after this.",
-    )
-    self_restart: bool = Field(
-        default=True,
-        description="Exit the process when it is broken, so Docker restarts it.",
-    )
-    restart_min_interval_seconds: float = Field(gt=0, default=1800.0)
-    restart_max_per_window: int = Field(default=2, ge=1)
-    restart_window_seconds: float = Field(gt=0, default=21600.0)
-    exit_timer_seconds: float = Field(
-        gt=0,
-        default=60.0,
-        description="Hard limit for the steps before a self-restart exit.",
-    )
-    diagnostics_dir: str = Field(
-        default="/data/diagnostics",
-        description="Thread dumps, the restart history and the exit marker. Mount it from "
-        "the host so it survives a redeploy.",
-    )
-
-
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -324,7 +261,11 @@ class Settings(BaseModel):
     lecture_ingestion: LectureIngestionSettings = Field(
         default_factory=LectureIngestionSettings
     )
-    reliability: ReliabilitySettings = Field(default_factory=ReliabilitySettings)
+    watchdog_enabled: bool = Field(
+        default=True,
+        description="Restart Iris when a model client's connection pool deadlocks "
+        "(see iris.watchdog).",
+    )
     global_search_rerank_floor: float = Field(
         default=0.10,
         description="Junk floor for global-search candidates: the score below "

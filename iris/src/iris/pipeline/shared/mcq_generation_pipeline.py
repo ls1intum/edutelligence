@@ -4,7 +4,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
 from threading import Thread
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import SystemMessage
@@ -22,20 +22,8 @@ from iris.web.status.status_update import StatusCallback
 logger = get_logger(__name__)
 
 
-class McqGenerationStopped(Exception):
-    """The run this generation belongs to was closed; no further model calls."""
-
-
-def _never_stop() -> bool:
-    return False
-
-
 class McqGenerationPipeline(SubPipeline):
     """Subpipeline that generates MCQ questions as JSON using a focused prompt."""
-
-    # Checked before every model call; set per instance for a background generation
-    # (run_in_thread). A class default, so instances built without __init__ have it too.
-    _should_stop: Callable[[], bool] = staticmethod(_never_stop)
 
     def __init__(self, local: bool = False):
         super().__init__(implementation_id="mcq_generation_pipeline")
@@ -80,7 +68,6 @@ class McqGenerationPipeline(SubPipeline):
         :param lecture_content: Pre-retrieved lecture content to base questions on
         :return: JSON string with MCQ data
         """
-        self._raise_if_stopped(callback)
         if callback:
             callback.update()
 
@@ -98,20 +85,12 @@ class McqGenerationPipeline(SubPipeline):
         if callback:
             callback.update()
 
-        # The status POSTs above can each wait long; check again right before the paid call.
-        self._raise_if_stopped(callback)
         response = self.pipeline.invoke([SystemMessage(content=rendered_prompt)])
         self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE)
 
         # Validate JSON
         result = self._extract_and_validate_json(response)
         return result
-
-    def _raise_if_stopped(self, callback: Optional[StatusCallback]) -> None:
-        if self._should_stop() or (
-            getattr(callback, "closed_by_watchdog", False) is True
-        ):
-            raise McqGenerationStopped()
 
     def run_in_thread(
         self,
@@ -121,7 +100,6 @@ class McqGenerationPipeline(SubPipeline):
         result_storage: dict,
         count: int = 1,
         lecture_content: Optional[str] = None,
-        should_stop: Optional[Callable[[], bool]] = None,
     ) -> Thread:
         """
         Run MCQ generation in a background thread.
@@ -140,10 +118,8 @@ class McqGenerationPipeline(SubPipeline):
         :param result_storage: Mutable dict for inter-thread communication
         :param count: Number of questions to generate (1 = single, >1 = one-by-one)
         :param lecture_content: Pre-retrieved lecture content to base questions on
-        :param should_stop: Checked before every model call; True stops the generation
         :return: The started Thread handle
         """
-        self._should_stop = should_stop or _never_stop
         q: Queue = Queue()
         result_storage["queue"] = q
         result_storage["count"] = count
@@ -170,8 +146,6 @@ class McqGenerationPipeline(SubPipeline):
                     )
                     result_storage["mcq_json"] = result
                     q.put(("mcq", result))
-            except McqGenerationStopped:
-                logger.info("MCQ generation stopped: the run was closed")
             except Exception as e:
                 logger.error("MCQ generation failed in thread", exc_info=e)
                 result_storage["error"] = str(e)
@@ -208,8 +182,6 @@ class McqGenerationPipeline(SubPipeline):
             subtopics = self._extract_subtopics(
                 command, chat_history, count, lecture_content=lecture_content
             )
-        except McqGenerationStopped:
-            return
         except Exception as e:
             logger.warning(
                 "Subtopic extraction failed, falling back to sequential",
@@ -233,8 +205,6 @@ class McqGenerationPipeline(SubPipeline):
 
         # Step 2: Create isolated worker pipelines (each has its own LLM instance)
         workers = [McqGenerationPipeline(local=self.local) for _ in range(count)]
-        for worker in workers:
-            worker._should_stop = self._should_stop  # pylint: disable=protected-access
         # Each worker needs its OWN context copy — a single Context.run()
         # cannot be called concurrently from multiple threads.
         worker_contexts = [contextvars.copy_context() for _ in range(count)]
@@ -274,8 +244,6 @@ class McqGenerationPipeline(SubPipeline):
                 try:
                     result = future.result()
                     successful_results.append(result)
-                except McqGenerationStopped:
-                    pass
                 except Exception as e:
                     logger.error(
                         "MCQ generation failed for question %d of %d",
@@ -289,8 +257,6 @@ class McqGenerationPipeline(SubPipeline):
         if missing > 0:
             logger.info("Retrying %d missing MCQ question(s) sequentially", missing)
             for i in range(missing):
-                if self._should_stop():
-                    break
                 try:
                     result = self(
                         command=f"{command}\n\nGenerate exactly 1 question.",
@@ -300,8 +266,6 @@ class McqGenerationPipeline(SubPipeline):
                         lecture_content=lecture_content,
                     )
                     successful_results.append(result)
-                except McqGenerationStopped:
-                    break
                 except Exception as e:
                     logger.error("MCQ retry failed", exc_info=e)
 
@@ -323,8 +287,6 @@ class McqGenerationPipeline(SubPipeline):
         lecture_content: Optional[str] = None,
     ) -> list[str]:
         """Use a fast LLM call to extract N distinct subtopics for question generation."""
-        if self._should_stop():
-            raise McqGenerationStopped()
         chat_history_text = self._serialize_chat_history(chat_history)
 
         prompt = (
@@ -378,8 +340,6 @@ class McqGenerationPipeline(SubPipeline):
         previous_questions: list[str] = []
 
         for i in range(count):
-            if self._should_stop():
-                break
             dedup_context = ""
             if previous_questions:
                 dedup_context = (
@@ -407,8 +367,6 @@ class McqGenerationPipeline(SubPipeline):
                 except (json.JSONDecodeError, KeyError):
                     pass
                 q.put(("mcq", result))
-            except McqGenerationStopped:
-                break
             except Exception as e:
                 logger.error(
                     "MCQ generation failed for question %d of %d",

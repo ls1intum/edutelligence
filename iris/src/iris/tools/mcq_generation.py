@@ -3,10 +3,7 @@
 from typing import Callable, Dict, List, Optional
 
 from ..common.pyris_message import PyrisMessage
-from ..pipeline.shared.mcq_generation_pipeline import (
-    McqGenerationPipeline,
-    McqGenerationStopped,
-)
+from ..pipeline.shared.mcq_generation_pipeline import McqGenerationPipeline
 from ..web.status.status_update import StatusCallback
 
 
@@ -53,20 +50,13 @@ def create_tool_generate_mcq_questions(
         lecture_content = (
             lecture_content_supplier() if lecture_content_supplier else None
         )
-        stopped = "This run was stopped; no questions were generated."
-        if getattr(callback, "closed_by_watchdog", False) is True:
-            # Closed during the lecture retrieval: the student already got the timeout.
-            return stopped
-        try:
-            result_json = mcq_pipeline(
-                command=command,
-                chat_history=chat_history,
-                language=language,
-                callback=callback,
-                lecture_content=lecture_content,
-            )
-        except McqGenerationStopped:
-            return stopped
+        result_json = mcq_pipeline(
+            command=command,
+            chat_history=chat_history,
+            language=language,
+            callback=callback,
+            lecture_content=lecture_content,
+        )
         mcq_result_storage["mcq_json"] = result_json
         return "[MCQ_RESULT]"
 

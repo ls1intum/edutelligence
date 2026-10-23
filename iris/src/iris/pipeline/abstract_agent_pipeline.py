@@ -1,5 +1,3 @@
-import functools
-import threading
 import time
 from abc import ABC, abstractmethod
 from threading import Thread
@@ -8,14 +6,13 @@ from typing import Any, Callable, Generic, List, Optional, TypeVar
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 
-from iris.common.logging_config import get_logger, get_request_id
+from iris.common.logging_config import get_logger
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.reply_language import reply_language
 from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.config import settings
 from iris.domain.data.compaction_dto import CompactionDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.status.suggested_context_dto import SuggestedContextDTO
@@ -40,7 +37,6 @@ from iris.pipeline.shared.compaction import (
     without_compactions,
 )
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
-from iris.reliability.run_registry import RunRecord, chat_deadline_seconds, run_registry
 from iris.tracing import (
     TracingContext,
     clear_current_context,
@@ -49,8 +45,9 @@ from iris.tracing import (
     set_current_context,
 )
 from iris.vector_database.database import VectorDatabase
+from iris.watchdog import track_run, untrack_run
 from iris.web.status.partial_result_sender import PartialResultSender
-from iris.web.status.status_update import RunPhase, StatusCallback
+from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
 
@@ -156,25 +153,6 @@ def _intermediate_action_text(action: Any) -> str:
     return _visible_content_text(getattr(message, "content", "")).strip()
 
 
-STOPPED_TOOL_RESULT = "This run was stopped; do not call further tools."
-
-
-def _stop_when_closed(tool: Callable, callback: Any) -> Callable:
-    """Make a tool do nothing once the watchdog closed the run.
-
-    The agent loop checks between steps, but one step can run several tools, and each may
-    start model calls (retrieval, MCQ generation) after the student already got the timeout.
-    """
-
-    @functools.wraps(tool)
-    def guarded_tool(*args, **kwargs):
-        if getattr(callback, "closed_by_watchdog", False) is True:
-            return STOPPED_TOOL_RESULT
-        return tool(*args, **kwargs)
-
-    return guarded_tool
-
-
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     """
     Abstract base class for agent pipelines.
@@ -184,16 +162,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     - CAN override: Optional hooks/utilities to customize behavior.
     - MUST NOT override: Internal implementation methods (private with leading underscore or __call__).
     """
-
-    # Whether a student waits for this run's answer: then the run gets an answer deadline and
-    # keep-alive frames from the watchdog (see iris.reliability).
-    ANSWER_DEADLINE: bool = False
-
-    @staticmethod
-    def _closed_by_watchdog(state) -> bool:
-        """Whether the watchdog already closed this run; then no further model calls."""
-        callback = getattr(state, "callback", None)
-        return getattr(callback, "closed_by_watchdog", False) is True
 
     def __init__(self, *args, **kwargs):
         """
@@ -554,10 +522,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         step_count = 0
         for step in agent_executor.iter(params, callbacks=callbacks):
             step_count += 1
-            if self._closed_by_watchdog(state):
-                # The student already got an error; stop spending tokens on this run.
-                logger.info("Stopping the agent loop: the watchdog closed this run")
-                break
 
             # Log tool calls from intermediate steps. The real AgentExecutorIterator
             # yields the SINGULAR "intermediate_step" key; tests historically used the
@@ -892,12 +856,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         # what it spent up to that point, and never the leftovers of the instance's previous run.
         state.tokens = []
         self.tokens = state.tokens
-        attach_usage = getattr(callback, "attach_usage", None)
-        if callable(attach_usage):
-            attach_usage(state.tokens)
         state.dto = dto
-        # Connected after admission: the first connection can block on schema setup.
-        state.db = None
+        state.db = VectorDatabase()
         state.variant = variant
         state.callback = callback
         state.message_history = []
@@ -933,44 +893,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         set_current_context(state.tracing_context)
         self._update_langfuse_trace(state.tracing_context)
 
-        variant_id = getattr(variant, "id", "default")
-        reliability = settings.reliability
-        run_record = RunRecord(
-            # The request id from the log lines, not the run token (a credential).
-            run_id=get_request_id() or "-",
-            pipeline=pipeline_name,
-            variant=variant_id,
-            local=local,
-            callback=callback,
-            thread_id=threading.get_ident(),
-            started_at=start_time,
-            deadline_seconds=(
-                chat_deadline_seconds(reliability, variant_id, local)
-                if self.ANSWER_DEADLINE and reliability.enabled
-                else None
-            ),
-            is_chat=self.ANSWER_DEADLINE,
-        )
-        refusal = run_registry.admit(run_record)
-        if refusal is not None:
-            # Iris is about to restart; a run started now would be cut off without a word.
-            clear_current_context()
-            callback.fail(refusal[0], code=refusal[1])
-            return
+        state.callback.update()
 
+        track_run(callback)
         try:
-            # Registered first: a slow database connection or first status POST must not hide
-            # the run from the watchdog.
-            state.db = VectorDatabase()
-            if self._closed_by_watchdog(state):
-                return
-            state.callback.update()
-            if self._closed_by_watchdog(state):
-                return
-
             # 1. Select the model, then prepare history, user query, LLM, prompt and tools
             selected_version = state.variant.model("chat", local)
-            run_record.model_id = selected_version
             if not selected_version:
                 env = "local" if local else "cloud"
                 raise ValueError(
@@ -1003,10 +931,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
             # Load tools for both local and cloud models
             with timed_span(pipeline_name, "build_tools", start_time):
-                state.tools = [
-                    _stop_when_closed(tool, state.callback)
-                    for tool in self.get_tools(state)
-                ]
+                state.tools = self.get_tools(state)
                 if state.compaction_settings is not None:
                     budget = ToolOutputBudget(
                         state.compaction_settings.tool_output_result_bytes,
@@ -1019,13 +944,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             else:
                 logger.info("Using cloud model with tool calling support")
 
-            # 7.1. Run pre agent hook (it may start MCQ generation)
-            if self._closed_by_watchdog(state):
-                return
+            # 7.1. Run pre agent hook
             self.pre_agent_hook(state)
-            if self._closed_by_watchdog(state):
-                # Closed while the run was being prepared: do not start the agent.
-                return
 
             # 7.2. Run the agent with the provided DTO
             if self.should_stream_agent_response(state):
@@ -1037,14 +957,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 if state.partial_result_sender is not None:
                     state.partial_result_sender.stop()
 
-            if self._closed_by_watchdog(state):
-                # The student already got an error: no compaction, citations or title calls.
-                logger.info(
-                    "Pipeline stopped | pipeline=%s | the watchdog closed this run",
-                    pipeline_name,
-                )
-                return
-
             # Runs next to the post agent hook, off the answer's path.
             state.compaction_thread = self._start_compaction(
                 state, state.compaction_holder
@@ -1053,8 +965,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             # 7.3. Run post agent hook
             with timed_span(pipeline_name, "post_agent_hook", start_time):
                 self.post_agent_hook(state)
-            if self._closed_by_watchdog(state):
-                return
 
             # A session title generated after the final result was sent still
             # needs to reach the client; attach it to the trailing callback.
@@ -1082,20 +992,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 duration_ms,
                 len(state.tools),
             )
-        except BaseException:
-            if getattr(callback, "phase", None) is not RunPhase.TERMINAL:
-                # The caller sends the FAILED after this returns; stay visible until then.
-                run_record.orphaned = True
-            raise
         finally:
-            # A terminal frame still on its way (the watchdog's own, too) must stay visible
-            # to a restart, so the watchdog drops the run once it landed. Only a running
-            # watchdog cleans up, so without one the run goes at once.
-            if getattr(callback, "terminal_post_in_flight", False) is True:
-                run_record.orphaned = True
-            if run_record.orphaned and reliability.enabled:
-                run_record.orphaned_at = time.perf_counter()
-            else:
-                run_registry.unregister(run_record)
+            untrack_run(callback)
             # Clean up tracing context to prevent memory leaks
             clear_current_context()

@@ -1,8 +1,7 @@
 import time
 from concurrent.futures import Future
-from enum import Enum
 from threading import Lock
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import requests
 from sentry_sdk import capture_exception, capture_message
@@ -45,20 +44,6 @@ logger = get_logger(__name__)
 # "not applied" rather than a transport error. Lower this only after Artemis' own timeout has been
 # lowered and deployed — the other order makes Iris give up while an answer is still on its way.
 COMMAND_TIMEOUT_SECONDS = 10
-
-# The watchdog's own terminal sends must finish quickly: it closes runs whose pipeline thread is
-# stuck, often many at once, and Artemis drops a job 300 s after its last status anyway.
-WATCHDOG_POST_TIMEOUT_SECONDS = 10
-WATCHDOG_POST_ATTEMPTS = 2
-
-
-class RunPhase(str, Enum):
-    """Where a run stands towards Artemis. Changes only forward, under the update lock."""
-
-    RUNNING = "running"
-    # The final answer is being or has been sent; only a FINISHED may follow.
-    ANSWER_SENDING = "answer_sending"
-    TERMINAL = "terminal"
 
 
 class StatusCallback:
@@ -110,17 +95,7 @@ class StatusCallback:
         self.url = url
         self.run_id = run_id
         self.status = status
-        self._phase = RunPhase.RUNNING
-        self._closed_by_watchdog = False
-        self._answer_sent_at: Optional[float] = None
-        self._answer_post_in_flight = False
-        # The pipeline's own terminal frame is on its way (it may carry an undelivered
-        # answer); the watchdog lets it land before a restart.
-        self._terminal_post_in_flight = False
-        self._last_frame_at = time.perf_counter()
-        # The pipeline's running usage list, so a watchdog terminal frame can still bill the
-        # calls a stuck or slow run already made (see attach_usage).
-        self._usage_source: Optional[list[TokenUsageDTO]] = None
+        self._terminal_sent = False
         self._running_update_executor: Optional[TracedThreadPoolExecutor] = None
         self._running_update_futures: list[Future] = []
         self._running_update_lock = Lock()
@@ -157,7 +132,6 @@ class StatusCallback:
                 (time.perf_counter() - post_start) * 1000,
             )
             resp.raise_for_status()
-            self._last_frame_at = time.perf_counter()
             return True
         except requests.exceptions.RequestException as e:
             duration_ms = (time.perf_counter() - post_start) * 1000
@@ -190,172 +164,17 @@ class StatusCallback:
             )
         return self._running_update_executor
 
-    def _shutdown_running_update_executor(self, cancel_queued: bool = False) -> None:
+    def _shutdown_running_update_executor(self) -> None:
         """Stop the async running-update executor after terminal delivery."""
         with self._running_update_lock:
             executor = self._running_update_executor
             self._running_update_executor = None
-        if executor is None:
-            return
-        if cancel_queued:
-            executor.shutdown(wait=False, cancel_futures=True)
-        else:
+        if executor is not None:
             executor.shutdown(wait=False)
 
-    @property
-    def _terminal_sent(self) -> bool:
-        return self._phase is RunPhase.TERMINAL
-
-    @property
-    def phase(self) -> RunPhase:
-        return self._phase
-
-    @property
-    def closed_by_watchdog(self) -> bool:
-        return self._closed_by_watchdog
-
-    @property
-    def answer_sent_at(self) -> Optional[float]:
-        """``time.perf_counter()`` when the final answer send started, if it did."""
-        return self._answer_sent_at
-
-    @property
-    def answer_post_in_flight(self) -> bool:
-        return self._answer_post_in_flight
-
-    @property
-    def terminal_post_in_flight(self) -> bool:
-        return self._terminal_post_in_flight
-
-    def seconds_since_last_frame(self, now: float) -> float:
-        return now - self._last_frame_at
-
-    def _claim_terminal(self, *, by_watchdog: bool = False) -> bool:
-        """Move to TERMINAL unless another send got there first; True if this call did."""
+    def _mark_terminal_sent(self) -> None:
         with self._running_update_lock:
-            if self._phase is RunPhase.TERMINAL:
-                return False
-            self._phase = RunPhase.TERMINAL
-            self._closed_by_watchdog = by_watchdog
-            self._terminal_post_in_flight = not by_watchdog
-            return True
-
-    def _end_terminal_post(self) -> None:
-        with self._running_update_lock:
-            self._terminal_post_in_flight = False
-
-    def _enter_answer_sending(self) -> bool:
-        """Mark that the final answer is on its way; False once the run is terminal.
-
-        The in-flight flag is set in the same step as the phase, so watchdog_finish() can never
-        see ANSWER_SENDING without the answer POST it must wait for.
-        """
-        with self._running_update_lock:
-            if self._phase is RunPhase.TERMINAL:
-                return False
-            if self._phase is RunPhase.RUNNING:
-                self._phase = RunPhase.ANSWER_SENDING
-                self._answer_sent_at = time.perf_counter()
-            self._answer_post_in_flight = True
-            return True
-
-    def attach_usage(self, tokens: list[TokenUsageDTO]) -> None:
-        """Let watchdog terminal frames report the usage the pipeline accrues in ``tokens``."""
-        self._usage_source = tokens
-
-    def _accrued_usage(self) -> list[TokenUsageDTO]:
-        return list(self._usage_source or [])
-
-    def _on_watchdog_terminal_delivered(self) -> None:
-        """Hook for callbacks that track which usage Artemis already has."""
-
-    def watchdog_fail(self, message: str, code: str) -> bool:
-        """FAILED from the watchdog: only while no answer has been sent, bounded in time."""
-        with self._running_update_lock:
-            if self._phase is not RunPhase.RUNNING:
-                return False
-            self._phase = RunPhase.TERMINAL
-            self._closed_by_watchdog = True
-            self._terminal_post_in_flight = True
-        error = StatusErrorDTO(message=message, code=code)
-        return self._send_watchdog_terminal(
-            lambda: self._watchdog_payload(RunStateEnum.FAILED, error)
-        )
-
-    def watchdog_finish(self) -> bool:
-        """FINISHED from the watchdog for a run whose answer went out but that never ended.
-
-        Not while the answer POST is still in flight: Artemis would remove the job and then
-        reject the answer.
-        """
-        with self._running_update_lock:
-            if (
-                self._phase is not RunPhase.ANSWER_SENDING
-                or self._answer_post_in_flight
-            ):
-                return False
-            self._phase = RunPhase.TERMINAL
-            self._closed_by_watchdog = True
-            self._terminal_post_in_flight = True
-        return self._send_watchdog_terminal(
-            lambda: self._watchdog_payload(RunStateEnum.FINISHED, None)
-        )
-
-    def watchdog_heartbeat(self) -> bool:
-        """Queue a bare RUNNING frame, which keeps the Artemis job alive.
-
-        Gives up instead of waiting when the update lock is busy, so the watchdog never blocks.
-        """
-        if not self._running_update_lock.acquire(timeout=1):
-            return False
-        try:
-            if self._phase is not RunPhase.RUNNING:
-                return False
-            self._last_frame_at = time.perf_counter()
-            future = self._get_running_update_executor_locked().submit(
-                self._send_status_payload,
-                {"runState": RunStateEnum.RUNNING.value},
-                async_running_update=True,
-            )
-            self._running_update_futures.append(future)
-            return True
-        finally:
-            self._running_update_lock.release()
-
-    def _watchdog_payload(
-        self, run_state: RunStateEnum, error: Optional[StatusErrorDTO]
-    ) -> dict[str, Any]:
-        # A copy: the stuck pipeline thread still owns self.status.
-        update: dict[str, Any] = {"run_state": run_state, "error": error}
-        if self._usage_source is not None:
-            update["tokens"] = self._accrued_usage()
-        return self.status.model_copy(update=update).model_dump(by_alias=True)
-
-    def _send_watchdog_terminal(
-        self, build_payload: Callable[[], dict[str, Any]]
-    ) -> bool:
-        """Send the watchdog's terminal frame; the terminal-post flag is set by the caller's claim."""
-        try:
-            payload = build_payload()
-            for attempt in range(WATCHDOG_POST_ATTEMPTS):
-                try:
-                    resp = self._post_status_payload(
-                        payload, timeout=WATCHDOG_POST_TIMEOUT_SECONDS
-                    )
-                    resp.raise_for_status()
-                    self._on_watchdog_terminal_delivered()
-                    return True
-                except requests.exceptions.RequestException as e:
-                    logger.warning(
-                        "Watchdog status send failed (attempt %d): %s", attempt + 1, e
-                    )
-                    if attempt < WATCHDOG_POST_ATTEMPTS - 1:
-                        time.sleep(1)
-            return False
-        finally:
-            # Frames still queued would only arrive after the terminal one.
-            self._shutdown_running_update_executor(cancel_queued=True)
-            self._end_terminal_post()
+            self._terminal_sent = True
 
     def _enqueue_running_update(self, payload: Optional[dict[str, Any]] = None) -> None:
         """Queue a running status update without blocking the pipeline."""
@@ -428,18 +247,18 @@ class StatusCallback:
 
     def finish(self, **fields) -> bool:
         """Synchronously post a FINISHED terminal status update."""
-        if not self._claim_terminal():
+        if self._terminal_sent:
             self._reject_after_terminal("finish")
             return False
+        self.status.run_state = RunStateEnum.FINISHED
+        self.status.error = None
+        self._apply_fields(fields)
+        self._mark_terminal_sent()
+        self._drain_running_updates()
         try:
-            self.status.run_state = RunStateEnum.FINISHED
-            self.status.error = None
-            self._apply_fields(fields)
-            self._drain_running_updates()
             return self.on_status_update()
         finally:
             self._shutdown_running_update_executor()
-            self._end_terminal_post()
 
     def fail(
         self,
@@ -449,20 +268,20 @@ class StatusCallback:
         **fields,
     ) -> bool:
         """Synchronously post a FAILED terminal status update."""
-        if not self._claim_terminal():
+        if self._terminal_sent:
             self._reject_after_terminal("fail")
             return False
+        self.status.run_state = RunStateEnum.FAILED
+        self.status.error = StatusErrorDTO(message=message, code=code)
+        if tokens is not None:
+            self.status.tokens = tokens
+        self._apply_fields(fields)
+        self._mark_terminal_sent()
+        self._drain_running_updates()
         try:
-            self.status.run_state = RunStateEnum.FAILED
-            self.status.error = StatusErrorDTO(message=message, code=code)
-            if tokens is not None:
-                self.status.tokens = tokens
-            self._apply_fields(fields)
-            self._drain_running_updates()
             success = self.on_status_update()
         finally:
             self._shutdown_running_update_executor()
-            self._end_terminal_post()
         exception = fields.get("exception")
         if exception:
             capture_exception(exception)
@@ -479,10 +298,6 @@ class StatusCallback:
         message = (
             f"Rejected status {operation} for run {self.run_id} after terminal update"
         )
-        if self._closed_by_watchdog:
-            # Expected: the watchdog closed a run whose pipeline thread came back later.
-            logger.info("%s (closed by the watchdog)", message)
-            return
         logger.warning(message)
         capture_message(message)
 
@@ -558,8 +373,6 @@ class ChatRunCallback(StatusCallback):
         # every send, but Artemis adds each send's tokens to the trace, so each usage
         # object must be delivered exactly once.
         self._delivered_tokens: list[TokenUsageDTO] = []
-        # Usage the watchdog's terminal frame carries; marked delivered once it went out.
-        self._watchdog_tokens: list[TokenUsageDTO] = []
 
     def activity_snapshot(self, activities: list[ActivityDTO], seq: int) -> None:
         payload = self._payload(
@@ -589,21 +402,9 @@ class ChatRunCallback(StatusCallback):
         if suggested_context is not None:
             fields["suggested_context"] = suggested_context
 
-        if not self._enter_answer_sending():
-            self._reject_after_terminal("result")
-            return False
-        success = False
-        try:
-            success = self._send_chat_fields(
-                fields, attempts=self._DELIVERY_RETRY_ATTEMPTS
-            )
-        finally:
-            # Under the lock watchdog_finish() checks: it must never see the POST as done
-            # before an undelivered answer is recorded, or it would finish without it.
-            with self._running_update_lock:
-                if not success:
-                    self._undelivered_result_fields = fields
-                self._answer_post_in_flight = False
+        success = self._send_chat_fields(fields, attempts=self._DELIVERY_RETRY_ATTEMPTS)
+        if not success:
+            self._undelivered_result_fields = fields
         return success
 
     def send_intermediate(
@@ -697,51 +498,10 @@ class ChatRunCallback(StatusCallback):
         error: Optional[StatusErrorDTO] = None,
         attempts: int = 1,
     ) -> bool:
-        terminal_send = run_state != RunStateEnum.RUNNING
-        if terminal_send and not self._claim_terminal():
+        if self._terminal_sent:
             self._reject_after_terminal(run_state.value.lower())
             return False
 
-        # A RUNNING frame that retries an undelivered answer is an answer POST too: the
-        # watchdog must not finish the run (and bill its usage again) until it is booked.
-        # Taken before the answer is read, together with a fresh TERMINAL check.
-        # send_result() already holds the flag for its own sends.
-        owns_answer_flag = False
-        if not terminal_send:
-            with self._running_update_lock:
-                if self._phase is RunPhase.TERMINAL:
-                    rejected = True
-                else:
-                    rejected = False
-                    if (
-                        self._undelivered_result_fields is not None
-                        and not self._answer_post_in_flight
-                    ):
-                        self._answer_post_in_flight = True
-                        owns_answer_flag = True
-            if rejected:
-                self._reject_after_terminal(run_state.value.lower())
-                return False
-
-        try:
-            return self._post_chat_fields(
-                fields, run_state, error, attempts, terminal_send
-            )
-        finally:
-            if owns_answer_flag:
-                with self._running_update_lock:
-                    self._answer_post_in_flight = False
-            if terminal_send:
-                self._end_terminal_post()
-
-    def _post_chat_fields(  # pylint: disable=too-many-arguments
-        self,
-        fields: dict[str, Any],
-        run_state: RunStateEnum,
-        error: Optional[StatusErrorDTO],
-        attempts: int,
-        terminal_send: bool,
-    ) -> bool:
         fields, carried_result = self._merge_undelivered_result(fields)
         new_tokens: list[TokenUsageDTO] = []
         if "tokens" in fields:
@@ -758,6 +518,9 @@ class ChatRunCallback(StatusCallback):
 
         payload = self._payload(run_state=run_state, error=error, **fields)
 
+        terminal_send = run_state != RunStateEnum.RUNNING
+        if terminal_send:
+            self._mark_terminal_sent()
         self._drain_running_updates()
 
         try:
@@ -789,23 +552,6 @@ class ChatRunCallback(StatusCallback):
         if self._undelivered_result_fields is None:
             return fields, False
         return {**self._undelivered_result_fields, **fields}, True
-
-    def _watchdog_payload(
-        self, run_state: RunStateEnum, error: Optional[StatusErrorDTO]
-    ) -> dict[str, Any]:
-        fields, _ = self._merge_undelivered_result({})
-        # Usage of an undelivered answer plus whatever the run accrued since, each once.
-        candidates = list(fields.get("tokens") or [])
-        for token in self._accrued_usage():
-            if not any(token is known for known in candidates):
-                candidates.append(token)
-        self._watchdog_tokens = self._undelivered_tokens(candidates)
-        fields = {**fields, "tokens": self._watchdog_tokens}
-        return self._payload(run_state=run_state, error=error, **fields)
-
-    def _on_watchdog_terminal_delivered(self) -> None:
-        self._delivered_tokens.extend(self._watchdog_tokens)
-        self._undelivered_result_fields = None
 
     @staticmethod
     def _payload(

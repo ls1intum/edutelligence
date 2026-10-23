@@ -134,55 +134,12 @@ docker compose -f <compose-file> logs -f pyris-app
 
 The log verbosity for third-party libraries is configured in `iris/src/iris/common/logging_config.py`.
 
-## Watchdog and Alerts
+## Watchdog
 
-A watchdog thread inside Iris (`iris/src/iris/reliability/`) protects chat runs and the process.
+A watchdog thread (`iris/src/iris/watchdog.py`) restarts Iris when a model client's connection pool deadlocks: every request on that model would otherwise hang without any error. It checks the pool locks every 5 seconds. When a lock stays held on two checks in a row, it logs a thread dump, fails the open runs ("Iris had to restart"), sends an alert and exits; Docker (`restart: unless-stopped`) starts Iris again. At most one restart per 30 minutes; after that, Iris stays up and sends an urgent alert so someone restarts it by hand. Set `watchdog_enabled: false` in `application.yml` to turn it off.
 
-### Chat Answer Deadlines
+Alerts go to [Pushover](https://pushover.net/) when `PYRIS_PUSHOVER_APP_TOKEN` and `PYRIS_PUSHOVER_USER_KEY` are set (for example in the compose env file); `PYRIS_ALERT_NAME` names the instance. Without them, alerts are only logged.
 
-A chat run that has not sent its answer in time is failed towards Artemis, so the student sees an error instead of an endless wait.
-
-| Path                    | Deadline | Setting                                      |
-| ----------------------- | -------- | -------------------------------------------- |
-| Cloud, default variant  | 120 s    | `reliability.chat_deadline_seconds`          |
-| Cloud, advanced variant | 270 s    | `reliability.chat_advanced_deadline_seconds` |
-| Local models            | 360 s    | `reliability.chat_local_deadline_seconds`    |
-
-The deadline runs from the start of the run until the answer is sent. After that, the run has `reliability.post_answer_grace_seconds` (120 s) for its title, suggestions and compaction; then the watchdog closes it as finished. Artemis drops a chat job 300 s after its last status, so the watchdog re-sends `RUNNING` for a chat run that was quiet for 60 s.
-
-### Self-Restart
-
-The watchdog restarts the process only on direct signs that it is broken, never because a model is slow:
-
-- the connection pool lock of a model client stays held for two checks in a row,
-- garbage collection stopped while objects pile up,
-- the event loop did not run for 30 s.
-
-The last two checks start 5 minutes after startup. When one of them fires, Iris writes a thread dump, fails its open runs (chat, tutor suggestions, struggle interventions), sends an alert and exits; Docker (`restart: unless-stopped`) starts it again. The local `pyris-dev.yml` uses `restart: "no"`, so there the container stays stopped. At most one self-restart per 30 minutes and two per 6 hours are allowed. Above that, or if the restart history cannot be read, Iris stays up, reports itself unhealthy and sends an urgent alert. It then fails only the runs on the stuck model (or all runs if garbage collection or the event loop stopped); runs on other models can still finish. Set `reliability.self_restart: false` to never restart, or `reliability.enabled: false` to turn the watchdog off.
-
-`GET /api/v1/health/liveness` returns 200 while the process works and 503 after the watchdog found it broken. The Docker health check uses it. It needs no token and returns no data.
-
-### Diagnostics
-
-The watchdog keeps thread dumps, the restart history and an exit marker in `reliability.diagnostics_dir` (default `/data/diagnostics`). The production compose files mount it from `PYRIS_DIAGNOSTICS_DIR`. Set that to an absolute host path outside the repository clone, so a redeploy does not delete it.
-
-To take a thread dump of a running Iris, for example when chat answers hang:
-
-```bash
-docker exec pyris-app touch /data/diagnostics/dump-now
-```
-
-The dump lists the oldest run first, folds identical stacks and shows the state of garbage collection and of every model's connection pool. `docker kill -s USR2 pyris-app` does the same while the main thread still runs Python code, so the file is the reliable way; `docker kill -s USR1 pyris-app` writes a low-level `faulthandler` dump (at most 100 threads) for a process that does not run Python code anymore.
-
-### Alerts
-
-Iris sends alerts through [Pushover](https://pushover.net/) when `PYRIS_PUSHOVER_APP_TOKEN` and `PYRIS_PUSHOVER_USER_KEY` are set (for example in the compose env file); `PYRIS_ALERT_NAME` names the instance in the title. Without them, alerts are only logged.
-
-| Event                                                    | Priority   |
-| -------------------------------------------------------- | ---------- |
-| Self-restart after the watchdog found the process broken | quiet (-1) |
-| Restart without a clean shutdown (out of memory or kill) | quiet (-1) |
-| Self-restart refused, Iris stays broken                  | urgent (1) |
-| Three unexpected restarts within 30 minutes              | urgent (1) |
+To see all thread stacks of a running Iris, for example when answers hang: `docker kill -s USR1 pyris-app`, then read the container log.
 
 The container has a memory limit (`PYRIS_MEMORY_LIMIT`, default `6g`), so running out of memory restarts Iris instead of making the host kill other services.
