@@ -60,7 +60,7 @@
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
 # =============================================================================
 
-ARG BASE_IMAGE=ubuntu:24.04
+ARG BASE_IMAGE=ubuntu:26.04
 # The [audio] extra is required, not cosmetic: the speech-to-text endpoints
 # (/v1/audio/transcriptions, /v1/audio/translations) decode uploads through
 # vllm.multimodal.media.audio.load_audio, whose only two backends are

@@ -20,7 +20,7 @@
     "@docusaurus/module-type-aliases": "3.10.2",
     "@docusaurus/tsconfig": "3.10.2",
     "@docusaurus/types": "3.10.2",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   },
   "engines": {
     "node": ">=20.0"
@@ -31,7 +31,7 @@
     "shell-quote": "1.12.0",
     "source-map-js": "1.2.2",
     "tinypool": "2.2.0",
-    "uuid": "11.1.1",
+    "uuid": "14.0.3",
     "webpackbar": "7.0.0"
   }
 }
