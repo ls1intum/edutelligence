@@ -10,7 +10,7 @@ python = ">=3.11,<3.12.dev0"
 python-dotenv = "1.2.4"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "8.3.5"
+pytest = "9.0.3"
 pytest-asyncio = "0.26.0"
 prospector = { version = "1.19.1", extras = ["with_mypy"] }
 
