@@ -77,6 +77,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _READY_TIMEOUT_S = 600.0
+# A probe that only logs vLLM's "no shared memory block" warning for this many
+# polls in a row, with no compiler running, is hung rather than busy.
+_STALL_NEEDLE = "No available shared memory broadcast block found"
+_STALL_MARKER = "engine warmup stalled"
+_STALL_REPEATS = 3
+# While a JIT compiler runs, the ready deadline may slip by up to this much.
+_COMPILE_EXTENSION_S = 1200.0
+_COMPILER_PROCESSES = frozenset({"nvcc", "cicc", "ptxas", "cc1plus", "ninja"})
+# A model whose probes hit the ready timeout this often in a row is stuck, not
+# slow: another KV size would only wait out the same timeout again.
+_MAX_CONSECUTIVE_READY_TIMEOUTS = 2
+_READY_TIMEOUT_MARKER = "ready timeout:"
+# While waiting for a probe, nvidia-smi is polled this often; a GPU reading as
+# wedged on this many checks in a row aborts the calibration.
+_GPU_HEALTH_INTERVAL_S = 15.0
+_GPU_HEALTH_STRIKES = 2
+_GPU_HEALTH_MARKER = "gpu health:"
 _SLEEP_TIMEOUT_S = 120.0
 _VLLM_STOP_TIMEOUT_S = 30.0
 _VRAM_SETTLE_S = 4.0
@@ -529,6 +546,19 @@ class ObservedTransientErrorPattern:
 
 _OBSERVED_TRANSIENT_PATTERNS: tuple[ObservedTransientErrorPattern, ...] = (
     ObservedTransientErrorPattern(
+        # Written by wait_ready's stall check, so it never matches a probe
+        # that merely logged the warning once and went on.
+        needle=_STALL_MARKER,
+        reason_code="engine-warmup-stalled",
+        description=(
+            "vLLM stopped producing output during engine warmup and no "
+            "compiler was running, so the probe was aborted instead of "
+            "waiting out the full ready timeout. A larger KV cache cannot "
+            "fix this."
+        ),
+        domain=_DOMAIN_SERVER_START,
+    ),
+    ObservedTransientErrorPattern(
         # Can happen while loading weights onto the GPU OR while
         # reserving KV cache — genuinely two different domains depending
         # on how far the attempt got. domain=None, resolved positionally.
@@ -617,6 +647,26 @@ _OBSERVED_TRANSIENT_PATTERNS: tuple[ObservedTransientErrorPattern, ...] = (
         ),
         domain=_DOMAIN_SERVER_START,
     ),
+)
+
+
+_REPEATED_READY_TIMEOUT_DESCRIPTION = (
+    "vLLM did not become ready within the ready timeout on consecutive "
+    "probes, so the KV-cache search was stopped: another KV size would only "
+    "wait out the same timeout. A later calibration session retries."
+)
+_REPEATED_READY_TIMEOUT_OBSERVED = ObservedTransientErrorPattern(
+    needle=_READY_TIMEOUT_MARKER,
+    reason_code="repeated-ready-timeout",
+    description=_REPEATED_READY_TIMEOUT_DESCRIPTION,
+    domain=_DOMAIN_SERVER_START,
+)
+_REPEATED_READY_TIMEOUT_FATAL = FatalLoadErrorPattern(
+    needle=_READY_TIMEOUT_MARKER,
+    reason_code="repeated-ready-timeout",
+    description=_REPEATED_READY_TIMEOUT_DESCRIPTION,
+    domain=_DOMAIN_SERVER_START,
+    persist=False,
 )
 
 
@@ -1469,17 +1519,110 @@ def stop_vllm(proc: subprocess.Popen[str] | None) -> None:
         pass
 
 
+class VllmReadyTimeout(TimeoutError):
+    """vLLM did not answer /health before the ready deadline."""
+
+
+class GpuHealthError(RuntimeError):
+    """A GPU reads as wedged (nvidia-smi ERR!/N/A, query failure or hang)."""
+
+    def __init__(self, reason_code: str, detail: str) -> None:
+        super().__init__(f"GPU unhealthy ({reason_code}): {detail}")
+        self.reason_code = reason_code
+        self.detail = detail
+
+
+class _GpuHealthWatch:
+    """Rate-limited node_health GPU sensor that needs consecutive bad reads."""
+
+    def __init__(self, check: Callable[[], Any] | None = None) -> None:
+        self._check = check
+        self._last = float("-inf")
+        self._strikes = 0
+
+    def __call__(self) -> tuple[str, str] | None:
+        now = time.monotonic()
+        if now - self._last < _GPU_HEALTH_INTERVAL_S:
+            return None
+        self._last = now
+        check = self._check
+        if check is None:
+            from logos_worker_node.node_health import _check_gpu  # noqa: PLC0415
+
+            check = _check_gpu
+        try:
+            result = check()
+        except Exception:  # noqa: BLE001
+            logger.debug("GPU health check raised", exc_info=True)
+            return None
+        if result.state == "ok":
+            self._strikes = 0
+            return None
+        self._strikes += 1
+        if self._strikes < _GPU_HEALTH_STRIKES:
+            return None
+        return result.state, result.detail
+
+
+def _compiler_running() -> bool:
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return False
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if (entry / "comm").read_text().strip() in _COMPILER_PROCESSES:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _probe_stalled(log_path: Path) -> bool:
+    """True once the log's last lines are only the shared-memory warning."""
+    try:
+        with log_path.open("rb") as f:
+            f.seek(max(0, f.seek(0, os.SEEK_END) - 16384))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    lines = [line for line in tail.splitlines() if line.strip()]
+    if len(lines) < _STALL_REPEATS or not all(_STALL_NEEDLE in line for line in lines[-_STALL_REPEATS:]):
+        return False
+    return not _compiler_running()
+
+
+def _append_log_marker(log_path: Path, text: str) -> None:
+    try:
+        with log_path.open("a") as f:
+            f.write(f"\n[logos] {text}\n")
+    except OSError:
+        logger.debug("Could not write a marker to %s", log_path, exc_info=True)
+
+
+def _mark_stalled(log_path: Path) -> None:
+    _append_log_marker(log_path, f"{_STALL_MARKER}: no vLLM output for ~{_STALL_REPEATS} min and no compiler running")
+
+
 def wait_ready(
     base_url: str,
     timeout_s: float,
     proc: subprocess.Popen[str],
     gpu_indices: list[int] | None = None,
     cancel_event: threading.Event | None = None,
+    stall_check: Callable[[], bool] | None = None,
+    busy_check: Callable[[], bool] | None = None,
+    health_check: Callable[[], tuple[str, str] | None] | None = None,
 ) -> None:
     deadline = time.perf_counter() + timeout_s
+    hard_deadline = deadline + (_COMPILE_EXTENSION_S if busy_check is not None else 0.0)
     t_start = time.perf_counter()
     last_log = t_start - 25.0  # log at ~5 s, then every 30 s
-    while time.perf_counter() < deadline:
+    while True:
+        now = time.perf_counter()
+        if now >= deadline and (now >= hard_deadline or busy_check is None or not busy_check()):
+            break
         # Honor mid-probe cancellation: the calibration session sets this
         # when the maintenance window closes (or operator calls stop). Bail
         # within ~2s instead of waiting out the full ready_timeout.
@@ -1487,6 +1630,12 @@ def wait_ready(
             raise RuntimeError("cancelled")
         if proc.poll() is not None:
             raise RuntimeError(f"vLLM exited before becoming ready (code={proc.poll()})")
+        if health_check is not None:
+            unhealthy = health_check()
+            if unhealthy is not None:
+                raise GpuHealthError(*unhealthy)
+        if stall_check is not None and stall_check():
+            raise TimeoutError(f"vLLM {_STALL_MARKER} after {time.perf_counter() - t_start:.0f}s")
         status, _ = _get(f"{base_url}/health", timeout_s=5.0)
         if status == 200:
             return
@@ -1506,7 +1655,7 @@ def wait_ready(
             )
             last_log = now
         time.sleep(2.0)
-    raise TimeoutError(f"vLLM not ready after {timeout_s:.0f}s")
+    raise VllmReadyTimeout(f"vLLM not ready after {timeout_s:.0f}s")
 
 
 def probe_generative(base_url: str, model: str, timeout_s: float) -> bool:
@@ -2489,6 +2638,9 @@ def _calibrate_model_probe(
     # same-run retry isn't blocked by its own side effect.
     _retryable_fatal_box: list[FatalLoadErrorPattern] = []
 
+    # Consecutive probes that ended in the ready timeout; any other outcome resets it.
+    _ready_timeouts = [0]
+
     # Sibling latch for a genuine CUDA/torch OOM. Once set, the kv_lo scan
     # below stops climbing to ever-larger (and therefore hungrier) kv sizes
     # — a real capacity shortfall at this tp can't be fixed by asking for
@@ -2643,7 +2795,23 @@ def _calibrate_model_probe(
         )
         t0 = time.perf_counter()
         try:
-            wait_ready(base_url, ready_timeout_s, proc, gpu_indices, cancel_event=cancel_event)
+
+            def _stall_check() -> bool:
+                if not _probe_stalled(log_path):
+                    return False
+                _mark_stalled(log_path)
+                return True
+
+            wait_ready(
+                base_url,
+                ready_timeout_s,
+                proc,
+                gpu_indices,
+                cancel_event=cancel_event,
+                stall_check=_stall_check,
+                busy_check=_compiler_running,
+                health_check=_GpuHealthWatch(),
+            )
             # This attempt actually came up — anchor the cold-load
             # measurement at ITS spawn, not before the outer call: the
             # retry attempts that recursed into this one each cost a
@@ -2666,6 +2834,7 @@ def _calibrate_model_probe(
                 _remove_failed_command(failed_path, fingerprint)
                 failed_commands.discard(fingerprint)
                 logger.info("        Removed stale blacklist entry for kv_cache=%s", kv_str)
+            _ready_timeouts[0] = 0
             return proc
         except (RuntimeError, TimeoutError) as exc:
             # Cancellation path: kill the probe immediately, do not blacklist.
@@ -2679,6 +2848,13 @@ def _calibrate_model_probe(
                 stop_vllm(proc)
                 time.sleep(_VRAM_SETTLE_S)
                 return None
+            if isinstance(exc, GpuHealthError):
+                _append_log_marker(log_path, f"{_GPU_HEALTH_MARKER} {exc.reason_code}: {exc.detail}")
+            if isinstance(exc, VllmReadyTimeout):
+                _ready_timeouts[0] += 1
+                _append_log_marker(log_path, f"{_READY_TIMEOUT_MARKER} {exc} (in a row: {_ready_timeouts[0]})")
+            else:
+                _ready_timeouts[0] = 0
             # Parse the COMPLETE probe segment; echo only its tail to the logs.
             probe_log = _read_log_since(log_path, _spawn_log_offset)
             logger.warning(
@@ -2715,6 +2891,10 @@ def _calibrate_model_probe(
             # UI — node_health.py's own sensors, not this, are what make
             # the orchestrator actually stop scheduling on this node.
             node_pattern = _classify_node_transient_error(probe_log)
+            if node_pattern is None and isinstance(exc, GpuHealthError):
+                node_pattern = NodeTransientErrorPattern(
+                    needle=_GPU_HEALTH_MARKER, reason_code=exc.reason_code, description=exc.detail
+                )
             if node_pattern is not None:
                 if not _node_unhealthy_box:
                     _node_unhealthy_box.append(node_pattern)
@@ -2851,6 +3031,9 @@ def _calibrate_model_probe(
             # without spawning vLLM again; the session then marks the model
             # unsupported in its profile.
             fatal_pattern = _classify_fatal_load_error(probe_log)
+            if fatal_pattern is None and _ready_timeouts[0] >= _MAX_CONSECUTIVE_READY_TIMEOUTS:
+                fatal_pattern = _REPEATED_READY_TIMEOUT_FATAL
+                _observed_reason_box[:] = [_REPEATED_READY_TIMEOUT_OBSERVED]
             if fatal_pattern is not None and not _unsupported_box and not _retryable_fatal_box:
                 if fatal_pattern.persist:
                     _unsupported_box.append(fatal_pattern)
