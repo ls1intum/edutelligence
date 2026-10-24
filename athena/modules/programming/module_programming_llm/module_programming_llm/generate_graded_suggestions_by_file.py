@@ -5,6 +5,7 @@ from pydantic import ConfigDict, BaseModel, Field
 
 from athena import emit_meta
 from athena.programming import Exercise, Submission, Feedback
+from athena.schemas import FeedbackSeverity
 
 from module_programming_llm.config import GradedBasicApproachConfig
 from module_programming_llm.split_grading_instructions_by_file import (
@@ -38,6 +39,9 @@ class FeedbackModel(BaseModel):
     )
     line_end: Optional[int] = Field(
         None, description="Referenced line number end, or empty if unreferenced"
+    )
+    severity: Optional[FeedbackSeverity] = Field(
+        ..., description="Impact of the identified issue, independent of credits; null when no issue is identified."
     )
     credits: float = Field(0.0, description="Number of points received/deducted")
     grading_instruction_id: Optional[int] = Field(
@@ -312,6 +316,7 @@ async def generate_suggestions_by_file(
                     line_start=feedback.line_start,
                     line_end=feedback.line_end,
                     credits=feedback.credits,
+                    severity=feedback.severity,
                     structured_grading_instruction_id=grading_instruction_id,
                     is_graded=True,
                     meta={},
