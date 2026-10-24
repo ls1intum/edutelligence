@@ -1,0 +1,34 @@
+:host { display: block; margin-bottom: 1.5rem; }
+.results-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+h3 { font-size: 1rem; margin: 0; color: rgb(var(--color-typography-0)); }
+.results-heading span, .results-note, small { color: rgb(var(--color-typography-500)); font-size: .8125rem; }
+.results-note { margin: .5rem 0 1rem; line-height: 1.5; }
+table { width: 100%; border-collapse: collapse; font-size: .8125rem; color: rgb(var(--color-typography-100)); }
+th { text-align: left; color: rgb(var(--color-typography-500)); font-weight: 500; }
+th, td { padding: 1rem .75rem; border-bottom: 1px solid rgb(var(--color-outline-200)); vertical-align: top; }
+td span, td small { display: block; margin-top: .25rem; overflow-wrap: anywhere; }
+.numeric { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dates { font-variant-numeric: tabular-nums; }
+@media (max-width: 767px) {
+  table, tbody, tr, td { display: block; }
+  thead { display: none; }
+  tr { padding: .75rem 0; border-bottom: 1px solid rgb(var(--color-outline-300)); }
+  td { border: 0; padding: .5rem 0; }
+  td::before { content: attr(data-label); display: block; color: rgb(var(--color-typography-500)); margin-bottom: .3rem; }
+}
+
+.top-configurations { margin-bottom: 2rem; }
+.top-configurations h3 i { margin-right: .4rem; color: rgb(var(--color-warning)); }
+.top-configuration { padding: 1rem; margin-top: .75rem; border: 1px solid rgb(var(--color-outline-200)); border-radius: .625rem; background: rgb(var(--color-surface-0)); }
+.top-configuration small { display: block; margin-top: .3rem; }
+.top-configuration__rate { font-size: 1.5rem; color: rgb(var(--color-typography-0)); white-space: nowrap; }
+.top-configuration__rate small { display: inline; font-weight: 400; }
+.top-configuration__parameters { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; font-size: .8125rem; }
+.top-configuration__parameters span { overflow-wrap: anywhere; }
+.top-configuration__parameters strong { margin-left: .3rem; }
+.top-configuration summary { cursor: pointer; margin-top: 1rem; font-size: .8125rem; color: rgb(var(--color-typography-500)); }
+.top-configuration__details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; font-size: .8125rem; }
+.top-configuration__details dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .5rem; }
+.top-configuration__details dd { margin: 0; overflow-wrap: anywhere; }
+.top-configuration__details dt { color: rgb(var(--color-typography-500)); }
+@media (max-width: 767px) { .top-configuration__details { grid-template-columns: 1fr; } }

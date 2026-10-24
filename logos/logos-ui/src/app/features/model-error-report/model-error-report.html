@@ -524,12 +524,6 @@
             </span>
           </div>
 
-          @for (pair of benchmarkPairs(); track pair.model_provider_id) {
-            @if (pair.provider_type === 'logosnode') {
-              <app-nightly-benchmarks [pairId]="pair.model_provider_id" [providerName]="pair.provider_name" [modelName]="model.name" />
-            }
-          }
-
           <nav id="performance-view-controls" class="performance-views" aria-label="Performance views">
             <button type="button" [attr.aria-pressed]="performanceView() === 'results'"
               (click)="performanceView.set('results')">Results</button>
@@ -578,11 +572,16 @@
           }
 
           <div [hidden]="performanceView() !== 'run'">
+          @for (pair of benchmarkPairs(); track pair.model_provider_id) {
+            @if (pair.provider_type === 'logosnode') {
+              <app-nightly-benchmarks [pairId]="pair.model_provider_id" [providerName]="pair.provider_name" [modelName]="model.name" />
+            }
+          }
           @if (selectedBenchmarkPair(); as pair) {
             <section class="benchmark-runner" id="benchmark-runner" aria-label="Benchmark setup">
               <header class="benchmark-runner__header">
                 <div>
-                  <h3>Configure a benchmark</h3>
+                  <h3>Manual benchmark</h3>
                   <p>Choose where to run and how many requests to measure.</p>
                 </div>
               </header>
@@ -653,6 +652,7 @@
           } @else {
             <div class="empty-state"><h3>No provider available</h3><p>Add a provider for this model to run a benchmark.</p></div>
           }
+
           </div>
 
           <div [hidden]="performanceView() !== 'results'">
@@ -681,7 +681,11 @@
               <app-error-message variant="banner" [message]="error" />
             }
 
-            <app-benchmark-comparison [runs]="performance()" />
+            <app-benchmark-results [runs]="performance()" />
+            <details class="performance-detail-section"><summary>Charts and comparison</summary>
+              <app-benchmark-comparison [runs]="performance()" />
+            </details>
+            <details class="performance-detail-section"><summary>Run details and saved configurations</summary>
 
             <div class="performance-list">
 
@@ -825,6 +829,7 @@
               }
 
             </div>
+            </details>
 
           }
 

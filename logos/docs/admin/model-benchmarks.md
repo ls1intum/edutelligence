@@ -118,7 +118,8 @@ Worker disconnects and orchestrator restarts stop the job. Batches do not resume
 
 ## Read the comparison charts
 
-Open **Results**.
+Open **Results** to see runs, changed parameters, measurement times and throughput.
+Expand **Charts and comparison**.
 Select a reference run and a metric in **Compare benchmark runs**.
 Each chart varies one parameter while the other recorded settings match the reference.
 The charts use separate vertical scales to show their measured ranges.
@@ -132,8 +133,8 @@ A result must be successful and complete, with the required configuration metada
 Logos does not infer missing controls in historical results.
 If a result is absent, check its completion state and recorded configuration.
 
-The example shows 3 completed measurements for the same configuration.
-The charts show their distribution. The cards below show the selected run.
+The example shows a nightly baseline and one variant with illustrative measurements.
+**Before** uses the baseline from the same nightly plan. Expand the sections below for charts and saved configurations.
 
 [![Desktop comparison charts and run history](/img/benchmarks/results-desktop.png)](/img/benchmarks/results-desktop.png)
 

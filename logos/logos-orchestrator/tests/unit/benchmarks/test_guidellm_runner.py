@@ -411,3 +411,28 @@ def test_benchmark_uses_worker_reported_effective_pipeline_parallelism(effective
 def test_missing_worker_configuration_does_not_invent_pipeline_parallelism():
     snapshot = {"runtime": {"lanes": [{"model": "m", "lane_config": {"vllm": True}}]}}
     assert "pipeline_parallel_size" not in extract_serving_configuration(snapshot, "m")
+
+
+@pytest.mark.parametrize(
+    "times",
+    [{"start_time": 100, "end_time": 160}, {"scheduler_metrics": {"measure_start_time": 100, "measure_end_time": 160}}],
+)
+def test_summary_preserves_report_measurement_times(times):
+    report = {
+        "benchmarks": [
+            {**times, "metrics": {"request_totals": {"successful": 1, "total": 1, "incomplete": 0, "errored": 0}}}
+        ]
+    }
+    result = successful_summary(report, model_provider_id=1, expected_samples=1, serving_configuration={})
+    assert result["configuration"]["measurement"] == {
+        "started_at": "1970-01-01T00:01:40+00:00",
+        "ended_at": "1970-01-01T00:02:40+00:00",
+    }
+
+
+def test_summary_does_not_invent_missing_measurement_times():
+    report = {
+        "benchmarks": [{"metrics": {"request_totals": {"successful": 1, "total": 1, "incomplete": 0, "errored": 0}}}]
+    }
+    result = successful_summary(report, model_provider_id=1, expected_samples=1, serving_configuration={})
+    assert result["configuration"]["measurement"] == {"started_at": None, "ended_at": None}
