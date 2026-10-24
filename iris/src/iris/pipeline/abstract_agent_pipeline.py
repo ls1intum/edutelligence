@@ -45,6 +45,7 @@ from iris.tracing import (
     set_current_context,
 )
 from iris.vector_database.database import VectorDatabase
+from iris.watchdog import track_run, untrack_run
 from iris.web.status.partial_result_sender import PartialResultSender
 from iris.web.status.status_update import StatusCallback
 
@@ -894,6 +895,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         state.callback.update()
 
+        track_run(callback)
         try:
             # 1. Select the model, then prepare history, user query, LLM, prompt and tools
             selected_version = state.variant.model("chat", local)
@@ -991,5 +993,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 len(state.tools),
             )
         finally:
+            untrack_run(callback)
             # Clean up tracing context to prevent memory leaks
             clear_current_context()

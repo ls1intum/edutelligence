@@ -261,6 +261,11 @@ class Settings(BaseModel):
     lecture_ingestion: LectureIngestionSettings = Field(
         default_factory=LectureIngestionSettings
     )
+    watchdog_enabled: bool = Field(
+        default=True,
+        description="Restart Iris when a model client's connection pool deadlocks "
+        "(see iris.watchdog).",
+    )
     global_search_rerank_floor: float = Field(
         default=0.10,
         description="Junk floor for global-search candidates: the score below "
