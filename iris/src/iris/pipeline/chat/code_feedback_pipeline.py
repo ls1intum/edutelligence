@@ -11,6 +11,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.tracing import observe
 
+from ...common.message_converters import history_text
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
@@ -36,6 +37,15 @@ class FileSelectionDTO(BaseModel):
             f'FileSelectionDTO(files="{self.files}", query="{self.query}", build_logs="{self.build_logs}", '
             f'exercise_title="{self.exercise_title}", problem_statement="{self.problem_statement}")'
         )
+
+
+def _chat_history_text(chat_history: List[PyrisMessage]) -> str:
+    """One line per history message that has text, a quiz widget described as text."""
+    return "\n".join(
+        f"{message.sender}: {text}"
+        for message in chat_history
+        if (text := history_text(message))
+    )
 
 
 class CodeFeedbackPipeline(SubPipeline):
@@ -129,13 +139,7 @@ class CodeFeedbackPipeline(SubPipeline):
             if feedbacks
             else "No feedbacks."
         )
-        chat_history_list = "\n".join(
-            f"{message.sender}: {message.contents[0].text_content}"
-            for message in chat_history
-            if message.contents
-            and len(message.contents) > 0
-            and message.contents[0].text_content
-        )
+        chat_history_list = _chat_history_text(chat_history)
         response = (
             (self.default_prompt | self.pipeline)
             .with_config({"run_name": "Code Feedback Pipeline"})
