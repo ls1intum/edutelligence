@@ -7,6 +7,9 @@ readme = "README.md"
 packages = [{include = "iris", from = "src"}]
 include = ["src/iris/py.typed"]
 
+[tool.poetry.scripts]
+iris-benchmark = "iris.qa.cli:main"
+
 [tool.poetry.dependencies]
 python = ">=3.13,<4.0.0"
 fastapi = "^0.141.1"
@@ -108,6 +111,11 @@ autoflake = "^2.4.0"
 [tool.isort]
 profile = "black"
 multi_line_output = 3
+
+[tool.pytest.ini_options]
+# The benchmark ships artifact repositories with their own tests. They run inside
+# the benchmark, not as part of the Iris suite, and cannot be imported from here.
+testpaths = ["tests"]
 
 [tool.mypy]
 mypy_path = "src"

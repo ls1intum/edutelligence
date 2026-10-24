@@ -1,0 +1,11 @@
+# yamllint disable rule:line-length rule:document-start
+exercise: maze-shortest-path
+student: 117
+submissions:
+  - id: 601
+    commit: c40a81e
+    date: 2026-06-02T13:05:00Z
+    snapshot: student/latest
+    build: passed
+    score: 3.0
+    note: Queue skeleton terminates but never explores neighbors.
