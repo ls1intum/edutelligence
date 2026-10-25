@@ -309,7 +309,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                                             - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)))
                     ELSE NULL END AS runSeconds,
                CASE WHEN le.timestamp_request IS NOT NULL AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) - le.timestamp_request))
+                    THEN GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) - le.timestamp_request)))
                     ELSE NULL END AS queueSeconds,
                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request))
@@ -542,7 +542,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                -- Same provider-call split as the recent-requests feed, so a
                -- detail view and its feed row never disagree.
                CASE WHEN le.timestamp_request IS NOT NULL AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) - le.timestamp_request)) * 1000
+                    THEN GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) - le.timestamp_request))) * 1000
                     ELSE NULL END AS queueWaitMs,
                CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
                       AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
@@ -844,7 +844,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                -- Same provider-call split as the recent-requests feed, so a
                -- detail view and its feed row never disagree.
                CASE WHEN le.timestamp_request IS NOT NULL AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) - le.timestamp_request)) * 1000
+                    THEN GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) - le.timestamp_request))) * 1000
                     ELSE NULL END AS queueWaitMs,
                CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
                       AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
@@ -947,8 +947,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                    -- definition (see logos_stats_rollup_apply).
                    CASE WHEN le.timestamp_request IS NOT NULL
                           AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
-                                                - le.timestamp_request)) END,
+                        THEN GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
+                                                - le.timestamp_request))) END,
                    (le.timestamp_request IS NOT NULL
                     AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL)::int::bigint,
                    CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
@@ -1079,8 +1079,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                    -- Same provider-call split as the rollup branch above.
                    CASE WHEN le.timestamp_request IS NOT NULL
                           AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
-                                                - le.timestamp_request)) END,
+                        THEN GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
+                                                - le.timestamp_request))) END,
                    (le.timestamp_request IS NOT NULL
                     AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL)::int::bigint,
                    CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
@@ -1141,6 +1141,9 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * whose privacy level is LOCAL, or none, is local; a request without a
      * provider counts as local too).
      *
+     * Negative wait samples from deferred legacy writes or clock skew count as
+     * zero before aggregation; missing timestamps remain unknown.
+     *
      * The window predicate, the scope and the provider-call split are the ones
      * {@link #findModelBreakdown} uses, so a model's averages there and its
      * percentiles here describe the same requests. Percentiles need the single
@@ -1164,8 +1167,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                     OR (le.error_message IS NOT NULL AND le.error_message <> '')) AS failed,
                    CASE WHEN le.timestamp_request IS NOT NULL
                           AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
-                                                - le.timestamp_request)) * 1000 END AS queue_ms,
+                        THEN GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
+                                                - le.timestamp_request))) * 1000 END AS queue_ms,
                    CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
                           AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
                         THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)

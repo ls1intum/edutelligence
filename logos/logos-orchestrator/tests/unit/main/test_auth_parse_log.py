@@ -16,6 +16,7 @@ the SQL query, whose bypass sees every model, not just the permitted set.
 
 from __future__ import annotations
 
+import datetime
 import json as _json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -309,3 +310,38 @@ async def test_log_level_header_no_opts_out_on_a_full_key(_profile_auth):
     )
 
     assert db.log_usage_kwargs["log_level"] == "BILLING"
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.asyncio
+async def test_log_retains_arrival_time_before_parsing_and_deferred_writes(_profile_auth, monkeypatch, deferred):
+    db, _ = _profile_auth(role="developer")
+    arrival = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    later = arrival + datetime.timedelta(seconds=10)
+    clock = SimpleNamespace(now=arrival)
+    monkeypatch.setattr(
+        main,
+        "datetime",
+        SimpleNamespace(datetime=SimpleNamespace(now=lambda tz: clock.now), timezone=datetime.timezone),
+    )
+    if deferred:
+        main.refcache.get_ref_cache().set(("deployments", 7), ([_DEPLOYMENT_ROW], [1]))
+    request = _request({"model": "m"})
+
+    async def parse_body():
+        clock.now = later
+        return {"model": "m"}
+
+    request.json = parse_body
+    result = await main.auth_parse_log(request, use_profile_auth=True, request_id="req-arrival")
+    log_ref = result[4]
+    fields = log_ref.fields if deferred else db.log_usage_kwargs
+    assert fields["timestamp_request"] == arrival
+    if deferred:
+        persisted = []
+        monkeypatch.setattr(main, "_insert_pending_log_row", lambda fields: persisted.append(fields))
+        main._enqueue_pending_log_for_live_feed(log_ref)
+        assert persisted[0]["timestamp_request"] == arrival
+        final_db = SimpleNamespace(ensure_log_usage=lambda **fields: persisted.append(fields) or 99)
+        assert main._materialize_log_id(final_db, log_ref) == 99
+        assert persisted[1]["timestamp_request"] == arrival

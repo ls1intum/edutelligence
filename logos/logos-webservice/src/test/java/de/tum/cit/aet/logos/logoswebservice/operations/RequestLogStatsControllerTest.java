@@ -1,6 +1,8 @@
 package de.tum.cit.aet.logos.logoswebservice.operations;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -78,6 +80,37 @@ class RequestLogStatsControllerTest {
            .andExpect(jsonPath("$.rows[0].upstreamP95Ms").value(60000.0))
            .andExpect(jsonPath("$.rows[0].ttftSamples").value(2))
            .andExpect(jsonPath("$.rows[0].ttftP50Ms").value(45000.0));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void requestLatencyStats_clampsEachNegativeWaitBeforeComputingPercentiles(boolean providerCall) throws Exception {
+        String column = providerCall ? "timestamp_provider_call" : "timestamp_forwarding";
+        jdbc.update("UPDATE log_entry SET " + column + " = timestamp_request - INTERVAL '47 milliseconds' WHERE id = 9001");
+        jdbc.update("UPDATE log_entry SET " + column + " = timestamp_request + INTERVAL '53 milliseconds' WHERE id = 9002");
+
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.rows[0].requestCount").value(2))
+           .andExpect(jsonPath("$.rows[0].queueP50Ms").value(26.5))
+           .andExpect(jsonPath("$.rows[0].queueP95Ms").value(org.hamcrest.Matchers.closeTo(50.35, 0.000001)));
+    }
+
+    @Test
+    void requestLatencyStats_keepsMissingWaitTimestampsUnknown() throws Exception {
+        jdbc.update("UPDATE log_entry SET timestamp_provider_call = NULL, timestamp_forwarding = NULL");
+
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.rows[0].requestCount").value(2))
+           .andExpect(jsonPath("$.rows[0].queueP50Ms").isEmpty())
+           .andExpect(jsonPath("$.rows[0].queueP95Ms").isEmpty());
     }
 
     @Test

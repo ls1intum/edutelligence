@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -399,6 +401,29 @@ class RequestLogStatsRollupTest {
         assertThat(refreshService.refreshNow()).isTrue();
         assertThat(rollupRowCount()).isEqualTo(afterFirst);
         assertThat(stats(query(24, null, null)).get("totals")).isEqualTo(once.get("totals"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    @SuppressWarnings("unchecked")
+    void negative_waits_cannot_cancel_valid_waits_in_live_or_rolled_up_statistics(boolean providerCall) {
+        // All rows share one model. Mix negative and positive samples across
+        // completed hours and the live tail to catch clamping after SUM.
+        String column = providerCall ? "timestamp_provider_call" : "timestamp_forwarding";
+        jdbc.update("UPDATE log_entry SET " + column + " = timestamp_request"
+            + " + CASE WHEN MOD(id, 2) = 0 THEN INTERVAL '-2 seconds' ELSE INTERVAL '4 seconds' END");
+        Map<String, Object> live = stats(query(24, null, null));
+        Map<String, Object> liveTotals = (Map<String, Object>) live.get("totals");
+        double expected = jdbc.queryForObject(
+            "SELECT AVG(CASE WHEN MOD(id, 2) = 0 THEN 0.0 ELSE 4.0 END) FROM log_entry", Double.class);
+        assertThat((Double) liveTotals.get("avgQueueSeconds")).isEqualTo(expected);
+        List<Map<String, Object>> models = (List<Map<String, Object>>) live.get("modelBreakdown");
+        assertThat((Double) models.getFirst().get("avgQueueSeconds")).isEqualTo(expected);
+
+        populateRollup();
+        Map<String, Object> merged = stats(query(24, null, null));
+        assertThat(merged.get("totals")).isEqualTo(live.get("totals"));
+        assertThat(merged.get("modelBreakdown")).isEqualTo(live.get("modelBreakdown"));
     }
 
     @Test

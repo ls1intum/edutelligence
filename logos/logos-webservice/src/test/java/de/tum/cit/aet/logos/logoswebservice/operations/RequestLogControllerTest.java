@@ -2,6 +2,8 @@ package de.tum.cit.aet.logos.logoswebservice.operations;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -38,6 +40,22 @@ class RequestLogControllerTest {
     @Autowired MockMvc mvc;
     @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @MockitoBean JwtDecoder jwtDecoder;
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void requestViews_clampNegativeWaits(boolean providerCall) throws Exception {
+        String column = providerCall ? "timestamp_provider_call" : "timestamp_forwarding";
+        jdbc.update("UPDATE log_entry SET " + column + " = timestamp_request - INTERVAL '47 milliseconds'");
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.requests[0].queue_seconds").value(0.0))
+            .andExpect(jsonPath("$.requests[1].queue_seconds").value(0.0));
+        mvc.perform(post("/logosdb/request_logs").with(TestJwt.testUser())
+                .contentType("application/json").content("{\"request_ids\":[\"req-aaa-111\"]}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.requests[0].queue_wait_ms").value(0.0));
+    }
 
     @Test
     void requestPayloads_returnsStoredJsonOnlyOnDemand() throws Exception {
