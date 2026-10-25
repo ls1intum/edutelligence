@@ -78,6 +78,7 @@ def test_maintenance_requests_reach_the_webservice_in_every_compose() -> None:
 
             assert matches, f"{compose.name} has no route for {path}"
             _, router = max(matches)
-            assert router in {"webservice-config", "ws-config"}, (
-                f"{compose.relative_to(_LOGOS)} routes {path} to {router} instead of the webservice"
-            )
+            assert router in {
+                "webservice-config",
+                "ws-config",
+            }, f"{compose.relative_to(_LOGOS)} routes {path} to {router} instead of the webservice"
