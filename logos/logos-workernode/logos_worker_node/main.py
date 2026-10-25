@@ -10,6 +10,7 @@ import sys
 import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
+from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 if TYPE_CHECKING:
@@ -30,7 +31,7 @@ from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.metal import MetalMetricsCollector, is_metal_backend
 from logos_worker_node.model_cache import ModelRamCache, _DisabledModelRamCache, create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
-from logos_worker_node.models import ProcessState, model_can_sleep
+from logos_worker_node.models import HF_REDUNDANT_WEIGHT_PATTERNS, ProcessState, model_can_sleep
 from logos_worker_node.profile_fingerprint import node_calibration_keys, node_slice_gpu_counts
 from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary, existing_volume_path
 
@@ -117,11 +118,12 @@ def _download_one_model(model_name: str, hf_home: str) -> None:
         repo_id=model_name,
         cache_dir=cache_dir,
         token=os.environ.get("HF_TOKEN") or None,
+        ignore_patterns=HF_REDUNDANT_WEIGHT_PATTERNS,
     )
 
 
 def _estimate_model_download_bytes(model_name: str) -> int | None:
-    """Return the size of the full HF snapshot, or None when it is unknown."""
+    """Return the size of the HF snapshot that would be downloaded, or None when it is unknown."""
     from huggingface_hub import HfApi
 
     info = HfApi().model_info(
@@ -130,7 +132,11 @@ def _estimate_model_download_bytes(model_name: str) -> int | None:
         files_metadata=True,
         timeout=15.0,
     )
-    siblings = info.siblings or []
+    siblings = [
+        sibling
+        for sibling in info.siblings or []
+        if not any(fnmatch(sibling.rfilename, pattern) for pattern in HF_REDUNDANT_WEIGHT_PATTERNS)
+    ]
     sizes = [getattr(sibling, "size", None) for sibling in siblings]
     if not sizes or any(not isinstance(size, int) or isinstance(size, bool) or size < 0 for size in sizes):
         return None

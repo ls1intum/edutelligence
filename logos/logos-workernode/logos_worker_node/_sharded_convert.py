@@ -34,6 +34,8 @@ import sys
 from pathlib import Path
 
 _WEIGHT_SUFFIXES = (".bin", ".pt", ".safetensors")
+# Mirrors HF_REDUNDANT_WEIGHT_PATTERNS (this script cannot import the worker package).
+_REDUNDANT_DIRS = ("original",)
 
 
 def _resolve_local_model_dir(model: str) -> str:
@@ -43,7 +45,7 @@ def _resolve_local_model_dir(model: str) -> str:
     from huggingface_hub import snapshot_download  # noqa: PLC0415
 
     # Respects HF_HOME / HF_TOKEN from the environment, which the caller sets.
-    return snapshot_download(model, token=os.environ.get("HF_TOKEN") or None)
+    return snapshot_download(model, token=os.environ.get("HF_TOKEN") or None, ignore_patterns=["original/*"])
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,7 +98,7 @@ def main() -> int:
     # that is not a raw weight file — so the output is a self-contained model
     # directory vLLM can serve with --load-format sharded_state.
     for name in os.listdir(model_path):
-        if os.path.splitext(name)[1] in _WEIGHT_SUFFIXES:
+        if os.path.splitext(name)[1] in _WEIGHT_SUFFIXES or name in _REDUNDANT_DIRS:
             continue
         src = os.path.join(model_path, name)
         dst = os.path.join(str(out), name)
