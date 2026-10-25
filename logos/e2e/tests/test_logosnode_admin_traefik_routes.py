@@ -50,3 +50,34 @@ def test_ui_logosnode_admin_paths_are_named_in_every_compose_admin_router() -> N
             f"{missing}; without them the UI call reaches the orchestrator catch-all "
             "and returns 404 Not Found"
         )
+
+
+def test_maintenance_requests_reach_the_webservice_in_every_compose() -> None:
+    service = _UI_SERVICE.read_text(encoding="utf-8")
+    paths = set(re.findall(r"['\"](/api/logosdb/[^'\"]*maintenance[^'\"]*)['\"]", service))
+    assert paths == {
+        "/api/logosdb/maintenance",
+        "/api/logosdb/maintenance/release_calibration",
+        "/api/logosdb/maintenance/release_recovery",
+    }
+
+    for compose in _COMPOSE_FILES:
+        text = compose.read_text(encoding="utf-8")
+        rules = re.findall(r"traefik\.http\.routers\.([\w-]+)\.rule=([^\n]+)", text)
+        for path in paths:
+            matches = []
+            for router, rule in rules:
+                if not any(
+                    path == target if kind == "Path" else path.startswith(target)
+                    for kind, target in re.findall(r"(Path|PathPrefix)\(`([^`]+)`\)", rule)
+                ):
+                    continue
+                priority = re.search(rf"traefik\.http\.routers\.{re.escape(router)}\.priority=(\d+)", text)
+                assert priority, f"{router} must declare its priority"
+                matches.append((int(priority.group(1)), router))
+
+            assert matches, f"{compose.name} has no route for {path}"
+            _, router = max(matches)
+            assert router in {"webservice-config", "ws-config"}, (
+                f"{compose.relative_to(_LOGOS)} routes {path} to {router} instead of the webservice"
+            )
