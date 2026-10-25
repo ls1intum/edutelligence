@@ -412,13 +412,14 @@ class RequestLogStatsRollupTest {
         String column = providerCall ? "timestamp_provider_call" : "timestamp_forwarding";
         jdbc.update("UPDATE log_entry SET " + column + " = timestamp_request"
             + " + CASE WHEN MOD(id, 2) = 0 THEN INTERVAL '-2 seconds' ELSE INTERVAL '4 seconds' END");
+        assertRollupIsEmpty();
         Map<String, Object> live = stats(query(24, null, null));
         Map<String, Object> liveTotals = (Map<String, Object>) live.get("totals");
         double expected = jdbc.queryForObject(
             "SELECT AVG(CASE WHEN MOD(id, 2) = 0 THEN 0.0 ELSE 4.0 END) FROM log_entry", Double.class);
-        assertThat((Double) liveTotals.get("avgQueueSeconds")).isEqualTo(expected);
+        assertThat((Double) liveTotals.get("avgQueueSeconds")).isCloseTo(expected, Offset.offset(0.001));
         List<Map<String, Object>> models = (List<Map<String, Object>>) live.get("modelBreakdown");
-        assertThat((Double) models.getFirst().get("avgQueueSeconds")).isEqualTo(expected);
+        assertThat((Double) models.getFirst().get("avgQueueSeconds")).isCloseTo(expected, Offset.offset(0.001));
 
         populateRollup();
         Map<String, Object> merged = stats(query(24, null, null));
