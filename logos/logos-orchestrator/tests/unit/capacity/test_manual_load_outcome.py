@@ -36,6 +36,7 @@ def _planner(*, calibrating=False, has_status=True, capacity=object(), profiles=
     planner._cold_mark_settlers = set()
     registry = MagicMock()
     registry.is_calibrating.return_value = calibrating
+    registry.is_cordoned.return_value = False
     registry.has_received_first_status.return_value = has_status
     planner._registry = registry
     facade = MagicMock()

@@ -177,6 +177,7 @@ def test_is_plannable_matrix(first_status, calibrating, expected):
     registry = MagicMock()
     registry.has_received_first_status.return_value = first_status
     registry.is_calibrating.return_value = calibrating
+    registry.is_cordoned.return_value = False
     assert _planner_with_registry(registry)._is_plannable(1) is expected
 
 
@@ -262,6 +263,7 @@ def test_speculative_replication_skips_a_calibrating_worker():
     registry = MagicMock()
     registry.has_received_first_status.return_value = True
     registry.is_calibrating.return_value = True
+    registry.is_cordoned.return_value = False
 
     planner = _planner_with_registry(registry)
     planner._replicate_on_free_vram = True
@@ -286,6 +288,7 @@ def test_cycle_drops_an_action_whose_provider_started_calibrating():
     registry = MagicMock()
     registry.has_received_first_status.return_value = True
     registry.is_calibrating.return_value = False
+    registry.is_cordoned.return_value = False
 
     planned = [
         CapacityPlanAction(action="load", provider_id=1, lane_id="lane-0", model_name="model-a"),
@@ -590,6 +593,7 @@ def _connected_but_excluded_registry():
     return MagicMock(
         **{
             "is_calibrating.return_value": True,
+            "is_cordoned.return_value": False,
             "has_received_first_status.return_value": True,
             "is_provider_online.return_value": True,
         }
@@ -634,6 +638,7 @@ def test_an_offline_worker_is_never_warned_about(caplog):
     registry = MagicMock(
         **{
             "is_calibrating.return_value": False,
+            "is_cordoned.return_value": False,
             "has_received_first_status.return_value": False,
             "is_provider_online.return_value": False,
         }

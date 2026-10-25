@@ -20,13 +20,23 @@ jobs:
       # the in-flight deploys of the other (healthy) nodes.
       fail-fast: false
       # One node at a time, so that at most one worker is out of service at any
-      # moment.
+      # moment. A worker with `drain: true` (below) ends its job as soon as the
+      # image is on the host, so for those the orchestrator keeps the guarantee:
+      # it cordons one node at a time.
       max-parallel: 1
       # `node-manager: true` puts a worker under the node manager. The workflow
       # then asks the node manager of the host to replace the worker container.
       # The node manager checks the new container and rolls back if it does not
       # come up. Without the flag, the workflow runs `docker compose pull` and
       # `up -d` on the host itself. See logos/logos-node-manager/README.md.
+      #
+      # `drain: true` makes the node manager cordon the node at the orchestrator
+      # and wait for its running requests before it replaces the container. The
+      # job then ends once the image is pulled; the drain, the swap and the checks
+      # go on on the host, and the next run prints how they ended. Give every
+      # worker of this workflow the flag, or put the workers without it first: a
+      # worker without it replaces its container at once, whatever an earlier
+      # worker still drains.
       matrix:
         include:
           - environment: "Logos - Dev"
@@ -36,6 +46,7 @@ jobs:
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
             node-manager: true
+            drain: false
     environment:
       name: ${{ matrix.environment }}
     steps:
@@ -112,16 +123,22 @@ jobs:
           ' >> .env
 
           # A worker under the node manager needs the compose profile that
-          # starts the node manager service. The line comes last, so it also
-          # wins over a COMPOSE_PROFILES variable of the environment.
+          # starts the node manager service, and says whether it drains. The
+          # lines come last, so they also win over variables of the environment.
           if [ "$NODE_MANAGER" = "true" ]; then
             echo "COMPOSE_PROFILES=node-manager" >> .env
+            if [ "$DRAIN" = "true" ]; then
+              echo "NODE_MANAGER_DRAIN_ENABLED=true" >> .env
+            else
+              echo "NODE_MANAGER_DRAIN_ENABLED=false" >> .env
+            fi
           fi
         env:
           VARS_CONTEXT: ${{ toJson(vars) }}
           SECRETS_CONTEXT: ${{ toJson(secrets) }}
           WORKSPACE_IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
           NODE_MANAGER: ${{ matrix.node-manager }}
+          DRAIN: ${{ matrix.drain }}
 
       - name: Copy .env file to VM
         uses: appleboy/scp-action@v1.0.0
@@ -136,9 +153,10 @@ jobs:
           source: .env
           target: ${{ matrix.base-path }}
 
-      # The next three steps run for workers under the node manager only. The
+      # The next four steps run for workers under the node manager only. The
       # node manager pulls, replaces, checks and, if need be, rolls back on the
-      # host. This job only asks for it and waits for the result.
+      # host. This job only asks for it, and waits for the result or, for a node
+      # that drains, for the pull.
       - name: Update node manager
         if: ${{ matrix.node-manager }}
         uses: appleboy/ssh-action@v1.2.5
@@ -175,6 +193,30 @@ jobs:
             docker logs --tail 50 logos-node-manager >&2
             exit 1
 
+      # With the drain on, a deployment ends on the host long after the job that
+      # asked for it. This is where its result becomes visible: the latest
+      # deployment of the host, before the new one is queued. It is read from the
+      # state of the node manager, which the deploy workflows never delete.
+      - name: Show how the previous deployment ended
+        if: ${{ matrix.node-manager }}
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          script: |
+            out=$(docker exec logos-node-manager node-manager status --logs 2>&1) || true
+            echo "$out"
+            case "$out" in
+              *": rolled_back"* | *": failed"*)
+                echo "::warning::The previous deployment on this host did not succeed. Its events and the log of the failed container are above."
+                ;;
+            esac
+
       - name: Deploy through node manager
         if: ${{ matrix.node-manager }}
         uses: appleboy/ssh-action@v1.2.5
@@ -184,6 +226,9 @@ jobs:
           WORKSPACE_IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
           DEPLOY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # A node that drains ends the job at the pull. Its drain, swap and checks go on on the host, and the
+          # orchestrator lets one node at a time out of service. Any other node is followed to its end.
+          DEPLOY_WAIT: ${{ matrix.drain && '--until-pulled' || '--wait' }}
         with:
           host: ${{ vars.VM_HOST }}
           username: ${{ vars.VM_USERNAME }}
@@ -192,14 +237,15 @@ jobs:
           proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
           proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
           proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
-          # `deploy --wait` gives up after 40 minutes. The deployment itself
-          # keeps running on the host if this connection drops, and
+          # `deploy` gives up after 40 minutes. The deployment itself keeps
+          # running on the host if this connection drops, and
           # `node-manager wait <id>` attaches to it again.
           command_timeout: 45m
-          envs: WORKSPACE_IMAGE_TAG,DEPLOY_ID,RUN_URL
+          envs: WORKSPACE_IMAGE_TAG,DEPLOY_ID,RUN_URL,DEPLOY_WAIT
           script: |
             set -eu
-            docker exec logos-node-manager node-manager deploy --id "$DEPLOY_ID" --tag "$WORKSPACE_IMAGE_TAG" --requested-by "$RUN_URL" --wait
+            # DEPLOY_WAIT is one flag from the workflow file, so it is left unquoted on purpose.
+            docker exec logos-node-manager node-manager deploy --id "$DEPLOY_ID" --tag "$WORKSPACE_IMAGE_TAG" --requested-by "$RUN_URL" $DEPLOY_WAIT
 
       - name: Show node manager log
         if: ${{ (success() || failure()) && matrix.node-manager }}

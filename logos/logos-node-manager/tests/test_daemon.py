@@ -7,6 +7,7 @@ import threading
 import time
 from dataclasses import replace
 
+import pytest
 from conftest import OLD
 
 from logos_node_manager.daemon import MAX_ATTEMPTS, Daemon
@@ -306,3 +307,29 @@ def test_the_start_is_logged_with_the_docker_versions_and_missing_files(settings
     assert "Node manager" in caplog.text
     assert "engine fake, compose fake" in caplog.text
     assert "docker-compose.yml does not exist" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, "Draining is switched off"),
+        (
+            {"drain_enabled": True, "orchestrator_url": "https://logos.example", "node_key": "the-secret-key"},
+            "the node is cordoned at https://logos.example",
+        ),
+        (
+            {"drain_enabled": True},
+            "Draining is on, but NODE_MANAGER_ORCHESTRATOR_URL or NODE_MANAGER_NODE_KEY is missing",
+        ),
+    ],
+)
+def test_the_start_log_says_whether_the_node_is_drained(settings, store, docker, caplog, overrides, expected):
+    stop = threading.Event()
+    stop.set()
+    daemon = Daemon(replace(settings, **overrides), store, ScriptedDeployer(store, stop), stop, docker=docker)
+
+    with caplog.at_level(logging.INFO):
+        daemon.run()
+
+    assert expected in caplog.text
+    assert "the-secret-key" not in caplog.text

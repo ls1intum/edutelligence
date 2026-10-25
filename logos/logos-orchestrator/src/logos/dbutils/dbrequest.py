@@ -70,6 +70,18 @@ class LogosNodeAuthRequest(BaseModel):
     configured_models: list[str] = Field(default_factory=list)
 
 
+class LogosNodeMaintenanceRequest(BaseModel):
+    """A node manager's call about the planned replacement of its node's container.
+
+    The node is resolved from the key, like for the worker itself, so a caller can only act on its own node.
+    ``deployment_id`` names the replacement; the id format is the one the node manager checks before it accepts a
+    deployment.
+    """
+
+    shared_key: str
+    deployment_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
 class LogosNodeRegisterRequest(LogosKeyModel):
     provider_name: str
     base_url: str = ""

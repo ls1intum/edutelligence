@@ -73,6 +73,7 @@ class MockLogosNodeFacade:
         self.raise_on_request_start = False
         self._gpu_scores: dict[int, int] = {}  # provider_id -> gpu_performance_score
         self._offline_providers: set[int] = set()
+        self._cordoned_providers: set[int] = set()
 
     def set_view(self, model_id, provider_id, view):
         self._views[(model_id, provider_id)] = view
@@ -131,6 +132,12 @@ class MockLogosNodeFacade:
 
     def mark_provider_offline(self, provider_id):
         self._offline_providers.add(provider_id)
+
+    def is_provider_cordoned(self, provider_id):
+        return provider_id in self._cordoned_providers
+
+    def mark_provider_cordoned(self, provider_id):
+        self._cordoned_providers.add(provider_id)
 
     def try_reserve_capacity(self, model_id, provider_id, request_id):
         return self._reserve_results.get((model_id, provider_id), True)

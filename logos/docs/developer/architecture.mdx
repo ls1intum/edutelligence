@@ -46,7 +46,7 @@ Logos has two kinds of machine and one optional add-on:
 | Subsystem | Directory | What it is |
 |---|---|---|
 | **Worker node** | `logos-workernode/` | The outbound worker for local inference. It runs one **lane** (a `vllm serve` process) for each configured model. It keeps a WebSocket session open to the orchestrator. It reports the runtime state, so that the orchestrator can schedule against warm and cold capacity. It also calibrates the model memory profiles automatically. |
-| **Node manager** | `logos-node-manager/` | An optional service on a worker host. It replaces the worker container with a new image and checks the new container. If the new container does not become healthy, it starts the previous version again. |
+| **Node manager** | `logos-node-manager/` | An optional service on a worker host. It replaces the worker container with a new image and checks the new container. If the new container does not become healthy, it starts the previous version again. On a worker that drains, it first asks the orchestrator to cordon the worker, so that the requests that run on it finish. |
 
 ### Agent stack (optional, core node)
 

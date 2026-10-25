@@ -652,7 +652,7 @@ class CapacityPlanner:
     def _is_plannable(self, provider_id: int) -> bool:
         """Return True when this cycle may act on *provider_id*.
 
-        Two exclusions, both about acting on state that is transient by
+        Three exclusions, all about acting on state that is transient by
         design:
 
         * No first status since connect — we don't know which lanes are
@@ -661,10 +661,15 @@ class CapacityPlanner:
           its probes, so its idle lanes and large free VRAM are reserved,
           not available. A lane placed here would take the memory the
           probes need and make them fail.
+        * The worker is cordoned — its container is about to be replaced, so
+          a lane placed or woken here would be lost, and the requests it
+          drains must not be disturbed. A peer takes the load meanwhile.
         """
         if self._registry is None:
             return True
         if not self._registry.has_received_first_status(provider_id):
+            return False
+        if self._registry.is_cordoned(provider_id):
             return False
         return not self._registry.is_calibrating(provider_id)
 
@@ -691,6 +696,11 @@ class CapacityPlanner:
         if registry is not None and not registry.is_provider_online(provider_id):
             self._clear_unplannable(provider_id)
             logger.debug("Skipping worker=%s: offline this cycle", provider_id)
+            return
+        if registry is not None and registry.is_cordoned(provider_id):
+            # Expected for as long as the node manager takes to replace the container; it ends the cordon itself.
+            self._clear_unplannable(provider_id)
+            logger.debug("Skipping worker=%s: cordoned for a container replacement", provider_id)
             return
         now = time.time()
         first_seen = self._unplannable_since.setdefault(provider_id, now)

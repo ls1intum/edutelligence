@@ -369,6 +369,29 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     )
                     continue
 
+                # A worker whose container is being replaced takes no new work.
+                # A peer that can serve the model wins on score; when none can,
+                # the request waits in the model's queue for this worker to come
+                # back (the fallback below) instead of failing outright.
+                if provider_type == "logosnode" and self._logosnode.is_provider_cordoned(provider_id):
+                    logger.debug(
+                        "Model=%s worker=%s is cordoned: queueing only if no peer can serve it",
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                        self._logosnode.get_provider_name(provider_id) or provider_id,
+                    )
+                    unavailable_fallbacks.append(
+                        self._queue_fallback(
+                            model_id,
+                            provider_id,
+                            provider_type,
+                            weight,
+                            priority_int,
+                            weight_span,
+                            "the worker is being replaced",
+                        )
+                    )
+                    continue
+
                 ettft = self._estimate_ettft(
                     model_id, provider_id, provider_type, input_tokens=input_tokens, request_id=request_id
                 )
@@ -388,26 +411,15 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     # transitioning (sleep→wake) and will become available.
                     # Cloud unavailable means truly rate-limited → skip.
                     if provider_type == "logosnode":
-                        fallback_ettft = EttftEstimate(
-                            expected_wait_s=OVERHEAD_COLD_S,
-                            tier=ReadinessTier.COLD,
-                            reasoning=f"Fallback: {ettft.reasoning} — queueing as cold",
-                            state_overhead_s=OVERHEAD_COLD_S,
-                            warmth_state=-1,
-                        )
-                        corrected = compute_corrected_score(
-                            weight,
-                            (fallback_ettft.expected_wait_s if self._ettft_enabled else 0.0),
-                            weight_span,
-                        )
                         unavailable_fallbacks.append(
-                            (
+                            self._queue_fallback(
                                 model_id,
                                 provider_id,
                                 provider_type,
-                                corrected,
+                                weight,
                                 priority_int,
-                                fallback_ettft,
+                                weight_span,
+                                ettft.reasoning,
                             )
                         )
                     continue
@@ -466,6 +478,35 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             )
 
         return scored
+
+    def _queue_fallback(
+        self,
+        model_id: int,
+        provider_id: int,
+        provider_type: str,
+        weight: float,
+        priority_int: int,
+        weight_span: float,
+        reason: str,
+    ) -> tuple:
+        """A scored entry for a worker that cannot take the request right now.
+
+        It is used only when no other candidate is available: the request is
+        then queued, scored as a cold start, instead of being refused.
+        """
+        fallback_ettft = EttftEstimate(
+            expected_wait_s=OVERHEAD_COLD_S,
+            tier=ReadinessTier.COLD,
+            reasoning=f"Fallback: {reason} — queueing as cold",
+            state_overhead_s=OVERHEAD_COLD_S,
+            warmth_state=-1,
+        )
+        corrected = compute_corrected_score(
+            weight,
+            (fallback_ettft.expected_wait_s if self._ettft_enabled else 0.0),
+            weight_span,
+        )
+        return (model_id, provider_id, provider_type, corrected, priority_int, fallback_ettft)
 
     def _record_scheduling_metrics(self, model_id: int, provider_id: int, ettft: "EttftEstimate") -> None:
         """Record per-decision scheduling metrics for the selected candidate."""

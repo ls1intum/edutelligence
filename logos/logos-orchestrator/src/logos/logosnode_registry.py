@@ -395,6 +395,10 @@ class LogosNodeRuntimeRegistry:
         # the lane health snapshot can show it without waiting for the worker
         # to push a status that differs from its last one.
         self.on_cold_mark_changed: Callable[[int], None] | None = None
+        # Whether a worker is cordoned for a planned replacement of its container (see node_maintenance). The
+        # maintenance service owns the state; the registry only asks it, so every reader of the registry (the
+        # scheduling facade, the capacity planner, the calibration orchestrator) shares one answer.
+        self.cordon_check: Callable[[int], bool] | None = None
         # provider_id -> monotonic timestamp of the last live-session drop.
         # A worker that went down a moment ago is mid-reboot, not dead: the
         # request path uses this to extend the startup grace period past the
@@ -1061,6 +1065,11 @@ class LogosNodeRuntimeRegistry:
         """Return True while the worker is running a calibration session."""
         session = self._sessions.get(int(provider_id))
         return session is not None and session.calibrating
+
+    def is_cordoned(self, provider_id: int) -> bool:
+        """Return True while the worker is cordoned: it takes no new work, because its container is being replaced."""
+        check = self.cordon_check
+        return check is not None and bool(check(int(provider_id)))
 
     def subscribe_to_events(self, callback: Callable[[int, dict[str, Any]], None]) -> None:
         """Register a callback fired for every worker event.

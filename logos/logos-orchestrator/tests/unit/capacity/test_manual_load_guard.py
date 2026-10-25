@@ -30,6 +30,7 @@ def _planner(*, calibrating=False, has_status=True, capacity=object(), profiles=
     planner = CapacityPlanner.__new__(CapacityPlanner)
     registry = MagicMock()
     registry.is_calibrating.return_value = calibrating
+    registry.is_cordoned.return_value = False
     registry.has_received_first_status.return_value = has_status
     registry.peek_runtime_snapshot.return_value = {"runtime": {"devices": {"mode": "metal"}}} if metal else None
     planner._registry = registry

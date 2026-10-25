@@ -108,8 +108,10 @@ A non-zero value indicates either a fresh worker or a new model head shape.
 ## Updating with the node manager
 On a host with `COMPOSE_PROFILES=node-manager` in `.env`, the `logos-node-manager` service replaces the worker
 container: it pulls the new image, starts the new container, checks that it comes up, and starts the previous version
-again if it does not. Where it runs, nothing else should restart the worker. See
-[../logos-node-manager/README.md](../logos-node-manager/README.md) for the commands and the checks.
+again if it does not. Where it runs, nothing else should restart the worker. With `NODE_MANAGER_DRAIN_ENABLED=true` in
+`.env`, it first asks the orchestrator to cordon the node and waits until the requests that run on it are done. It
+uses `LOGOS_URL` and `LOGOS_API_KEY` for this. See
+[../logos-node-manager/README.md](../logos-node-manager/README.md) for the commands, the checks and the limits.
 
 ## Local dev
 1. Copy `.env.example` to `.env` and fill in connection credentials.

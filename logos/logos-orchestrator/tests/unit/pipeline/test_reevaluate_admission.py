@@ -31,6 +31,9 @@ class _Facade:
     def is_provider_online(self, provider_id):
         return True
 
+    def is_provider_cordoned(self, provider_id):
+        return False
+
     def is_model_lane_ready(self, model_id, provider_id):
         return True
 

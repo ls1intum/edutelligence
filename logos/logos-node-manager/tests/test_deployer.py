@@ -242,14 +242,29 @@ def test_a_first_deployment_that_works_succeeds(deployer, docker, store):
     assert docker.container_info.image_id == NEW
 
 
-def test_the_drain_phase_is_passed_through_and_warns_when_enabled(settings, docker, store, clock, caplog):
+def test_the_drain_phase_is_passed_through_when_the_drain_is_switched_off(deployer, orchestrator, store):
+    deployer.orchestrator = orchestrator
+
+    record = deployer.process(queued(store, "v2"))
+
+    assert record.outcome is Outcome.SUCCEEDED
+    assert orchestrator.calls == [], "a host with the drain switched off must not talk to the orchestrator"
+    assert record.cordoned_at is None
+    assert [event["note"] for event in record.events if event["phase"] == "draining"] == [
+        "pulled registry.example/logos/logos-workernode-vllm:v2 (111111111111)"
+    ]
+
+
+def test_the_drain_phase_is_skipped_with_a_note_when_there_is_no_orchestrator_to_ask(
+    settings, docker, store, clock, caplog
+):
     deployer = Deployer(replace(settings, drain_enabled=True), docker, store, clock=clock, sleep=clock.sleep)
 
     with caplog.at_level(logging.WARNING):
         record = deployer.process(queued(store, "v2"))
 
     assert record.outcome is Outcome.SUCCEEDED
-    assert "Draining is not implemented" in caplog.text
+    assert any("draining skipped" in event["note"] for event in record.events)
 
 
 # ---------------------------------------------------------------------- Images on the host

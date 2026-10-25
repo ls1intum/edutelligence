@@ -74,6 +74,7 @@ from logos.logosnode_snapshot import (
 )
 from logos.middleware import APIPrefixStripperMiddleware
 from logos.monitoring import prometheus_metrics as prom
+from logos.node_maintenance import NodeMaintenance
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.effort_normalization import adapt_payload_after_effort_rejection, parse_effort_rejection
@@ -217,6 +218,10 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
     on_capabilities_changed=_sync_logosnode_capabilities_to_db,
     latency_store=_latency_store,
 )
+# The cordons that node managers hold while they replace a worker's container. The scheduling facade and the
+# scheduler are attached in start_pipeline.
+_node_maintenance = NodeMaintenance(_logosnode_registry)
+_logosnode_registry.cordon_check = _node_maintenance.is_cordoned
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
@@ -1203,6 +1208,7 @@ async def start_pipeline():
     _queue_mgr = PriorityQueueManager()
 
     _logosnode_facade = LogosNodeSchedulingDataFacade(_queue_mgr, None, runtime_registry=_logosnode_registry)
+    _node_maintenance.tracked_requests = _logosnode_facade.count_tracked_requests
     _azure_facade = AzureSchedulingDataFacade(None)
 
     await _register_models_with_facades(_logosnode_facade, _azure_facade)
@@ -1255,6 +1261,8 @@ async def start_pipeline():
     # Every worker report restores the forwarding gate's budget, so it is
     # also the moment to reconsider requests being held for it.
     _logosnode_registry.set_on_runtime_updated(scheduler.on_worker_report)
+    # A released cordon frees the requests held back for that worker.
+    _node_maintenance.on_released = scheduler.on_worker_report
     _context_resolver = ContextResolver(
         logosnode_registry=_logosnode_registry,
         lane_preparer=_capacity_planner,

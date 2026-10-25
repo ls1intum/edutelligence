@@ -35,6 +35,10 @@ the new container. If the new container does not become healthy, the node
 manager starts the previous version again. For the steps, see
 [Update a worker node with the node manager](../deployment.md#update-a-worker-node-with-the-node-manager).
 
+The node manager can also drain the worker before it replaces the container.
+The requests that run on the worker then finish. For the steps, see
+[Drain a worker node during an update](../deployment.md#drain-a-worker-node-during-an-update).
+
 To run an image that you built yourself, build it from the worker directory.
 The worker directory is the build context. Put the values in the `.env` file
 of the worker. Also export the values in the shell, because the Docker CLI

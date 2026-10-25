@@ -116,5 +116,14 @@ class Daemon:
         for path in (s.compose_file, s.env_file):
             if not path.is_file():
                 logger.warning("%s does not exist; deployments fail until it does", path)
-        if s.drain_enabled:
-            logger.warning("NODE_MANAGER_DRAIN_ENABLED is set, but this version does not drain yet")
+        if not s.drain_enabled:
+            logger.info("Draining is switched off: a deployment replaces the container at once")
+        elif s.orchestrator_url and s.node_key:
+            logger.info(
+                "Draining is enabled: the node is cordoned at %s before the container is replaced", s.orchestrator_url
+            )
+        else:
+            logger.warning(
+                "Draining is enabled, but NODE_MANAGER_ORCHESTRATOR_URL or NODE_MANAGER_NODE_KEY is missing: "
+                "a deployment replaces the container without draining the node"
+            )

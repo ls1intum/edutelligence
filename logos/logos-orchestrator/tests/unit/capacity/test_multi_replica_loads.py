@@ -252,6 +252,7 @@ def _manual_load_planner(lanes: List[LaneSchedulerSignals]) -> CapacityPlanner:
     planner._cold_mark_settlers = set()
     registry = MagicMock()
     registry.is_calibrating.return_value = False
+    registry.is_cordoned.return_value = False
     registry.has_received_first_status.return_value = True
     planner._registry = registry
     facade = MagicMock()
@@ -399,6 +400,7 @@ def _planner(provider: _MockProvider, *, score: float = 2.0, replicate: bool = F
     registry = MagicMock()
     registry.has_received_first_status.return_value = True
     registry.is_calibrating.return_value = False
+    registry.is_cordoned.return_value = False
     registry.peek_runtime_snapshot.return_value = {"runtime": {"lanes": [], "devices": {}}}
     demand = MagicMock()
     demand.get_ranked_models.return_value = [("X", score)]

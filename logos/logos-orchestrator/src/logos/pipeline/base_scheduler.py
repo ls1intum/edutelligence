@@ -249,6 +249,16 @@ class BaseScheduler(SchedulerInterface):
             except Exception:
                 continue
 
+            # A worker whose container is being replaced takes nothing from the
+            # queue, not even the request that a finishing one would have
+            # handed on: a peer picks the request up, or it waits for the
+            # worker to come back.
+            try:
+                if self._logosnode.is_provider_cordoned(provider_id):
+                    continue
+            except Exception:
+                continue
+
             # Use lane readiness as the primary check — it reads the runtime
             # snapshot directly, bypassing the 5s refresh_interval cache in
             # _loaded_models that can be stale right after a cold load confirms.

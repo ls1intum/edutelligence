@@ -241,6 +241,25 @@ class LogosNodeSchedulingDataFacade:
         provider = self._providers.get(int(provider_id))
         return provider.is_online() if provider else False
 
+    def is_provider_cordoned(self, provider_id: int) -> bool:
+        """True if the worker is being replaced and must get no new work.
+
+        Unlike an offline worker it still has a session and may still be
+        finishing requests, so the scheduler treats it as unavailable for now
+        rather than as gone.
+        """
+        registry = self._runtime_registry
+        return registry is not None and registry.is_cordoned(provider_id)
+
+    def count_tracked_requests(self, provider_id: int) -> int:
+        """Requests tracked for a worker, from scheduling to completion.
+
+        This includes a request that is scheduled but has not reached the
+        worker yet, which the worker's own count cannot show.
+        """
+        with self._lock:
+            return sum(1 for data in self._request_tracking.values() if data.get("provider_id") == int(provider_id))
+
     def get_configured_models(self, provider_id: int) -> List[str]:
         """Return every model the worker is configured to serve, including
         models that haven't been calibrated yet. Driven by the calibration

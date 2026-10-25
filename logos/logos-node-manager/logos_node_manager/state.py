@@ -41,7 +41,8 @@ PREVIOUS_TAG = "previous"
 class Phase(str, Enum):
     QUEUED = "queued"
     PULLING = "pulling"
-    # Reserved: waiting for the running requests of the node to finish. This version passes through it.
+    # The node is cordoned at the orchestrator and the running requests finish. With the drain switched off, or without
+    # an orchestrator to ask, a deployment passes through this phase at once.
     DRAINING = "draining"
     SWAPPING = "swapping"
     VERIFYING = "verifying"
@@ -59,6 +60,10 @@ class Outcome(str, Enum):
 
 class FailureKind(str, Enum):
     PULL_FAILED = "pull_failed"
+    # The node did not drain within the limit. The cordon was lifted and the running container was not touched.
+    DRAIN_TIMEOUT = "drain_timeout"
+    # The node never got its turn: another node stayed in maintenance, or this one calibrated, for the whole limit.
+    DRAIN_BLOCKED = "drain_blocked"
     SWAP_FAILED = "swap_failed"
     VERIFY_FAILED = "verify_failed"
     ROLLBACK_FAILED = "rollback_failed"
@@ -112,6 +117,20 @@ class Deployment:
     target_image_ref: str | None = None
     target_image_id: str | None = None
     new_container_id: str | None = None
+
+    # The drain. The times are saved so that a restart of the manager keeps the limits it counts against.
+    # When the manager began to ask the orchestrator for the cordon.
+    drain_requested_at: str | None = None
+    # When the orchestrator granted the cordon, and when it said the node had drained.
+    cordoned_at: str | None = None
+    drained_at: str | None = None
+    # When the cordon was given back. Set on every ending of a deployment that held it.
+    cordon_released_at: str | None = None
+    # The session of the worker at the orchestrator before the container was replaced. The new container shows up as
+    # another session.
+    session_before: str | None = None
+    # Models that no other node could serve while this node was cordoned: their requests waited for this node.
+    sole_replica_models: list[str] = field(default_factory=list)
 
     # The end of the failed container's log, taken before the rollback removes that container.
     failure_logs: str = ""

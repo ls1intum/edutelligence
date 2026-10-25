@@ -9,6 +9,7 @@ import time
 import pytest
 
 from logos_node_manager import cli
+from logos_node_manager.config import Settings
 from logos_node_manager.state import Deployment, FailureKind, Outcome, Phase
 
 
@@ -31,6 +32,26 @@ def finishing(store, clock, deployment_id, outcome, *, failure=None, message="",
         record.message = message
         record.failure_logs = logs
         store.save(record)
+
+    return sleep
+
+
+def pulling(store, clock, deployment_id, *, ending=None):
+    """A sleep function that lets the "daemon" pull the image while the command waits.
+
+    With ``ending`` the deployment is also finished by then, as a fast one would be.
+    """
+
+    def sleep(seconds: float) -> None:
+        clock.sleep(seconds)
+        record = store.load(deployment_id)
+        if record.phase is Phase.QUEUED:
+            record.events.append({"at": "2026-01-01T12:00:01.000000+00:00", "phase": "draining", "note": "pulled v2"})
+            record.phase = Phase.DRAINING
+            if ending is not None:
+                record.phase = Phase.DONE
+                record.outcome, record.failure = ending
+            store.save(record)
 
     return sleep
 
@@ -200,3 +221,130 @@ def test_a_command_is_required(capsys):
         cli.main([])
 
     assert exit_info.value.code == cli.EXIT_USAGE
+
+
+# ---------------------------------------------------------------------- --until-pulled
+
+
+def test_until_pulled_returns_as_soon_as_the_image_is_on_the_host(settings, store, clock, capsys):
+    code = deploy(settings, store, clock, "--until-pulled", sleep=pulling(store, clock, "run-1"))
+
+    out = capsys.readouterr().out
+    assert code == cli.EXIT_OK
+    assert "draining: pulled v2" in out
+    assert "The image of deployment run-1 is on the host" in out
+    assert "node-manager wait run-1" in out
+    assert store.load("run-1").phase is Phase.DRAINING, "the deployment goes on without the command"
+
+
+def test_until_pulled_reports_the_result_of_a_deployment_that_was_already_over(settings, store, clock, capsys):
+    ending = (Outcome.SUCCEEDED, None)
+
+    code = deploy(settings, store, clock, "--until-pulled", sleep=pulling(store, clock, "run-1", ending=ending))
+
+    out = capsys.readouterr().out
+    assert code == cli.EXIT_OK
+    assert "Deployment run-1: succeeded" in out
+    assert "is on the host" not in out
+
+
+def test_until_pulled_exits_with_the_failure_of_the_pull(settings, store, clock, capsys):
+    store.submit(Deployment(id="run-1", tag="v2", requested_at="2026-01-01T00:00:00"))
+    sleep = finishing(store, clock, "run-1", Outcome.FAILED, failure=FailureKind.PULL_FAILED, message="no such tag")
+
+    assert deploy(settings, store, clock, "--until-pulled", sleep=sleep) == cli.EXIT_FAILED
+
+    assert "no such tag" in capsys.readouterr().out
+
+
+def test_until_pulled_waits_while_the_daemon_is_busy_with_an_earlier_deployment(settings, store, clock, capsys):
+    code = deploy(settings, store, clock, "--until-pulled", "--timeout", "30")
+
+    assert code == cli.EXIT_WAIT_TIMED_OUT
+    assert "did not pull the image within 30 s" in capsys.readouterr().err
+    assert store.load("run-1").phase is Phase.QUEUED
+
+
+def test_wait_and_until_pulled_exclude_each_other(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        parse("deploy", "--id", "run-1", "--tag", "v2", "--wait", "--until-pulled")
+
+    assert exit_info.value.code == cli.EXIT_USAGE
+
+
+# ---------------------------------------------------------------------- status
+
+
+def test_status_shows_what_happened_so_far(settings, store, capsys):
+    record = store.submit(Deployment(id="run-1", tag="v2", requested_at="2026-01-01T00:00:00"))
+    record.phase = Phase.DRAINING
+    record.events = [
+        {"at": "2026-01-01T12:00:01.000000+00:00", "phase": "pulling", "note": "running x"},
+        {
+            "at": "2026-01-01T12:03:15.000000+00:00",
+            "phase": "draining",
+            "note": "waiting for its turn: node-b is being replaced",
+        },
+    ]
+    store.save(record)
+
+    cli.cmd_status(parse("status", "run-1"), settings)
+
+    out = capsys.readouterr().out
+    assert "Deployment run-1: tag v2, phase draining" in out
+    assert "[12:00:01] pulling: running x" in out
+    assert "[12:03:15] draining: waiting for its turn: node-b is being replaced" in out
+
+
+def test_status_prints_the_log_of_a_failed_container_only_on_request(settings, store, capsys):
+    record = store.submit(Deployment(id="run-1", tag="v2", requested_at="2026-01-01T00:00:00"))
+    record.phase = Phase.DONE
+    record.outcome = Outcome.ROLLED_BACK
+    record.failure = FailureKind.VERIFY_FAILED
+    record.failure_logs = "ImportError: no module"
+    store.save(record)
+
+    cli.cmd_status(parse("status", "run-1"), settings)
+    assert "ImportError" not in capsys.readouterr().out
+
+    cli.cmd_status(parse("status", "run-1", "--logs"), settings)
+    assert "ImportError: no module" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------- run
+
+
+class RecordingDaemon:
+    def __init__(self, settings, store, deployer, stop, **kwargs) -> None:
+        RecordingDaemon.deployer = deployer
+
+    def run(self) -> None:
+        return None
+
+
+@pytest.mark.parametrize(
+    ("environ", "expects_client"),
+    [
+        ({}, False),
+        ({"NODE_MANAGER_DRAIN_ENABLED": "true"}, False),
+        ({"NODE_MANAGER_ORCHESTRATOR_URL": "https://logos.example", "NODE_MANAGER_NODE_KEY": "k"}, False),
+        (
+            {
+                "NODE_MANAGER_DRAIN_ENABLED": "true",
+                "NODE_MANAGER_ORCHESTRATOR_URL": "https://logos.example",
+                "NODE_MANAGER_NODE_KEY": "k",
+            },
+            True,
+        ),
+    ],
+)
+def test_the_daemon_gets_an_orchestrator_client_only_when_the_node_drains(
+    tmp_path, monkeypatch, environ, expects_client
+):
+    monkeypatch.setattr(cli, "Daemon", RecordingDaemon)
+    monkeypatch.setattr(cli.signal, "signal", lambda *args: None)
+    settings = Settings.from_env({"NODE_MANAGER_STATE_DIR": str(tmp_path / "state"), **environ})
+
+    assert cli.cmd_run(parse("run"), settings) == cli.EXIT_OK
+
+    assert (RecordingDaemon.deployer.orchestrator is not None) is expects_client

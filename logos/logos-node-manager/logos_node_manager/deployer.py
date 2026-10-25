@@ -6,18 +6,23 @@ start picks the record up and works out from the phase and from what Docker show
 
 Images are removed when the deployment has ended and not earlier: until then a rollback may still need them.
 
-The ``draining`` phase is a place holder. A later version waits there for the running requests of the node to finish.
+In the ``draining`` phase the manager asks the orchestrator to cordon the node, so that it gets no new requests, and
+waits until the requests that run have finished. Only one node at a time gets the cordon: another node waits for its
+turn. The cordon is held until the deployment ends and then given back, whatever the outcome. Without an orchestrator to
+ask, or with the drain switched off, the phase passes at once and the container is replaced as before.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Callable
+from datetime import datetime
+from typing import Callable, TypeVar
 
 from logos_node_manager.config import Settings
 from logos_node_manager.docker_ops import Docker, split_image_ref
 from logos_node_manager.errors import DockerError, Interrupted
+from logos_node_manager.orchestrator import CordonReply, OrchestratorClient, OrchestratorUnavailable
 from logos_node_manager.rollback import restore_previous
 from logos_node_manager.state import (
     MAX_EVENTS,
@@ -29,17 +34,41 @@ from logos_node_manager.state import (
     StateStore,
     utc_now,
 )
-from logos_node_manager.verify import verify_container
+from logos_node_manager.verify import VerifyResult, verify_container
 
 logger = logging.getLogger(__name__)
 
 # The saved log of a failed container is limited, so the record stays small.
 MAX_LOG_CHARS = 6000
+# A record holds at most MAX_EVENTS events. The wait for the drain adds one at most this often, and only if it changed.
+PROGRESS_EVENT_EVERY_S = 30.0
+
+_T = TypeVar("_T")
 
 
 def short_id(image_id: str | None) -> str:
     """The short form of an image ID, as ``docker images`` prints it."""
     return (image_id or "none").removeprefix("sha256:")[:12]
+
+
+class _Budget:
+    """A time limit that survives a restart of the manager.
+
+    The part used before the restart is read from the time saved in the record. The part after it is counted with the
+    clock of the deployer.
+    """
+
+    def __init__(self, deployer: "Deployer", limit_s: float, started: str | None) -> None:
+        self.limit_s = limit_s
+        self._clock = deployer._clock
+        self._used_before = deployer._seconds_since(started)
+        self._begun = self._clock()
+
+    def used(self) -> float:
+        return self._used_before + (self._clock() - self._begun)
+
+    def exhausted(self) -> bool:
+        return self.used() >= self.limit_s
 
 
 class Deployer:
@@ -49,6 +78,7 @@ class Deployer:
         docker: Docker,
         store: StateStore,
         *,
+        orchestrator: OrchestratorClient | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], str] = utc_now,
@@ -57,10 +87,13 @@ class Deployer:
         self.settings = settings
         self.docker = docker
         self.store = store
+        self.orchestrator = orchestrator
         self._clock = clock
         self._sleep = sleep
         self._now = now
         self._should_stop = should_stop
+        # The last line the wait for the drain recorded, and when. Keeps the record from filling with polls.
+        self._last_progress: tuple[str, float] | None = None
 
     # ------------------------------------------------------------------ Driver
 
@@ -125,6 +158,8 @@ class Deployer:
     def _finish(
         self, deployment: Deployment, outcome: Outcome, failure: FailureKind | None = None, message: str = ""
     ) -> None:
+        # Before the record says it is over: a stop in between then repeats this step instead of losing the release.
+        self._release_cordon(deployment)
         deployment.outcome = outcome
         deployment.failure = failure
         deployment.message = message
@@ -227,9 +262,173 @@ class Deployer:
         self._advance(deployment, Phase.DRAINING, f"pulled {reference} ({short_id(image_id)})")
 
     def _drain(self, deployment: Deployment) -> None:
-        if self.settings.drain_enabled:
-            logger.warning("Draining is not implemented in this version; deployment %s swaps without it", deployment.id)
-        self._advance(deployment, Phase.SWAPPING)
+        """Cordon the node at the orchestrator and wait until the requests that run on it are done.
+
+        The cordon is held until the deployment ends. If the orchestrator cannot be asked, the deployment goes on
+        without a drain: an orchestrator problem must not stop the deployments that may repair it.
+        """
+        if not self.settings.drain_enabled:
+            self._advance(deployment, Phase.SWAPPING)
+            return
+        client = self.orchestrator
+        if client is None:
+            self._advance(
+                deployment, Phase.SWAPPING, "draining skipped: the manager has no orchestrator address or node key"
+            )
+            return
+        try:
+            drained = self._wait_for_drain(deployment, client)
+        except OrchestratorUnavailable as exc:
+            logger.warning("Deployment %s: draining skipped: %s", deployment.id, exc)
+            self._advance(deployment, Phase.SWAPPING, f"draining skipped: {exc}")
+            return
+        if drained:
+            self._advance(deployment, Phase.SWAPPING, "the node has drained; replacing the container")
+
+    def _wait_for_drain(self, deployment: Deployment, client: OrchestratorClient) -> bool:
+        """Ask for the cordon until the node has drained. False if the deployment ended instead.
+
+        Every call asks for the cordon again, which the orchestrator answers with the state of the node. That is also
+        what renews the cordon, and what takes it again if the orchestrator forgot it, for example after a restart.
+        The limits count from times saved in the record, so a restart of the manager does not extend them.
+        """
+        self._last_progress = None
+        if deployment.drain_requested_at is None:
+            deployment.drain_requested_at = self._now()
+            self.store.save(deployment)
+        turn = _Budget(self, self.settings.turn_timeout_s, deployment.drain_requested_at)
+        drain = _Budget(self, self.settings.drain_timeout_s, deployment.cordoned_at) if deployment.cordoned_at else None
+        while True:
+            self._check_stop()
+            reply = self._ask(lambda: client.cordon(deployment.id))
+            if not reply.granted:
+                if deployment.cordoned_at is not None:
+                    # The orchestrator forgot the cordon and another node holds it now.
+                    self._event(deployment, "the cordon was lost; waiting for the turn of the node again")
+                    deployment.cordoned_at = None
+                    deployment.drain_requested_at = self._now()
+                    drain = None
+                    turn = _Budget(self, self.settings.turn_timeout_s, deployment.drain_requested_at)
+                    self.store.save(deployment)
+                why = self._why_denied(reply)
+                if turn.exhausted():
+                    self._finish(
+                        deployment,
+                        Outcome.FAILED,
+                        FailureKind.DRAIN_BLOCKED,
+                        f"the node did not get its turn within {int(turn.limit_s)} s: {why}. "
+                        "The running container was not touched.",
+                    )
+                    return False
+                self._progress(deployment, f"waiting for its turn: {why}")
+                self._pause()
+                continue
+
+            if deployment.cordoned_at is None:
+                deployment.cordoned_at = self._now()
+                deployment.sole_replica_models = list(reply.sole_replica_models)
+                drain = _Budget(self, self.settings.drain_timeout_s, deployment.cordoned_at)
+                self._event(deployment, self._cordon_note(reply))
+                self.store.save(deployment)
+
+            if reply.drained:
+                deployment.drained_at = self._now()
+                # The worker session that goes away with the old container. The new container shows up as another one.
+                deployment.session_before = reply.session_id
+                self._event(deployment, f"the node has drained after {int(drain.used())} s")
+                return True
+            if drain.exhausted():
+                self._finish(
+                    deployment,
+                    Outcome.FAILED,
+                    FailureKind.DRAIN_TIMEOUT,
+                    f"the node did not drain within {int(drain.limit_s)} s: {self._in_flight_text(reply)} "
+                    "still running. The cordon was lifted and the running container was not touched.",
+                )
+                return False
+            self._progress(deployment, f"waiting for the node to drain: {self._in_flight_text(reply)} running")
+            self._pause()
+
+    @staticmethod
+    def _why_denied(reply: CordonReply) -> str:
+        if reply.reason == "another_node_in_maintenance":
+            return f"{reply.holder or 'another node'} is being replaced"
+        if reply.reason == "calibrating":
+            return "the node runs a calibration session"
+        return reply.reason or "the orchestrator did not grant the cordon"
+
+    @staticmethod
+    def _in_flight_text(reply: CordonReply) -> str:
+        total = reply.in_flight_orchestrator + reply.in_flight_worker
+        return (
+            f"{total} request(s) ({reply.in_flight_orchestrator} tracked by the orchestrator, "
+            f"{reply.in_flight_worker} on the worker)"
+        )
+
+    @staticmethod
+    def _cordon_note(reply: CordonReply) -> str:
+        if reply.sole_replica_models:
+            return (
+                "cordoned the node at the orchestrator; no other node serves "
+                f"{', '.join(reply.sole_replica_models)}, so requests for them wait until this node is back"
+            )
+        return "cordoned the node at the orchestrator"
+
+    def _progress(self, deployment: Deployment, text: str) -> None:
+        """Record a line about the wait, unless it repeats the last one or came too soon after it."""
+        now = self._clock()
+        last = self._last_progress
+        if last is not None and (last[0] == text or now - last[1] < PROGRESS_EVENT_EVERY_S):
+            return
+        self._last_progress = (text, now)
+        self._event(deployment, text)
+        self.store.save(deployment)
+
+    def _ask(self, call: Callable[[], _T], *, stoppable: bool = True) -> _T:
+        """Run a call to the orchestrator, asking again while it cannot be reached.
+
+        Raises ``OrchestratorUnavailable`` when the retry window is over, or at once for an answer that asking again
+        will not change.
+        """
+        started = self._clock()
+        while True:
+            try:
+                return call()
+            except OrchestratorUnavailable as exc:
+                if not exc.retryable or self._clock() - started >= self.settings.orchestrator_retry_window_s:
+                    raise
+                logger.warning("The orchestrator did not answer (%s); asking again", exc)
+                if stoppable:
+                    self._check_stop()
+                self._pause()
+
+    def _pause(self) -> None:
+        self._sleep(self.settings.poll_interval_s)
+
+    def _check_stop(self) -> None:
+        if self._should_stop():
+            raise Interrupted()
+
+    def _seconds_since(self, stamp: str | None) -> float:
+        """Seconds from a time saved in a record to now; 0 if there is none or it cannot be read."""
+        if not stamp:
+            return 0.0
+        try:
+            return max(0.0, (datetime.fromisoformat(self._now()) - datetime.fromisoformat(stamp)).total_seconds())
+        except ValueError:
+            return 0.0
+
+    def _release_cordon(self, deployment: Deployment) -> None:
+        """Give the cordon back. Every ending passes here; a deployment that never held the cordon does nothing."""
+        client = self.orchestrator
+        if client is None or deployment.cordoned_at is None or deployment.cordon_released_at is not None:
+            return
+        try:
+            self._ask(lambda: client.release(deployment.id), stoppable=False)
+        except OrchestratorUnavailable as exc:
+            # The orchestrator lets a cordon go when the manager stops renewing it.
+            logger.warning("Deployment %s: the cordon could not be given back (%s); it expires", deployment.id, exc)
+        deployment.cordon_released_at = self._now()
 
     def _swap(self, deployment: Deployment) -> None:
         current = self.docker.container()
@@ -292,10 +491,42 @@ class Deployer:
             should_stop=self._should_stop,
         )
         if result.ok:
+            result = self._await_reconnect(deployment)
+        if result.ok:
             self._succeed(deployment)
             return
         deployment.failure_logs = self._capture_logs()
         self._fail_over(deployment, FailureKind.VERIFY_FAILED, result.reason)
+
+    def _await_reconnect(self, deployment: Deployment) -> VerifyResult:
+        """Wait until the orchestrator sees the new worker: connected through a new session, with its first status.
+
+        Docker cannot show this. A worker that starts and answers on its port but cannot register at the orchestrator
+        would otherwise count as a success. Only a deployment that drained the node checks it, because only then the
+        manager knows the session of the old worker. If the orchestrator cannot be asked, the check is skipped: not
+        seeing the node is no proof that the new container is bad.
+        """
+        client = self.orchestrator
+        if client is None or deployment.cordoned_at is None or deployment.cordon_released_at is not None:
+            return VerifyResult(True)
+        started = self._clock()
+        while True:
+            self._check_stop()
+            try:
+                node = self._ask(lambda: client.status(deployment.id))
+            except OrchestratorUnavailable as exc:
+                logger.warning("Deployment %s: the connection of the worker was not checked: %s", deployment.id, exc)
+                self._event(deployment, f"the connection of the worker to the orchestrator was not checked: {exc}")
+                return VerifyResult(True)
+            if node.online and node.first_status_received and node.session_id != deployment.session_before:
+                self._event(deployment, "the worker is connected to the orchestrator")
+                return VerifyResult(True)
+            if self._clock() - started >= self.settings.reconnect_timeout_s:
+                return VerifyResult(
+                    False,
+                    f"the worker did not connect to the orchestrator within {int(self.settings.reconnect_timeout_s)} s",
+                )
+            self._pause()
 
     def _succeed(self, deployment: Deployment) -> None:
         self._finish(deployment, Outcome.SUCCEEDED, message=f"now running {deployment.target_image_ref}")

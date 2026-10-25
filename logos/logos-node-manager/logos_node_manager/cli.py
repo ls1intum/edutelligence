@@ -3,7 +3,9 @@
 ``run`` starts the daemon, which is the main process of the container. The other commands are for the people and the
 scripts that talk to it, usually through ``docker exec``:
 
-* ``deploy`` queues a deployment and, with ``--wait``, follows it to its end and exits with its result.
+* ``deploy`` queues a deployment. With ``--wait`` it follows the deployment to its end and exits with its result. With
+  ``--until-pulled`` it stops as soon as the image is on the host: the drain, the swap and the checks go on in the
+  background of the host, and ``wait`` and ``status`` show how they end.
 * ``wait`` attaches to a deployment that is already queued, for example after a dropped SSH connection.
 * ``status`` shows a deployment. ``ping`` tells whether the daemon is alive.
 """
@@ -26,8 +28,9 @@ from logos_node_manager.daemon import Daemon
 from logos_node_manager.deployer import Deployer
 from logos_node_manager.docker_ops import Docker
 from logos_node_manager.errors import StateError
+from logos_node_manager.orchestrator import OrchestratorClient
 from logos_node_manager.runner import SubprocessRunner
-from logos_node_manager.state import Deployment, Outcome, StateStore, utc_now, validate_id, validate_tag
+from logos_node_manager.state import Deployment, Outcome, Phase, StateStore, utc_now, validate_id, validate_tag
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -60,16 +63,29 @@ def exit_code_for(deployment: Deployment) -> int:
 # ---------------------------------------------------------------------- Output
 
 
+# The phases before the image is on the host. A deployment in any other phase has pulled it.
+_BEFORE_PULLED = (Phase.QUEUED, Phase.PULLING)
+
+
+def format_event(event: dict[str, str]) -> str:
+    line = f"[{event['at'][11:19]}] {event['phase']}"
+    return f"{line}: {event['note']}" if event["note"] else line
+
+
 def follow(
     store: StateStore,
     deployment_id: str,
     *,
     timeout_s: float,
     out: TextIO,
+    until_pulled: bool = False,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Deployment | None:
-    """Print the events of a deployment as they appear. Returns the last record read, finished or not."""
+    """Print the events of a deployment as they appear. Returns the last record read, finished or not.
+
+    With ``until_pulled`` it also returns as soon as the image is on the host.
+    """
     deadline = clock() + timeout_s
     shown = 0
     record: Deployment | None = None
@@ -77,10 +93,9 @@ def follow(
         record = store.load(deployment_id) or record
         if record is not None:
             for event in record.events[shown:]:
-                line = f"[{event['at'][11:19]}] {event['phase']}"
-                print(f"{line}: {event['note']}" if event["note"] else line, file=out)
+                print(format_event(event), file=out)
             shown = len(record.events)
-            if record.finished:
+            if record.finished or (until_pulled and record.phase not in _BEFORE_PULLED):
                 return record
         if clock() >= deadline:
             return record
@@ -108,20 +123,32 @@ def report_after_wait(
     out: TextIO,
     clock: Callable[[], float],
     sleep: Callable[[float], None],
+    until_pulled: bool = False,
 ) -> int:
-    record = follow(store, deployment_id, timeout_s=timeout_s, out=out, clock=clock, sleep=sleep)
+    record = follow(
+        store, deployment_id, timeout_s=timeout_s, out=out, until_pulled=until_pulled, clock=clock, sleep=sleep
+    )
     if record is None:
         print(f"error: there is no deployment {deployment_id}", file=sys.stderr)
         return EXIT_NOT_FOUND
-    if not record.finished:
+    if record.finished:
+        print_report(record, out, show_logs=show_logs)
+        return exit_code_for(record)
+    if until_pulled and record.phase not in _BEFORE_PULLED:
         print(
-            f"error: deployment {deployment_id} did not finish within {int(timeout_s)} s. It keeps running. "
-            f"Attach again with: node-manager wait {deployment_id}",
-            file=sys.stderr,
+            f"The image of deployment {deployment_id} is on the host. The deployment goes on there, and its result "
+            f"is not part of this exit code. Follow it with: node-manager wait {deployment_id}; "
+            f"look at it later with: node-manager status {deployment_id}",
+            file=out,
         )
-        return EXIT_WAIT_TIMED_OUT
-    print_report(record, out, show_logs=show_logs)
-    return exit_code_for(record)
+        return EXIT_OK
+    what = "pull the image" if until_pulled else "finish"
+    print(
+        f"error: deployment {deployment_id} did not {what} within {int(timeout_s)} s. It keeps running. "
+        f"Attach again with: node-manager wait {deployment_id}",
+        file=sys.stderr,
+    )
+    return EXIT_WAIT_TIMED_OUT
 
 
 # ---------------------------------------------------------------------- Commands
@@ -153,7 +180,7 @@ def cmd_deploy(
     if age is None or age > HEARTBEAT_MAX_AGE_S:
         print("warning: the node manager daemon does not answer. The request waits until it runs.", file=sys.stderr)
     print(f"Deployment {deployment.id} is queued for tag {deployment.tag}", file=out)
-    if not args.wait:
+    if not (args.wait or args.until_pulled):
         return EXIT_OK
     return report_after_wait(
         store,
@@ -163,6 +190,7 @@ def cmd_deploy(
         out=out,
         clock=clock,
         sleep=sleep,
+        until_pulled=args.until_pulled,
     )
 
 
@@ -205,8 +233,10 @@ def cmd_status(args: argparse.Namespace, settings: Settings, *, out: TextIO | No
         print(json.dumps(record.to_dict(), indent=2, sort_keys=True), file=out)
         return EXIT_OK
     print(f"Deployment {record.id}: tag {record.tag}, phase {record.phase.value}", file=out)
+    for event in record.events:
+        print(format_event(event), file=out)
     if record.finished:
-        print_report(record, out, show_logs=False)
+        print_report(record, out, show_logs=args.logs)
     return EXIT_OK
 
 
@@ -222,7 +252,8 @@ def cmd_run(args: argparse.Namespace, settings: Settings) -> int:
     stop = threading.Event()
     docker = Docker(settings, SubprocessRunner())
     store = StateStore(settings.state_dir)
-    deployer = Deployer(settings, docker, store, should_stop=stop.is_set)
+    orchestrator = OrchestratorClient.from_settings(settings) if settings.drain_enabled else None
+    deployer = Deployer(settings, docker, store, orchestrator=orchestrator, should_stop=stop.is_set)
     daemon = Daemon(settings, store, deployer, stop, docker=docker, registry_login_file=DOCKER_CONFIG_FILE)
     # Stop between steps. A deployment that is cut off continues from its recorded phase at the next start.
     for signum in (signal.SIGTERM, signal.SIGINT):
@@ -245,7 +276,13 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--id", required=True, help="unique id of the deployment; repeating an id attaches to it")
     deploy.add_argument("--tag", required=True, help="image tag to deploy")
     deploy.add_argument("--requested-by", default="", help="free text for the record, for example a CI run URL")
-    deploy.add_argument("--wait", action="store_true", help="follow the deployment and exit with its result")
+    when = deploy.add_mutually_exclusive_group()
+    when.add_argument("--wait", action="store_true", help="follow the deployment and exit with its result")
+    when.add_argument(
+        "--until-pulled",
+        action="store_true",
+        help="follow the deployment until the image is on the host; the rest goes on in the background of the host",
+    )
     deploy.add_argument("--timeout", type=float, default=DEFAULT_WAIT_S, help="seconds to wait (default: %(default)s)")
     deploy.add_argument("--no-logs", action="store_true", help="do not print the log of a failed container")
     deploy.set_defaults(handler=cmd_deploy)
@@ -259,6 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="show a deployment (default: the latest)")
     status.add_argument("id", nargs="?")
     status.add_argument("--json", action="store_true", help="print the whole record")
+    status.add_argument("--logs", action="store_true", help="also print the log of a failed container")
     status.set_defaults(handler=cmd_status)
 
     ping = commands.add_parser("ping", help="exit 0 if the daemon is alive")

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
@@ -81,8 +81,22 @@ class Settings:
     poll_interval_s: float
     loop_interval_s: float
 
-    # Reserved for the drain phase. The phase exists in the record, but this version only logs that it is skipped.
+    # Whether a deployment drains the node before it replaces the container. Off switches the whole drain phase off,
+    # so it is also the way to deploy as before if the orchestrator misbehaves.
     drain_enabled: bool
+    # The orchestrator cordons the node and says when its requests are done. The node authenticates with the key of the
+    # worker, so it can only cordon itself. Without both values a deployment cannot drain and swaps at once.
+    orchestrator_url: str
+    node_key: str = field(repr=False)
+    # Time limits of the drain, in seconds. The drain limit starts when the cordon is granted. The turn limit covers the
+    # wait for the cordon while another node is being replaced. The retry window is how long an unreachable
+    # orchestrator is asked again before the drain is skipped. The reconnect limit is how long the replaced worker may
+    # take to show up at the orchestrator.
+    drain_timeout_s: float
+    turn_timeout_s: float
+    orchestrator_retry_window_s: float
+    orchestrator_timeout_s: float
+    reconnect_timeout_s: float
     log_level: str
 
     @classmethod
@@ -105,5 +119,12 @@ class Settings:
             poll_interval_s=_seconds(env, "POLL_INTERVAL_S", 5.0),
             loop_interval_s=_seconds(env, "LOOP_INTERVAL_S", 2.0),
             drain_enabled=_flag(env, "DRAIN_ENABLED", False),
+            orchestrator_url=_text(env, "ORCHESTRATOR_URL", "").rstrip("/"),
+            node_key=_text(env, "NODE_KEY", ""),
+            drain_timeout_s=_seconds(env, "DRAIN_TIMEOUT_S", 900.0),
+            turn_timeout_s=_seconds(env, "TURN_TIMEOUT_S", 7200.0),
+            orchestrator_retry_window_s=_seconds(env, "ORCHESTRATOR_RETRY_WINDOW_S", 120.0),
+            orchestrator_timeout_s=_seconds(env, "ORCHESTRATOR_TIMEOUT_S", 15.0),
+            reconnect_timeout_s=_seconds(env, "RECONNECT_TIMEOUT_S", 300.0),
             log_level=_text(env, "LOG_LEVEL", "INFO").upper(),
         )
