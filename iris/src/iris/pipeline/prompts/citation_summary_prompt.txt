@@ -3,6 +3,7 @@ You are given a paragraph. Create a brief summary (1-2 sentences).
 Rules:
 - Do NOT include ":" or "[" or "]" in the summary.
 - The summary must be content-only; do NOT mention the paragraph/section.
+- Summarize only what the paragraph itself states. Do NOT add conclusions, verdicts, explanations, causes or values that the paragraph does not state, even when the data in it would allow you to work them out. If the paragraph gives an example without saying how it turns out, summarize it as that example.
 - Output ONLY the summary in plain text (no Markdown), nothing else.
 
 Paragraph:
