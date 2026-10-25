@@ -39,6 +39,7 @@ import httpx
 from logos_worker_node.model_profiles import ModelProfileRegistry, reconfigured_vram_mb
 from logos_worker_node.models import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
+    HF_REDUNDANT_WEIGHT_PATTERNS,
     LaneConfig,
     ProcessState,
     ProcessStatus,
@@ -136,7 +137,12 @@ def resolve_model_snapshot(
 
     cache_dir = os.path.join(hf_home, "hub") if hf_home else None
     effective_token = token if token is not None else (os.environ.get("HF_TOKEN") or None)
-    kwargs: dict[str, Any] = {"repo_id": model, "cache_dir": cache_dir, "token": effective_token}
+    kwargs: dict[str, Any] = {
+        "repo_id": model,
+        "cache_dir": cache_dir,
+        "token": effective_token,
+        "ignore_patterns": HF_REDUNDANT_WEIGHT_PATTERNS,
+    }
     if revision:
         kwargs["revision"] = revision
     if allow_patterns:
