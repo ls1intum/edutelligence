@@ -12,6 +12,55 @@ function run(id: number, rate: number, baseline?: number, pair = 1): ModelProvid
 }
 
 describe('Benchmark result baseline', () => {
+  it('starts collapsed and preserves the selected order when reopened', () => {
+    const fixture = TestBed.createComponent(BenchmarkResults);
+    fixture.componentRef.setInput('runs', [run(1, 50), run(2, 40)]);
+    fixture.detectChanges();
+    const history = fixture.nativeElement.querySelector('.run-history') as HTMLDetailsElement;
+    const toggle = history.querySelector('summary')!;
+    expect(history.open).toBe(false);
+    toggle.click();
+    expect(history.open).toBe(true);
+    (history.querySelectorAll('.sortable button')[1] as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(history.querySelectorAll('th')[4].getAttribute('aria-sort')).toBe('descending');
+    expect(fixture.componentInstance.visibleRows().map(row => row.run.id)).toEqual([1, 2]);
+    toggle.click();
+    expect(history.open).toBe(false);
+    toggle.click();
+    expect(history.open).toBe(true);
+    expect(fixture.componentInstance.visibleRows().map(row => row.run.id)).toEqual([1, 2]);
+  });
+
+  it('sorts all measurements before limiting the list, with invalid values last in both directions', () => {
+    const fixture = TestBed.createComponent(BenchmarkResults);
+    fixture.componentRef.setInput('runs', [run(1, 100), run(2, 0), run(3, 20), run(4, 20),
+      run(5, 50), run(6, NaN), run(7, Infinity)]);
+    const component = fixture.componentInstance;
+    component.sortBy('after');
+    expect(component.visibleRows().map(row => row.run.id)).toEqual([1, 5, 4, 3, 2]);
+    component.showAll.set(true);
+    expect(component.visibleRows().map(row => row.run.id)).toEqual([1, 5, 4, 3, 2, 7, 6]);
+    component.sortBy('after');
+    expect(component.visibleRows().map(row => row.run.id)).toEqual([2, 4, 3, 5, 1, 7, 6]);
+  });
+
+  it('sorts baseline values and percentage gains numerically, including losses and missing baselines', () => {
+    const fixture = TestBed.createComponent(BenchmarkResults);
+    fixture.componentRef.setInput('runs', [run(1, 40, 1), run(2, 20, 1), run(3, 40, 1),
+      run(4, 80, 1), run(5, 100, 5), run(6, 110, 5), run(7, 50, 999)]);
+    const component = fixture.componentInstance;
+    component.showAll.set(true);
+    component.sortBy('delta');
+    expect(component.visibleRows().map(row => row.run.id)).toEqual([4, 6, 3, 2, 7, 5, 1]);
+    component.sortBy('delta');
+    expect(component.visibleRows().map(row => row.run.id)).toEqual([2, 3, 6, 4, 7, 5, 1]);
+    component.sortBy('before');
+    expect(component.visibleRows().map(row => row.run.id)).toEqual([6, 4, 3, 2, 7, 5, 1]);
+    component.sortBy('before');
+    expect(component.visibleRows().map(row => row.run.id)).toEqual([4, 3, 2, 6, 7, 5, 1]);
+  });
+
   it('keeps older runs available without expanding the initial result list', () => {
     const fixture = TestBed.createComponent(BenchmarkResults);
     fixture.componentRef.setInput('runs', Array.from({ length: 7 }, (_, i) => run(i + 1, 40)));

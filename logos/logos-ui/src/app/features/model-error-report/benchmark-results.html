@@ -57,11 +57,17 @@
     <div class="progress-dates"><span>{{ chart.first | date:'dd MMM yyyy, HH:mm' }}</span>@if (chart.first !== chart.last) { <span>{{ chart.last | date:'dd MMM yyyy, HH:mm' }}</span> }</div>
   </section>
 }
-<section aria-label="Benchmark results">
-  <div class="results-heading"><h3>Benchmark runs</h3><span>{{ rows().length }} results · output tok/s</span></div>
+<details class="run-history">
+  <summary><h3>Benchmark runs <small>{{ rows().length }} results · output tok/s</small></h3></summary>
   <p class="results-note">Each variant compared with its nightly baseline.</p>
   <table>
-    <thead><tr><th>Run</th><th>Changed parameters</th><th>Measured from → to</th><th>Before</th><th>After</th><th>Change</th></tr></thead>
+    <thead><tr><th>Run</th><th>Changed parameters</th><th>Measured from → to</th>
+      @for (column of columns; track column.key) {
+        <th class="sortable" [attr.aria-sort]="sort()?.key === column.key ? sort()!.direction : 'none'">
+          <button type="button" (click)="sortBy(column.key)">{{ column.label }} <span aria-hidden="true">{{ sort()?.key === column.key ? (sort()!.direction === 'ascending' ? '↑' : '↓') : '↕' }}</span></button>
+        </th>
+      }
+    </tr></thead>
     <tbody>
       @for (row of visibleRows(); track row.run.id) {
         <tr>
@@ -83,6 +89,6 @@
     </tbody>
   </table>
   @if (rows().length > 5) {
-    <button type="button" class="btn-secondary results-more" (click)="showAll.set(!showAll())">{{ showAll() ? 'Show latest 5' : 'Show all ' + rows().length + ' runs' }}</button>
+    <button type="button" class="btn-secondary results-more" (click)="showAll.set(!showAll())">{{ showAll() ? 'Show fewer' : 'Show all ' + rows().length + ' runs' }}</button>
   }
-</section>
+</details>

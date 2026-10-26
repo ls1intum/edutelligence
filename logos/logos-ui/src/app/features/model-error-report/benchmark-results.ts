@@ -5,6 +5,8 @@ import { benchmarkConfigurationItems, servingConfigurationItems } from './benchm
 import { comparisonValue } from './benchmark-comparison';
 import { benchmarkProgress } from './benchmark-progress';
 
+type ResultColumn = 'before' | 'after' | 'delta';
+
 @Component({
   selector: 'app-benchmark-results',
   standalone: true,
@@ -19,7 +21,27 @@ export class BenchmarkResults {
   readonly progressKey = signal('');
   readonly activeProgress = computed(() => this.progress().find(group => group.key === this.progressKey()) ?? this.progress()[0]);
   readonly showAll = signal(false);
-  readonly visibleRows = computed(() => this.showAll() ? this.rows() : this.rows().slice(0, 5));
+  readonly sort = signal<{ key: ResultColumn; direction: 'ascending' | 'descending' } | null>(null);
+  readonly columns: readonly { key: ResultColumn; label: string }[] = [
+    { key: 'before', label: 'Before' }, { key: 'after', label: 'After' }, { key: 'delta', label: 'Change' },
+  ];
+  readonly sortedRows = computed(() => {
+    const sort = this.sort();
+    if (!sort) return this.rows();
+    return [...this.rows()].sort((a, b) => {
+      const left = a[sort.key], right = b[sort.key];
+      if (left === null) return right === null ? 0 : 1;
+      if (right === null) return -1;
+      return sort.direction === 'ascending' ? left - right : right - left;
+    });
+  });
+  readonly visibleRows = computed(() => this.showAll() ? this.sortedRows() : this.sortedRows().slice(0, 5));
+
+  sortBy(key: ResultColumn): void {
+    this.sort.update(previous => ({ key,
+      direction: previous?.key === key && previous.direction === 'descending' ? 'ascending' : 'descending' }));
+  }
+
   readonly topRuns = computed(() => {
     const best = new Map<number, ModelProviderBenchmark>();
     for (const run of this.runs()) {

@@ -189,7 +189,9 @@ The application does not apply these parameters automatically.
 The chart separates runs with different captured workloads or other serving settings.
 Select a point to read its run number, time and percentage change.
 The chart does not show automatic parameter adoption or statistical significance.
-The table shows the latest 5 runs. Select **Show all** to read older results.
+Expand **Benchmark runs** to see the latest 5 results. Select **Show all** to read older results.
+Select **Before**, **After** or **Change** to sort all results from highest to lowest.
+Select the same column again to reverse the order. Missing values stay at the end.
 
 ![Best recorded benchmark and its saved parameters](../static/img/benchmarks/results-desktop.png)
 

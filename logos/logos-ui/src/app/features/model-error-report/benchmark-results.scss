@@ -10,9 +10,18 @@ td span, td small { display: block; margin-top: .25rem; overflow-wrap: anywhere;
 .numeric { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .dates { font-variant-numeric: tabular-nums; }
 .results-more { margin-top: 1rem; color: rgb(var(--color-typography-100)); background: rgb(var(--color-surface-0)); border-color: rgb(var(--color-outline-300)); }
+.run-history > summary { cursor: pointer; padding: .5rem 0; color: rgb(var(--color-typography-0)); }
+.run-history > summary h3 { display: inline; }
+.run-history > summary small { display: inline-block; margin-left: .75rem; font-weight: 400; }
+.sortable button { display: inline-flex; align-items: center; gap: .5rem; min-height: 2.75rem; padding: .5rem 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
+.sortable { padding-top: .5rem; padding-bottom: .5rem; }
+.sortable[aria-sort='ascending'], .sortable[aria-sort='descending'] { color: rgb(var(--color-typography-0)); }
+.sortable button:focus-visible, .run-history > summary:focus-visible { outline: 2px solid rgb(var(--color-primary-500)); outline-offset: 2px; }
 @media (max-width: 767px) {
   table, tbody, tr, td { display: block; }
-  thead { display: none; }
+  thead { display: block; }
+  th:not(.sortable) { display: none; }
+  th.sortable { padding: 0; border: 0; }
   tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 .75rem; padding: .75rem 0; border-bottom: 1px solid rgb(var(--color-outline-300)); }
   td { border: 0; padding: .5rem 0; }
   td:not(.numeric) { grid-column: 1 / -1; }
