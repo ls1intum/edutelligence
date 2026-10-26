@@ -93,17 +93,34 @@ class TestEvictionOrder:
         """A lane that can only be stopped must not be chosen ahead of a
         sleepable one, even if it has been idle longer."""
         planner, provider = _setup(policy="lru")
-        # Make the long-idle lane unsleepable: a model without a sleeping
-        # residual cannot be slept, so its only eviction action is "stop".
-        provider.profiles["Hot"] = _profile(loaded_vram_mb=20_000, sleeping_residual_mb=20_000.0)
-        eviction = planner._find_eviction_set(
-            provider_id=1,
-            required_gpus=frozenset({0}),
-            per_gpu_deficit={0: 5_000.0},
-            lanes=provider.lanes,
-            profiles=provider.profiles,
-        )
-        assert eviction is not None
+        # Make the long-idle lane an eligible "stop" candidate: a lane started
+        # without sleep support can only be stopped, and stopping it is only
+        # allowed while its model's demand is below the load floor.
+        hot_lane = next(lane for lane in provider.lanes if lane.model_name == "Hot")
+        hot_lane.sleep_state = "unsupported"
+        planner._demand.get_score = lambda *_a, **_k: 0.0
+
+        def _evict(target_lane_id: str | None = None):
+            return planner._find_eviction_set(
+                provider_id=1,
+                required_gpus=frozenset({0}),
+                per_gpu_deficit={0: 5_000.0},
+                lanes=provider.lanes,
+                profiles=provider.profiles,
+                target_lane_id=target_lane_id,
+            )
+
+        # Precondition: with the sleepable lane out of the way, Hot is a
+        # valid victim on its own, and its only action is "stop".
+        alone = _evict(target_lane_id="A-cold")
+        assert alone is not None and len(alone) == 1
+        assert alone[0][0].model_name == "Hot"
+        assert alone[0][1] == "stop"
+
+        # With both lanes eligible, the newer sleepable lane wins over the
+        # older stop-only one.
+        eviction = _evict()
+        assert eviction is not None and len(eviction) == 1
         first_lane, first_action, _ = eviction[0]
         assert first_action == "sleep_l1"
         assert first_lane.model_name == "Cold"
