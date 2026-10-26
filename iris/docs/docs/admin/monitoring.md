@@ -4,7 +4,7 @@ title: Monitoring
 
 # Monitoring
 
-Iris integrates with **Sentry** for error tracking and **LangFuse** for LLM observability. It also runs background jobs via **APScheduler**.
+Iris integrates with **Sentry** for error tracking and **LangFuse** for LLM observability.
 
 ## Sentry
 
@@ -118,28 +118,6 @@ LangFuse tracing is designed to be non-intrusive:
 - If the LangFuse server is unreachable, pipeline execution continues normally.
 - The `@observe` decorator becomes a no-op pass-through when tracing is disabled, adding zero overhead.
 
-## APScheduler Background Jobs
-
-Iris uses [APScheduler](https://apscheduler.readthedocs.io/) (`BackgroundScheduler`) to run periodic tasks. Currently, one job is registered:
-
-| Job                 | Schedule       | Description                                           |
-| ------------------- | -------------- | ----------------------------------------------------- |
-| `memory_sleep_task` | Daily at 01:00 | Runs the Memiris memory consolidation (sleep) process |
-
-The scheduler starts during application startup and shuts down gracefully when the application stops.
-
-:::tip
-Memiris memory features can be toggled in `application.yml`:
-
-```yaml
-memiris:
-  enabled: true
-  sleep_enabled: true
-```
-
-Set `sleep_enabled: false` to disable the nightly memory consolidation job while keeping other Memiris features active.
-:::
-
 ## Logging
 
 Iris uses Python's standard `logging` module with structured log formatting. Logs include:
@@ -154,4 +132,14 @@ View application logs via Docker:
 docker compose -f <compose-file> logs -f pyris-app
 ```
 
-The log verbosity for third-party libraries (including `apscheduler`) is configured in `iris/src/iris/common/logging_config.py`.
+The log verbosity for third-party libraries is configured in `iris/src/iris/common/logging_config.py`.
+
+## Watchdog
+
+A watchdog thread (`iris/src/iris/watchdog.py`) restarts Iris when a model client's connection pool deadlocks: every request on that model would otherwise hang without any error. It checks the pool locks every 5 seconds. When a lock stays held on two checks in a row, it logs a thread dump, fails the open runs ("Iris had to restart"), sends an alert and exits; Docker (`restart: unless-stopped`) starts Iris again. At most one restart per 30 minutes; after that, Iris stays up and sends an urgent alert so someone restarts it by hand. Set `watchdog_enabled: false` in `application.yml` to turn it off.
+
+Alerts go to [Pushover](https://pushover.net/) when `PYRIS_PUSHOVER_APP_TOKEN` and `PYRIS_PUSHOVER_USER_KEY` are set (for example in the compose env file); `PYRIS_ALERT_NAME` names the instance. Without them, alerts are only logged.
+
+To see all thread stacks of a running Iris, for example when answers hang: `docker kill -s USR1 pyris-app`, then read the container log.
+
+The container has a memory limit (`PYRIS_MEMORY_LIMIT`, default `6g`), so running out of memory restarts Iris instead of making the host kill other services.

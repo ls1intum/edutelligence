@@ -105,7 +105,7 @@ class McqGenerationPipeline(SubPipeline):
         Run MCQ generation in a background thread.
 
         Uses contextvars.copy_context() to preserve the Langfuse observation
-        stack across the thread boundary (same pattern as memiris_setup).
+        stack across the thread boundary.
 
         Results are communicated via a Queue stored in result_storage["queue"].
         Each item is a tuple of ("mcq", json_str), ("error", msg), or ("done", None).

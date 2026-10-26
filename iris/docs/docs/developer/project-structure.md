@@ -58,7 +58,6 @@ common/
 ├── message_converters.py      # Convert between Iris and LangChain message formats
 ├── pipeline_enum.py           # PipelineEnum for token tracking
 ├── token_usage_dto.py         # TokenUsageDTO for tracking LLM costs
-├── memiris_setup.py           # Memiris (memory system) integration utilities
 ├── singleton.py               # Singleton metaclass
 ├── mastery_utils.py           # Competency mastery calculations
 └── custom_exceptions.py       # Custom exception types
@@ -86,7 +85,7 @@ domain/
 ├── ingestion/                             # Ingestion pipeline DTOs
 ├── retrieval/                             # Retrieval result DTOs
 ├── status/                                # Stage/status DTOs
-│   ├── chat_status_update_dto.py          # Chat result, suggestions, memories, activities
+│   ├── chat_status_update_dto.py          # Chat result, suggestions, activities
 │   ├── suggested_context_dto.py           # Context switch requested by the agent
 │   ├── command_dto.py                     # Generic client-command envelope (type + parameters)
 │   ├── point_out_command_dto.py           # Point-out command and its parameters
@@ -219,7 +218,6 @@ web/
 │   ├── pipelines.py                       # Pipeline execution endpoints
 │   ├── webhooks.py                        # Artemis webhook receivers
 │   ├── ingestion_status.py                # Ingestion status endpoints
-│   ├── memiris.py                         # Memory management endpoints
 │   └── health/                            # Health check endpoint
 ├── status/
 │   ├── status_update.py                   # Status callback implementations

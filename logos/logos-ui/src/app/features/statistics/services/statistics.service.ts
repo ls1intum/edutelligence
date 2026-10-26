@@ -6,8 +6,8 @@ import { RequestLatencyScope, RequestLatencyStats } from './request-latency.mode
 
 /**
  * Lane-picker view of POST /api/logosdb/get_provider_models. The endpoint also
- * returns `endpoint`/`api_key`; both are deliberately left out here so the
- * credential never enters this feature's data flow.
+ * returns `endpoint`/`api_key` to Logos admins; both are deliberately left out
+ * here so the credential never enters this feature's data flow.
  */
 export interface ProviderModel {
   model_id: number;
@@ -70,7 +70,7 @@ export interface MaintenanceRecovery {
   age_s: number | null;
 }
 
-/** What holds the maintenance slot, as `GET /api/logosdb/providers/logosnode/maintenance` returns it. */
+/** What holds the maintenance slot, as `GET /api/logosdb/maintenance` returns it. */
 export interface MaintenanceStatus {
   limit: number;
   free: boolean;
@@ -347,7 +347,7 @@ export class StatisticsService {
   }
 
   getMaintenanceStatus(): Promise<MaintenanceStatus> {
-    return firstValueFrom(this.http.get<MaintenanceStatus>('/api/logosdb/providers/logosnode/maintenance'));
+    return firstValueFrom(this.http.get<MaintenanceStatus>('/api/logosdb/maintenance'));
   }
 
   /**
@@ -359,7 +359,7 @@ export class StatisticsService {
     claimToken: string,
   ): Promise<{ released: boolean; forced: boolean; message?: string }> {
     return firstValueFrom(this.http.post<{ released: boolean; forced: boolean; message?: string }>(
-      '/api/logosdb/providers/logosnode/maintenance/release_calibration',
+      '/api/logosdb/maintenance/release_calibration',
       { provider_id: providerId, claim_token: claimToken },
     ));
   }
@@ -373,7 +373,7 @@ export class StatisticsService {
     force: boolean,
   ): Promise<{ released: boolean; forced: boolean; message?: string }> {
     return firstValueFrom(this.http.post<{ released: boolean; forced: boolean; message?: string }>(
-      '/api/logosdb/providers/logosnode/maintenance/release_recovery',
+      '/api/logosdb/maintenance/release_recovery',
       { model_provider_id: modelProviderId, force },
     ));
   }
