@@ -236,11 +236,12 @@ def retrieve_lecture_content_for_mcq(
 
 
 def _strip_stray_citations(mcq_json_str: str) -> str:
-    """Strip any ``[cite:...]`` markers the LLM may have leaked into the MCQ JSON.
+    """Strip any ``[cite:...]`` or ``[src:N]`` markers the LLM may have leaked into the MCQ JSON.
 
     Citations inside question text or answer options would confuse the client,
-    so we remove them.  The ``source`` field (if present) is also dropped since
-    it is not consumed by the client.
+    so we remove them. The MCQ JSON is added after the answer's source markers were
+    turned into cite blocks, so it has to be cleaned of both here. The ``source``
+    field (if present) is also dropped since it is not consumed by the client.
     """
     try:
         parsed = json.loads(mcq_json_str)
@@ -249,7 +250,7 @@ def _strip_stray_citations(mcq_json_str: str) -> str:
     if not isinstance(parsed, dict):
         return mcq_json_str
 
-    citation_re = re.compile(r"\[cite:[^\]]*\]")
+    citation_re = re.compile(r"\[cite:[^\]]*\]|\[src:[^\]\n]{0,20}\]?")
 
     def _clean_question(q: dict) -> None:
         for opt in q.get("options", []):
