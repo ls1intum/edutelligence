@@ -270,6 +270,23 @@
   leading_system_message_only: true
   # Added to every pipeline's max_tokens: the output limit covers reasoning too.
   reasoning_token_allowance: 4096
+# Same model with low reasoning effort for short helper calls on the answer path
+# (citations, titles, suggestions, query rewrites). At medium effort each of them
+# costs several seconds of thinking.
+- id: qwen3.8-27b-low
+  type: openai_chat
+  model: Qwen/Qwen3.8-27B
+  base_url: https://your-logos-instance/v1
+  api_key:
+  supports_temperature: false
+  supports_reasoning_effort: true
+  reasoning_effort: low
+  reasoning_effort_values: [low, medium, xhigh]
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: true
+  leading_system_message_only: true
+  reasoning_token_allowance: 4096
   cost_per_million_input_token: 0
   cost_per_million_output_token: 0
 # Logos queues requests by the priority of the calling API key. To let

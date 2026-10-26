@@ -304,42 +304,70 @@ class CitationPipeline(SubPipeline):
             self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
         return self._sanitize_citation_field(raw)
 
-    def _generate_keywords_sequential(
+    def _generate_keyword(
         self,
         language_instruction: str,
-        used_numbers: list[int],
-    ) -> dict[int, str]:
-        """Generate keywords sequentially to maintain deduplication."""
+        num: int,
+        used_keywords: frozenset[str],
+    ) -> str:
+        """Generate the keyword of a citation number, avoiding the given keywords."""
         # Create thread-local LLM instance to avoid race conditions
         llm = IrisLangchainChatModel(
             request_handler=self._keyword_summary_request_handler,
             completion_args=self._keyword_summary_completion_args,
         )
         pipeline = llm | StrOutputParser()
+        paragraph = self._last_citation_content_by_seq.get(num, "")
+        if not paragraph.strip():
+            return ""
         keyword_prompt = PromptTemplate(
             template=language_instruction + self.keyword_prompt_str,
             input_variables=["Paragraph", "UsedKeywords"],
         )
-        keywords: dict[int, str] = {}
-        used_keywords: set[str] = set()
+        raw = str(
+            (keyword_prompt | pipeline).invoke(
+                {
+                    "Paragraph": paragraph,
+                    "UsedKeywords": ", ".join(sorted(used_keywords)),
+                }
+            )
+        ).strip()
+        with self._tokens_lock:
+            self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
+        return self._sanitize_citation_field(raw)
+
+    def _make_keywords_unique(
+        self,
+        language_instruction: str,
+        used_numbers: list[int],
+        keywords: dict[int, str],
+    ) -> dict[int, str]:
+        """
+        Regenerate only the keywords that repeat an earlier one.
+
+        The keywords are generated in parallel without knowing each other, so
+        repeats are rare; each repeat is asked again, in citation order, with the
+        keywords kept so far.
+        """
+        unique: dict[int, str] = {}
+        seen: dict[str, str] = {}
         for num in used_numbers:
-            paragraph = self._last_citation_content_by_seq.get(num, "")
-            if not paragraph.strip():
-                keywords[num] = ""
-                continue
-            used_keywords_str = ", ".join(sorted(used_keywords))
-            raw = str(
-                (keyword_prompt | pipeline).invoke(
-                    {"Paragraph": paragraph, "UsedKeywords": used_keywords_str}
-                )
-            ).strip()
-            with self._tokens_lock:
-                self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
-            keyword = self._sanitize_citation_field(raw)
+            keyword = keywords.get(num, "")
+            if keyword and keyword.casefold() in seen:
+                try:
+                    keyword = self._generate_keyword(
+                        language_instruction, num, frozenset(seen.values())
+                    )
+                except Exception as keyword_error:
+                    logger.error(
+                        "Citation keyword regeneration failed for number=%s",
+                        num,
+                        exc_info=keyword_error,
+                    )
             if keyword:
-                used_keywords.add(keyword)
-            keywords[num] = keyword
-        return keywords
+                seen.setdefault(keyword.casefold(), keyword)
+            unique[num] = keyword
+        return unique
 
     def _build_keyword_summary_map(
         self,
@@ -364,12 +392,13 @@ class CitationPipeline(SubPipeline):
         if not valid_numbers:
             return {num: ("", "") for num in unique_numbers}
 
-        with TracedThreadPoolExecutor(max_workers=len(valid_numbers) + 1) as executor:
-            keyword_future = executor.submit(
-                self._generate_keywords_sequential,
-                language_instruction,
-                valid_numbers,
-            )
+        with TracedThreadPoolExecutor(max_workers=2 * len(valid_numbers)) as executor:
+            keyword_futures = {
+                num: executor.submit(
+                    self._generate_keyword, language_instruction, num, frozenset()
+                )
+                for num in valid_numbers
+            }
             summary_futures = {
                 executor.submit(
                     self._generate_single_summary,
@@ -378,15 +407,19 @@ class CitationPipeline(SubPipeline):
                 ): num
                 for num in valid_numbers
             }
-            try:
-                keywords = keyword_future.result()
-            except Exception as keyword_error:
-                logger.error(
-                    "Citation keyword generation failed for numbers=%s",
-                    valid_numbers,
-                    exc_info=keyword_error,
-                )
-                keywords = {}
+            raw_keywords: dict[int, str] = {}
+            for num, keyword_future in keyword_futures.items():
+                try:
+                    raw_keywords[num] = keyword_future.result()
+                except Exception as keyword_error:
+                    logger.error(
+                        "Citation keyword generation failed for number=%s",
+                        num,
+                        exc_info=keyword_error,
+                    )
+            keywords = self._make_keywords_unique(
+                language_instruction, valid_numbers, raw_keywords
+            )
             summaries = {}
             for summary_future in as_completed(summary_futures):
                 citation_number = summary_futures[summary_future]
