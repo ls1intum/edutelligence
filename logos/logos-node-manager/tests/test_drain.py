@@ -165,7 +165,7 @@ def test_the_wait_for_the_drain_does_not_fill_the_record(draining_deployer, orch
     assert 10 <= len(waiting) <= 21, "about one line per 30 s"
     assert len(record.events) < MAX_EVENTS
     assert waiting[0] == (
-        "waiting for the node to drain: 201 request(s) (200 tracked by the orchestrator, 1 on the worker) running"
+        "waiting for the node to drain: 200 request(s) (200 tracked by the orchestrator, 1 on the worker) running"
     )
 
 
@@ -192,7 +192,7 @@ def test_a_node_that_does_not_drain_in_time_keeps_its_container_and_gives_the_co
     assert record.outcome is Outcome.FAILED
     assert record.failure is FailureKind.DRAIN_TIMEOUT
     assert "within 60 s" in record.message
-    assert "3 request(s)" in record.message
+    assert "2 request(s) (2 tracked by the orchestrator, 1 on the worker)" in record.message
     assert "running container was not touched" in record.message
     assert up_calls(docker) == []
     assert docker.container_info.id == "c-old"

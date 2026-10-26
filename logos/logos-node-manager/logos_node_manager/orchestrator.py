@@ -3,7 +3,8 @@
 Before the manager replaces the worker container it asks the orchestrator to cordon the node. A cordoned node gets no
 new requests, so the ones that run finish. The manager asks again until the orchestrator says the node has drained, and
 gives the cordon back when the deployment is over. After the replacement it asks what the orchestrator sees of the node,
-to know that the new worker connected.
+to know that the new worker connected. When the deployment has ended, it reports how, so that the orchestrator notifies
+the admins.
 
 The node authenticates with the key of the worker, as the worker does itself, so the orchestrator resolves the node from
 the key and the manager can only cordon its own node. The key is sent in the request body and never written to a log.
@@ -55,6 +56,17 @@ class CordonReply:
     in_flight_orchestrator: int = 0
     in_flight_worker: int = 0
     sole_replica_models: tuple[str, ...] = ()
+
+    @property
+    def in_flight(self) -> int:
+        """The requests the node still has.
+
+        The two counts overlap: the orchestrator tracks a request from its scheduling to its end, so one that runs on
+        the worker is in both, and the worker's count adds nothing to it. Only the orchestrator knows a request that is
+        scheduled but has not reached the worker; only the worker knows one the orchestrator lost track of, for example
+        after its restart. The larger count is therefore the better figure, and the sum would count requests twice.
+        """
+        return max(self.in_flight_orchestrator, self.in_flight_worker)
 
 
 @dataclass(frozen=True)
@@ -128,6 +140,10 @@ class OrchestratorClient:
         """Give the cordon back. Repeating it is harmless."""
         self._post("release", deployment_id)
 
+    def report(self, deployment_id: str, details: dict[str, Any]) -> None:
+        """Tell the orchestrator how the deployment ended, so that it notifies the admins. Repeating it is harmless."""
+        self._post("report", deployment_id, details)
+
     # ------------------------------------------------------------------ HTTP
 
     @staticmethod
@@ -135,8 +151,8 @@ class OrchestratorClient:
         session = answer.get("session_id")
         return session if isinstance(session, str) and session else None
 
-    def _post(self, call: str, deployment_id: str) -> dict[str, Any]:
-        body = json.dumps({"shared_key": self._key, "deployment_id": deployment_id}).encode("utf-8")
+    def _post(self, call: str, deployment_id: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
+        body = json.dumps({**(details or {}), "shared_key": self._key, "deployment_id": deployment_id}).encode("utf-8")
         request = urllib.request.Request(
             f"{self._url}/{call}", data=body, method="POST", headers={"Content-Type": "application/json"}
         )

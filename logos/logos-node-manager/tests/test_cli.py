@@ -327,7 +327,10 @@ class RecordingDaemon:
     [
         ({}, False),
         ({"NODE_MANAGER_DRAIN_ENABLED": "true"}, False),
-        ({"NODE_MANAGER_ORCHESTRATOR_URL": "https://logos.example", "NODE_MANAGER_NODE_KEY": "k"}, False),
+        ({"NODE_MANAGER_ORCHESTRATOR_URL": "https://logos.example"}, False),
+        ({"NODE_MANAGER_NODE_KEY": "k"}, False),
+        # The client also serves the report of the ending, so it does not depend on the drain.
+        ({"NODE_MANAGER_ORCHESTRATOR_URL": "https://logos.example", "NODE_MANAGER_NODE_KEY": "k"}, True),
         (
             {
                 "NODE_MANAGER_DRAIN_ENABLED": "true",
@@ -338,7 +341,7 @@ class RecordingDaemon:
         ),
     ],
 )
-def test_the_daemon_gets_an_orchestrator_client_only_when_the_node_drains(
+def test_the_daemon_gets_an_orchestrator_client_when_it_has_an_address_and_a_key(
     tmp_path, monkeypatch, environ, expects_client
 ):
     monkeypatch.setattr(cli, "Daemon", RecordingDaemon)

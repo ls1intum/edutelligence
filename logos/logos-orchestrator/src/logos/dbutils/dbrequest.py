@@ -92,6 +92,27 @@ class LogosNodeMaintenanceRequest(BaseModel):
     deployment_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
+class LogosNodeDeploymentReport(LogosNodeMaintenanceRequest):
+    """How a deployment of a node's container ended, as its node manager reports it.
+
+    Every ending is reported, also the one of a deployment that found nothing to replace. The free-text fields are
+    limited, because they end up in an inbox item.
+    """
+
+    tag: str = Field(max_length=128)
+    outcome: Literal["succeeded", "unchanged", "rolled_back", "failed"]
+    # The kind of failure of the node manager (for example ``drain_timeout``); empty after a success.
+    failure: Optional[str] = Field(default=None, max_length=40)
+    message: str = Field(default="", max_length=2000)
+    requested_by: str = Field(default="", max_length=300)
+    # Requests that were still running on the node when it was cordoned, and the seconds it took to drain them. Both
+    # are missing for a deployment that did not drain the node.
+    drained_requests: Optional[int] = Field(default=None, ge=0)
+    drain_seconds: Optional[int] = Field(default=None, ge=0)
+    # Models that no other node could serve while this node was out of service.
+    sole_replica_models: list[str] = Field(default_factory=list, max_length=50)
+
+
 class LogosNodeRegisterRequest(LogosKeyModel):
     provider_name: str
     base_url: str = ""

@@ -252,7 +252,7 @@ def cmd_run(args: argparse.Namespace, settings: Settings) -> int:
     stop = threading.Event()
     docker = Docker(settings, SubprocessRunner())
     store = StateStore(settings.state_dir)
-    orchestrator = OrchestratorClient.from_settings(settings) if settings.drain_enabled else None
+    orchestrator = OrchestratorClient.from_settings(settings)
     deployer = Deployer(settings, docker, store, orchestrator=orchestrator, should_stop=stop.is_set)
     daemon = Daemon(settings, store, deployer, stop, docker=docker, registry_login_file=DOCKER_CONFIG_FILE)
     # Stop between steps. A deployment that is cut off continues from its recorded phase at the next start.

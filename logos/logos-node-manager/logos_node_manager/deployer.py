@@ -10,6 +10,9 @@ In the ``draining`` phase the manager asks the orchestrator to cordon the node, 
 waits until the requests that run have finished. Only one node at a time gets the cordon: another node waits for its
 turn. The cordon is held until the deployment ends and then given back, whatever the outcome. Without an orchestrator to
 ask, or with the drain switched off, the phase passes at once and the container is replaced as before.
+
+When a deployment has ended, ``report_pending`` tells the orchestrator how, so that it notifies the Logos admins. This
+is separate from the deployment: a report that fails never changes how the deployment ended.
 """
 
 from __future__ import annotations
@@ -42,6 +45,14 @@ logger = logging.getLogger(__name__)
 MAX_LOG_CHARS = 6000
 # A record holds at most MAX_EVENTS events. The wait for the drain adds one at most this often, and only if it changed.
 PROGRESS_EVENT_EVERY_S = 30.0
+# An ending is reported again after a restart only while it is this recent. This keeps the records from before the
+# manager began to report from being announced late, all at once.
+REPORT_MAX_AGE_S = 3600.0
+# How long an orchestrator that does not answer is asked again for a report.
+REPORT_RETRY_WINDOW_S = 30.0
+# What of the free text of a record goes into a report. The orchestrator accepts more; an inbox item should stay short.
+_MAX_REPORT_MESSAGE_CHARS = 1500
+_MAX_REPORT_ORIGIN_CHARS = 300
 
 _T = TypeVar("_T")
 
@@ -94,6 +105,9 @@ class Deployer:
         self._should_stop = should_stop
         # The last line the wait for the drain recorded, and when. Keeps the record from filling with polls.
         self._last_progress: tuple[str, float] | None = None
+        # The deployments whose report was tried since the manager started. One that failed is not tried again before
+        # the next start, so an orchestrator that is down does not hold up the loop with a new attempt on every pass.
+        self._report_tried: set[str] = set()
 
     # ------------------------------------------------------------------ Driver
 
@@ -326,6 +340,7 @@ class Deployer:
 
             if deployment.cordoned_at is None:
                 deployment.cordoned_at = self._now()
+                deployment.drained_requests = reply.in_flight
                 deployment.sole_replica_models = list(reply.sole_replica_models)
                 drain = _Budget(self, self.settings.drain_timeout_s, deployment.cordoned_at)
                 self._event(deployment, self._cordon_note(reply))
@@ -359,9 +374,9 @@ class Deployer:
 
     @staticmethod
     def _in_flight_text(reply: CordonReply) -> str:
-        total = reply.in_flight_orchestrator + reply.in_flight_worker
+        # Not the sum of the two counts: a request that runs on the worker is in both. See ``CordonReply.in_flight``.
         return (
-            f"{total} request(s) ({reply.in_flight_orchestrator} tracked by the orchestrator, "
+            f"{reply.in_flight} request(s) ({reply.in_flight_orchestrator} tracked by the orchestrator, "
             f"{reply.in_flight_worker} on the worker)"
         )
 
@@ -384,18 +399,19 @@ class Deployer:
         self._event(deployment, text)
         self.store.save(deployment)
 
-    def _ask(self, call: Callable[[], _T], *, stoppable: bool = True) -> _T:
+    def _ask(self, call: Callable[[], _T], *, stoppable: bool = True, window_s: float | None = None) -> _T:
         """Run a call to the orchestrator, asking again while it cannot be reached.
 
-        Raises ``OrchestratorUnavailable`` when the retry window is over, or at once for an answer that asking again
-        will not change.
+        Raises ``OrchestratorUnavailable`` when the retry window is over (``orchestrator_retry_window_s`` unless the
+        caller names another), or at once for an answer that asking again will not change.
         """
+        window_s = self.settings.orchestrator_retry_window_s if window_s is None else window_s
         started = self._clock()
         while True:
             try:
                 return call()
             except OrchestratorUnavailable as exc:
-                if not exc.retryable or self._clock() - started >= self.settings.orchestrator_retry_window_s:
+                if not exc.retryable or self._clock() - started >= window_s:
                     raise
                 logger.warning("The orchestrator did not answer (%s); asking again", exc)
                 if stoppable:
@@ -555,6 +571,65 @@ class Deployer:
                 FailureKind.ROLLBACK_FAILED,
                 f"{deployment.message}. The rollback failed too: {result.reason}.",
             )
+
+    # ------------------------------------------------------------------ Report
+
+    def report_pending(self) -> None:
+        """Tell the orchestrator how the finished deployments ended, so that it notifies the admins.
+
+        Every ending that is not yet reported and is recent enough is reported once, a deployment that changed nothing
+        included. The record keeps when the orchestrator accepted the report, so a stop between the end of the
+        deployment and the report, or an orchestrator that was down for the whole retry window, leaves the report
+        for the next start. Without an orchestrator to ask, this does nothing.
+        """
+        client = self.orchestrator
+        if client is None:
+            return
+        for deployment in self.store.all():
+            if (
+                not deployment.finished
+                or deployment.reported_at is not None
+                or deployment.outcome is None
+                or deployment.id in self._report_tried
+                or self._seconds_since(deployment.finished_at) > REPORT_MAX_AGE_S
+            ):
+                continue
+            self._report_tried.add(deployment.id)
+            try:
+                self._ask(
+                    lambda: client.report(deployment.id, self._report_details(deployment)),
+                    window_s=REPORT_RETRY_WINDOW_S,
+                )
+            except Interrupted:
+                self._report_tried.discard(deployment.id)
+                raise
+            except OrchestratorUnavailable as exc:
+                logger.warning("Deployment %s: the ending was not reported: %s", deployment.id, exc)
+                continue
+            deployment.reported_at = self._now()
+            self.store.save(deployment)
+            logger.info("Deployment %s: the ending was reported to the orchestrator", deployment.id)
+
+    def _report_details(self, deployment: Deployment) -> dict:
+        drain_seconds = None
+        if deployment.cordoned_at and deployment.drained_at:
+            drain_seconds = int(self._seconds_between(deployment.cordoned_at, deployment.drained_at))
+        return {
+            "tag": deployment.tag,
+            "outcome": deployment.outcome.value if deployment.outcome else "",
+            "failure": deployment.failure.value if deployment.failure else None,
+            "message": deployment.message[:_MAX_REPORT_MESSAGE_CHARS],
+            "requested_by": deployment.requested_by[:_MAX_REPORT_ORIGIN_CHARS],
+            "drained_requests": deployment.drained_requests,
+            "drain_seconds": drain_seconds,
+            "sole_replica_models": deployment.sole_replica_models,
+        }
+
+    def _seconds_between(self, start: str, end: str) -> float:
+        try:
+            return max(0.0, (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds())
+        except ValueError:
+            return 0.0
 
     # ------------------------------------------------------------------ Clean-up
 

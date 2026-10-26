@@ -202,7 +202,10 @@ class FakeOrchestrator:
         self.cordon_replies: list = []
         self.status_replies: list = []
         self.release_replies: list = []
+        self.report_replies: list = []
         self.calls: list[tuple] = []
+        # The details of every report, by deployment id.
+        self.reports: list[tuple[str, dict]] = []
 
     @staticmethod
     def _next(script: list, default):
@@ -224,6 +227,11 @@ class FakeOrchestrator:
     def release(self, deployment_id: str) -> None:
         self.calls.append(("release", deployment_id))
         self._next(self.release_replies, None)
+
+    def report(self, deployment_id: str, details: dict) -> None:
+        self.calls.append(("report", deployment_id))
+        self._next(self.report_replies, None)
+        self.reports.append((deployment_id, details))
 
     def count(self, call: str) -> int:
         return len([entry for entry in self.calls if entry[0] == call])

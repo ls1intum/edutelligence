@@ -23,6 +23,7 @@ from logos.dbutils.dbrequest import (
     LogosNodeCalibrationReservationRequest,
     LogosNodeClearUnsupportedRequest,
     LogosNodeDeleteLaneRequest,
+    LogosNodeDeploymentReport,
     LogosNodeInvalidateCalibrationRequest,
     LogosNodeMaintenanceRequest,
     LogosNodeModelProfilesRequest,
@@ -62,6 +63,8 @@ from logos.model_profile_store import (
     shared_profile_max_age_days,
     shared_profiles_enabled,
 )
+from logos.notifications import emit_notification
+from logos.notifications.deployment import deployment_notification
 from logos.role_auth import require_logos_admin_key
 
 logger = logging.getLogger("LogosLogger")
@@ -916,6 +919,24 @@ async def logosnode_maintenance_release(data: LogosNodeMaintenanceRequest, reque
     """End the cordon of the caller's node. Repeating the call is harmless."""
     provider_id = await _maintenance_provider_id(data, request)
     return _main._node_maintenance.release(provider_id, data.deployment_id)
+
+
+@router.post("/logosdb/providers/logosnode/node-maintenance/report", tags=["logosnode"])
+async def logosnode_maintenance_report(data: LogosNodeDeploymentReport, request: Request):
+    """Tell the Logos admins how a deployment of the caller's node ended.
+
+    Answers ``accepted`` once the notification reached the application server, and ``duplicate`` for a deployment that
+    was reported before. If the notification could not be delivered the answer is a 503, so the caller reports again.
+    """
+    provider_id = await _maintenance_provider_id(data, request)
+    maintenance = _main._node_maintenance
+    if not maintenance.claim_report(provider_id, data.deployment_id):
+        return {"status": "duplicate"}
+    notification = deployment_notification(maintenance.node_name(provider_id), data)
+    if not await emit_notification(**notification):
+        maintenance.unclaim_report(provider_id, data.deployment_id)
+        raise HTTPException(status_code=503, detail="The notification could not be delivered")
+    return {"status": "accepted"}
 
 
 @router.post("/logosdb/providers/logosnode/calibration-reservation", tags=["logosnode"])

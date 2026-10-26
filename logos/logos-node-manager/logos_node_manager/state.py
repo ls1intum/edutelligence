@@ -131,6 +131,12 @@ class Deployment:
     session_before: str | None = None
     # Models that no other node could serve while this node was cordoned: their requests waited for this node.
     sole_replica_models: list[str] = field(default_factory=list)
+    # The requests the node still had when the cordon was granted. No new ones arrive after that, so these are the
+    # requests the drain waited for.
+    drained_requests: int | None = None
+    # When the orchestrator accepted the report of the ending. None until then, and for a deployment that is not
+    # reported at all.
+    reported_at: str | None = None
 
     # The end of the failed container's log, taken before the rollback removes that container.
     failure_logs: str = ""

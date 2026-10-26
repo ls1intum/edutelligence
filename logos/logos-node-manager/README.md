@@ -69,13 +69,47 @@ node.
    rolled back.
 
 The record keeps the times of the drain, so a restart of the manager does not extend a limit. The events name what the
-node waits for, for example the node that holds the cordon, or the number of requests that still run. The record also
-lists the models that no other node could serve while this node was cordoned. Their requests waited for this node.
+node waits for, for example the node that holds the cordon, or the number of requests that still run. That number is the
+larger of the two counts, not their sum: the orchestrator tracks a request from its scheduling to its end, so a request
+that runs on the worker is in both counts. The orchestrator alone knows a request that is scheduled but has not reached
+the worker, and the worker alone knows one the orchestrator lost track of, for example after its restart. The record
+keeps the number of requests the node still had when the cordon was granted. No new request arrives after that, so these
+are the requests the drain waited for. The record also lists the models that no other node could serve while this node
+was cordoned. Their requests waited for this node.
 
 The manager skips the drain and replaces the container as before, with a note "draining skipped" in the record, if it
 cannot ask the orchestrator: the address or the key is missing, the orchestrator does not know the endpoint (an older
 version) or the key, or it did not answer for `ORCHESTRATOR_RETRY_WINDOW_S` (2 minutes). An orchestrator problem must not
 stop the deployments that may repair it. `DRAIN_ENABLED=false` switches the whole phase off.
+
+### Reports
+
+When a deployment has ended, the manager tells the orchestrator how, and the orchestrator notifies the Logos admins in
+the web application (the bell in the header). This closes the gap of a node that drains: its job is green when the image
+is pulled, and what happens later on the host would otherwise show up in the next run only.
+
+Only the ending is reported, never the phases in between. Those stay in the record (`node-manager status`).
+
+| Outcome | Notification | Content |
+|---|---|---|
+| `succeeded` | `deployment` | The tag, the node, how long the drain took, and how many requests were still running when the node was cordoned. |
+| `rolled_back` | `deployment_failed` | The reason, and that the previous version runs again. |
+| `failed` | `deployment_failed` | The reason, for example `drain_timeout` or `pull_failed`. A `rollback_failed` says that the node needs manual action. |
+| `unchanged` | `deployment` | The container already ran the image, so nothing was replaced. It is reported all the same: an admin who waits for the result of a deployment should get one, and silence would look like a failure. |
+
+The notification goes to the role Logos admin, one per node and deployment. A rollout over several nodes therefore sends
+one notification per node.
+
+* There is no switch. The manager reports whenever it has `ORCHESTRATOR_URL` and `NODE_KEY`, with or without the drain.
+  Without them it cannot reach the orchestrator, and it logs once at the start that nothing is reported.
+* The call is `POST /logosdb/providers/logosnode/node-maintenance/report`. The orchestrator knows the node from the key,
+  so the manager can only report for its own node. A repeated report of the same deployment is answered with
+  `duplicate`, and sends nothing.
+* The report is made after the record says the deployment is over, and it never changes the outcome. An orchestrator that
+  does not answer is asked again for 30 seconds, so that a report does not hold up the next deployment for long. After
+  that the report is not tried again before the next start of the manager. The record keeps `reported_at` once the orchestrator has accepted it, so a stop between the
+  end and the report does not lose it. The manager reports an ending again after a restart only for one hour. This keeps
+  the old records from being announced all at once when a manager that did not report yet is updated.
 
 ### What the check can see
 
@@ -185,7 +219,7 @@ All settings are environment variables with the prefix `NODE_MANAGER_`.
 | `STABILITY_WINDOW_S` | 60 | How long the container must stay healthy. 0 switches the wait off. |
 | `POLL_INTERVAL_S`, `LOOP_INTERVAL_S` | 5, 2 | |
 | `DRAIN_ENABLED` | false | Whether a deployment drains the node before it replaces the container (see "Draining"). It needs `ORCHESTRATOR_URL` and `NODE_KEY`. The worker compose file sets it from `NODE_MANAGER_DRAIN_ENABLED` in the `.env` of the worker. |
-| `ORCHESTRATOR_URL`, `NODE_KEY` | empty | The address of the orchestrator and the key of the worker. The worker compose file passes `LOGOS_URL` and `LOGOS_API_KEY` of the `.env`. |
+| `ORCHESTRATOR_URL`, `NODE_KEY` | empty | The address of the orchestrator and the key of the worker. The worker compose file passes `LOGOS_URL` and `LOGOS_API_KEY` of the `.env`. The drain needs them, and the report of the end of a deployment (see "Reports") as well. |
 | `DRAIN_TIMEOUT_S` | 900 | How long the node may take to drain, counted from the grant of the cordon. |
 | `TURN_TIMEOUT_S` | 7200 | How long the manager waits for the cordon while another node is being replaced. |
 | `ORCHESTRATOR_RETRY_WINDOW_S` | 120 | How long an orchestrator that does not answer is asked again before the drain is skipped. |
@@ -210,6 +244,8 @@ A missing, malformed or non-positive timeout falls back to its default.
   with that answer before the swap begins.
 * A deployment that held the cordon gives it back on every ending, before the record says it is over. The key of the
   node is sent in the body of a request and is never written to a log or to a record.
+* A report of the ending is made after the record is over and never changes the outcome. The record keeps when the
+  orchestrator accepted it, so an ending is reported once.
 
 ## Security model
 
@@ -303,7 +339,12 @@ replaces the container at once, as a manual `docker compose up` does. With the d
   host. A deployment that still waits for its turn uses the files of the newer run when it replaces the container.
 * **A failure after the job ended shows up in the next run.** The job is green when the image is pulled. The step "Show
   how the previous deployment ended" of the next run prints the events and the log of a failed container, and
-  `node-manager status --logs` shows them on the host.
+  `node-manager status --logs` shows them on the host. The Logos admins also get a notification when the
+  deployment ends (see "Reports").
+* **The reports are one per node.** There is no notification for a whole rollout, and the orchestrator remembers the
+  reports it accepted only in memory. After a restart of the orchestrator a repeated report would be sent again.
+* **A drain figure is an estimate.** The status of the worker is a few seconds old, and a request that the orchestrator
+  and the worker both count is counted once, so the figure is the larger of the two counts.
 * **The version of the worker is not compared.** The check of the new worker is the new session and its first status. The
   image ID of the container already shows which image runs.
 

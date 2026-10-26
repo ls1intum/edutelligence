@@ -16,6 +16,8 @@ public enum NotificationType {
 
     /** A Logos deployment finished (audience: Logos admin). */
     deployment,
+    /** A Logos deployment failed or was rolled back and needs a look (audience: Logos admin). */
+    deployment_failed,
     /** A previously requested model is now available (audience: Developer). */
     model_request_succeeded,
     /** A batch job reached a terminal state (audience: App admin). */

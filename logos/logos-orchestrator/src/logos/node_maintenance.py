@@ -25,6 +25,7 @@ import logging
 import os
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -38,6 +39,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_LEASE_TTL_S = 1800.0
 # How long a node must stay idle before it counts as drained.
 DEFAULT_SETTLE_S = 10.0
+# How many accepted deployment reports are remembered to recognise a repeat.
+MAX_REMEMBERED_REPORTS = 256
 
 
 def _seconds_from_env(name: str, default: float) -> float:
@@ -85,6 +88,8 @@ class NodeMaintenance:
         )
         self._clock = clock
         self._leases: dict[int, _Lease] = {}
+        # The reports of deployments that were accepted, oldest first; see ``claim_report``.
+        self._reported: OrderedDict[tuple[int, str], None] = OrderedDict()
         self._lock = threading.RLock()
         # Number of requests the orchestrator tracks for a node, from scheduling to completion. Set once the
         # scheduling facade exists.
@@ -195,6 +200,32 @@ class NodeMaintenance:
                     "Could not re-evaluate the queues after the release for worker %s", provider_id, exc_info=True
                 )
         return {"status": "released"}
+
+    # ------------------------------------------------------------------ Reports of the node manager
+
+    def node_name(self, provider_id: int) -> str:
+        """The name of the node as the operators know it: its worker id, or the provider id before it connected."""
+        return self._name(int(provider_id))
+
+    def claim_report(self, provider_id: int, deployment_id: str) -> bool:
+        """Take the report of a deployment for a node. False if it was taken before.
+
+        A node manager repeats a report when it did not see the answer, and the first one may have arrived. Without
+        this, the repeat would be a second inbox item. The claim is given back with ``unclaim_report`` when the
+        notification could not be delivered, so that the next repeat is accepted.
+        """
+        key = (int(provider_id), deployment_id)
+        with self._lock:
+            if key in self._reported:
+                return False
+            self._reported[key] = None
+            while len(self._reported) > MAX_REMEMBERED_REPORTS:
+                self._reported.popitem(last=False)
+            return True
+
+    def unclaim_report(self, provider_id: int, deployment_id: str) -> None:
+        with self._lock:
+            self._reported.pop((int(provider_id), deployment_id), None)
 
     # ------------------------------------------------------------------ Internals
 

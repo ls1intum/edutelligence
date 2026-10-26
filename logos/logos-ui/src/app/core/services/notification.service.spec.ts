@@ -121,6 +121,15 @@ describe('NotificationService', () => {
     expect(buildNotificationWsUrl('a b')).toMatch(/^wss?:\/\/[^/]+\/api\/ws\/notifications\?token=a%20b$/);
   });
 
+  it('draws a failed deployment as an error and a finished one as a success', () => {
+    expect(notificationMeta('deployment').tone).toBe('success');
+    expect(notificationMeta('deployment_failed')).toEqual({
+      label: 'Deployment failed',
+      icon: 'pi-exclamation-triangle',
+      tone: 'error',
+    });
+  });
+
   it('falls back to a generic look for types it does not know', () => {
     expect(notificationMeta('budget_hit').icon).toBe('pi-wallet');
     expect(notificationMeta('something_new')).toEqual({ label: 'Notification', icon: 'pi-bell', tone: 'primary' });

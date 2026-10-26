@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from tests.unit.test_node_maintenance import FakeClock, FakeRegistry
 
 import logos as main_mod
+from logos.dbutils.dbrequest import LogosNodeDeploymentReport as DeploymentReport
 from logos.dbutils.dbrequest import LogosNodeMaintenanceRequest
 from logos.node_maintenance import NodeMaintenance
 from logos.routers import logosnode as logosnode_mod
@@ -137,3 +138,103 @@ def test_a_deployment_id_of_the_node_manager_is_accepted(deployment_id):
 def test_anything_else_is_not_a_deployment_id(deployment_id):
     with pytest.raises(ValidationError):
         _body(deployment_id=deployment_id)
+
+
+# ── the report of how a deployment ended ─────────────────────────────────────
+
+
+def _report(key: str = "key-a", deployment_id: str = "d1", **fields) -> DeploymentReport:
+    fields.setdefault("tag", "v2")
+    fields.setdefault("outcome", "succeeded")
+    return DeploymentReport(shared_key=key, deployment_id=deployment_id, **fields)
+
+
+class _Emitter(list):
+    """Stands in for ``emit_notification``: records the calls, and answers whether it delivered."""
+
+    delivered = True
+
+    async def __call__(self, **kwargs) -> bool:
+        self.append(kwargs)
+        return self.delivered
+
+
+@pytest.fixture
+def emitted(monkeypatch) -> _Emitter:
+    emitter = _Emitter()
+    monkeypatch.setattr(logosnode_mod, "emit_notification", emitter)
+    return emitter
+
+
+@pytest.mark.asyncio
+async def test_a_report_becomes_one_notification_for_the_logos_admins(service, emitted):
+    answer = await logosnode_mod.logosnode_maintenance_report(_report(), _request())
+
+    assert answer == {"status": "accepted"}
+    assert len(emitted) == 1
+    assert emitted[0]["notification_type"] == "deployment"
+    assert emitted[0]["targets"] == [{"kind": "role", "role": "logos_admin"}]
+    # The node is named by the orchestrator from the key, not by the caller.
+    assert emitted[0]["payload"]["node"] == "node-a"
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_report_is_not_a_second_notification(service, emitted):
+    await logosnode_mod.logosnode_maintenance_report(_report(), _request())
+
+    answer = await logosnode_mod.logosnode_maintenance_report(_report(), _request())
+
+    assert answer == {"status": "duplicate"}
+    assert len(emitted) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_same_deployment_id_on_two_nodes_is_two_notifications(service, emitted):
+    await logosnode_mod.logosnode_maintenance_report(_report("key-a"), _request())
+    await logosnode_mod.logosnode_maintenance_report(_report("key-b"), _request())
+
+    assert [call["payload"]["node"] for call in emitted] == ["node-a", "node-b"]
+
+
+@pytest.mark.asyncio
+async def test_a_notification_that_was_not_delivered_can_be_reported_again(service, emitted):
+    emitted.delivered = False
+    with pytest.raises(HTTPException) as exc_info:
+        await logosnode_mod.logosnode_maintenance_report(_report(), _request())
+    emitted.delivered = True
+
+    answer = await logosnode_mod.logosnode_maintenance_report(_report(), _request())
+
+    assert exc_info.value.status_code == 503
+    assert answer == {"status": "accepted"}
+
+
+@pytest.mark.asyncio
+async def test_the_report_must_not_travel_over_plain_http(service, emitted):
+    with pytest.raises(HTTPException) as exc_info:
+        await logosnode_mod.logosnode_maintenance_report(_report(), _request(scheme="http"))
+
+    assert exc_info.value.status_code == 400
+    assert emitted == []
+
+
+@pytest.mark.asyncio
+async def test_a_key_that_belongs_to_no_node_reports_nothing(service, emitted):
+    with pytest.raises(HTTPException) as exc_info:
+        await logosnode_mod.logosnode_maintenance_report(_report("unknown"), _request())
+
+    assert exc_info.value.status_code == 404
+    assert emitted == []
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_changed_nothing_is_reported_as_a_success(service, emitted):
+    answer = await logosnode_mod.logosnode_maintenance_report(_report(outcome="unchanged"), _request())
+
+    assert answer == {"status": "accepted"}
+    assert emitted[0]["notification_type"] == "deployment"
+
+
+def test_an_outcome_that_is_not_an_ending_is_not_accepted():
+    with pytest.raises(ValidationError):
+        _report(outcome="running")

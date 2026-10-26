@@ -197,6 +197,16 @@ class NotificationServiceTest {
         assertThat(service.unreadCount(1001, "app_developer", TEAM)).isEqualTo(1);
     }
 
+    @Test
+    void publish_acceptsADeploymentThatNeedsALook() {
+        long id = service.publish(new PublishNotificationRequestDTO(
+            "deployment_failed", "Deploying v2 on node-a failed", "drain timeout", Map.of("node", "node-a"),
+            "orchestrator", null,
+            List.of(new NotificationTargetDTO("role", null, "logos_admin"))));
+
+        assertThat(id).isPositive();
+    }
+
     private WebSocketSession openSocket(String id, int userId) {
         WebSocketSession session = mock(WebSocketSession.class);
         Map<String, Object> attributes = new HashMap<>();

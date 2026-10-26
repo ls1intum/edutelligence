@@ -6,6 +6,7 @@ import { AuthService } from '../auth/services/auth.service';
 /** The event vocabulary the application server accepts (`NotificationType`). */
 export type NotificationType =
   | 'deployment'
+  | 'deployment_failed'
   | 'model_request_succeeded'
   | 'batch_job_finished'
   | 'budget_hit'
@@ -48,6 +49,7 @@ export interface NotificationTypeMeta {
 /** How each event type is labelled and drawn. Unknown types fall back to a bell. */
 export const NOTIFICATION_TYPE_META: Record<string, NotificationTypeMeta> = {
   deployment: { label: 'Deployment', icon: 'pi-server', tone: 'success' },
+  deployment_failed: { label: 'Deployment failed', icon: 'pi-exclamation-triangle', tone: 'error' },
   model_request_succeeded: { label: 'Model available', icon: 'pi-check-circle', tone: 'success' },
   batch_job_finished: { label: 'Batch finished', icon: 'pi-list-check', tone: 'success' },
   budget_hit: { label: 'Budget reached', icon: 'pi-wallet', tone: 'warning' },

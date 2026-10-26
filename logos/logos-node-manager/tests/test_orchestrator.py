@@ -298,3 +298,46 @@ def test_the_client_takes_the_timeout_of_the_settings():
 
     assert client is not None
     assert client._timeout_s == 7
+
+
+# ---------------------------------------------------------------------- The report of an ending
+
+
+def test_a_report_carries_the_details_next_to_the_key_and_the_deployment(server, client):
+    server.script = [(200, {"status": "accepted"})]
+
+    client.report("d1", {"tag": "v2", "outcome": "succeeded", "drained_requests": 3})
+
+    request = server.requests[0]
+    assert request["path"] == f"{API_PATH}/report"
+    assert request["body"] == {
+        "shared_key": KEY,
+        "deployment_id": "d1",
+        "tag": "v2",
+        "outcome": "succeeded",
+        "drained_requests": 3,
+    }
+
+
+def test_the_details_of_a_report_cannot_replace_the_key_or_the_deployment(server, client):
+    server.script = [(200, {"status": "accepted"})]
+
+    client.report("d1", {"shared_key": "other", "deployment_id": "d2"})
+
+    assert server.requests[0]["body"] == {"shared_key": KEY, "deployment_id": "d1"}
+
+
+def test_a_report_the_orchestrator_cannot_deliver_may_be_repeated(server, client):
+    server.script = [(503, {"detail": "The notification could not be delivered"})]
+
+    with pytest.raises(OrchestratorUnavailable) as exc_info:
+        client.report("d1", {})
+
+    assert exc_info.value.retryable is True
+
+
+def test_the_requests_of_a_node_are_the_larger_of_the_two_counts():
+    reply = CordonReply(granted=True, in_flight_orchestrator=5, in_flight_worker=4)
+
+    assert reply.in_flight == 5
+    assert CordonReply(granted=True, in_flight_orchestrator=0, in_flight_worker=3).in_flight == 3
