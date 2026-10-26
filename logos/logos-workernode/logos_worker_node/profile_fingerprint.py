@@ -87,6 +87,14 @@ def compute_calibration_key(
     }
     if metal and cfg.engines:
         key["metal"] = _metal_engine_settings(cfg.engines.metal)
+    if not metal:
+        from logos_worker_node.calibration import probe_attention_backend  # noqa: PLC0415
+
+        # Only when the probe passes a backend, so keys of probes that leave the
+        # choice to vLLM stay as they are.
+        backend = probe_attention_backend(plan)
+        if backend:
+            key["attention_backend"] = backend
     return key
 
 
@@ -129,6 +137,19 @@ def calibration_keys(
         name: compute_calibration_key(cfg, plan_by_model.get(name) or {"model": name}, devices, vllm_version)
         for name in model_names
     }
+
+
+def slice_gpu_counts(
+    plans: list[dict[str, Any]], model_names: Iterable[str], devices: list[DeviceInfo]
+) -> dict[str, int]:
+    """GPUs each model may be calibrated and served on; the key leaves it out."""
+    plan_by_model = {p["model"]: p for p in plans if p.get("model")}
+    return {name: len(calibration_devices(plan_by_model.get(name) or {"model": name}, devices)) for name in model_names}
+
+
+def node_slice_gpu_counts(cfg: AppConfig, plans: list[dict[str, Any]], devices: list[DeviceInfo]) -> dict[str, int]:
+    models = list(cfg.logos.configured_models) if cfg.logos else []
+    return slice_gpu_counts(plans, models, devices)
 
 
 def node_calibration_keys(

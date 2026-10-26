@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 from typing import Any, Dict
 
@@ -13,10 +14,13 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from fastapi.responses import JSONResponse
 
 import logos.main as _main
+from logos.capacity.capacity_planner import RestoreRecordError
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import (
+    LogosKeyModel,
     LogosNodeApplyLanesRequest,
     LogosNodeAuthRequest,
+    LogosNodeCalibrationReservationRequest,
     LogosNodeClearUnsupportedRequest,
     LogosNodeDeleteLaneRequest,
     LogosNodeInvalidateCalibrationRequest,
@@ -55,6 +59,8 @@ from logos.model_profile_store import (
     persistable_profile,
     profile_digest,
     reported_profile,
+    shared_profile_max_age_days,
+    shared_profiles_enabled,
 )
 from logos.role_auth import require_logos_admin_key
 
@@ -69,6 +75,10 @@ router = APIRouter()
 _MAX_VLLM_METRICS_BYTES = 4 * 1024 * 1024
 
 _profile_write_cache = ProfileWriteCache()
+# Held while a calibration is reserved and while an adoption checks for one and
+# commits, so an adoption either lands before the reservation answers or sees
+# it. Process-wide: with several orchestrator processes it would not serialize.
+_adoption_gate = threading.Lock()
 # (provider_id, model) -> last_measured_epoch already snapshotted
 _recorded_calibrations: dict[tuple[int, str], float] = {}
 # provider_id -> models whose echo was rejected, awaiting one coalesced push
@@ -253,13 +263,58 @@ async def _write_status_samples(provider_id: int) -> None:
                 continue
             changed_models, rejected_models = persisted
             if changed_models:
+                _snapshots_linked(provider_id, changed_models)
                 _schedule_model_profile_push(provider_id, changed_models)
+                await _offer_to_siblings(provider_id, changed_models)
             if rejected_models:
                 _schedule_model_profile_resync(provider_id, rejected_models)
             elif not count_only:
                 _resync_rounds.pop(provider_id, None)
     finally:
         _sample_writers.pop(provider_id, None)
+
+
+async def _handle_calibration_rejected(provider_id: int, event: Dict[str, Any]) -> None:
+    """Drop a shared calibration a node could not start its lane with."""
+    model_name = str(event.get("model") or "")
+    try:
+        calibration_id = int(str(event.get("details") or "").strip())
+    except ValueError:
+        return
+
+    def _reject() -> list[tuple[int, str]]:
+        with DBManager() as db:
+            return db.reject_shared_calibration(provider_id, model_name, calibration_id)
+
+    try:
+        affected = await asyncio.to_thread(_reject)
+    except Exception:
+        logger.warning("Failed to reject calibration %s of provider %s", calibration_id, provider_id, exc_info=True)
+        return
+    if affected:
+        logger.warning(
+            "calibration_rejected provider=%s model=%s calibration_id=%s dropped_on=%s",
+            _resolve_provider_name(provider_id),
+            model_name,
+            calibration_id,
+            sorted({pid for pid, _ in affected}),
+        )
+    by_provider: Dict[int, list[str]] = {}
+    for affected_provider, affected_model in affected:
+        _profile_write_cache.forget(affected_provider, affected_model)
+        by_provider.setdefault(affected_provider, []).append(affected_model)
+    for affected_provider, names in by_provider.items():
+        _schedule_model_profile_push(affected_provider, names)
+
+
+async def _offer_to_siblings(provider_id: int, model_names: list[str]) -> None:
+    try:
+        adopters = await asyncio.to_thread(_offer_calibrations_to_siblings, provider_id, model_names)
+    except Exception:
+        logger.warning("Failed to share calibrations of provider %s", provider_id, exc_info=True)
+        return
+    for sibling, names in adopters.items():
+        _schedule_model_profile_push(sibling, names)
 
 
 def _persist_logosnode_status(
@@ -348,7 +403,7 @@ def _persist_model_profiles(
     now = time.monotonic()
     changed: list[str] = []
     rejected: list[str] = []
-    written: dict[str, tuple[str, str]] = {}
+    written: dict[str, tuple[str, str, tuple[int, int]]] = {}
     recorded: dict[str, float] = {}
     for model_name, echoed in model_profiles.items():
         if not isinstance(echoed, dict):
@@ -362,6 +417,7 @@ def _persist_model_profiles(
         digest = profile_digest(revision, echoed)
         material = profile_digest(revision, material_profile(echoed))
         if not _profile_write_cache.unchanged(provider_id, model_name, digest, material, now):
+            generation = _profile_write_cache.generation(provider_id, model_name)
             if not db.persist_central_model_profile(
                 provider_id,
                 model_name,
@@ -373,7 +429,7 @@ def _persist_model_profiles(
             ):
                 rejected.append(model_name)
                 continue
-            written[model_name] = (digest, material)
+            written[model_name] = (digest, material, generation)
         if not is_new_local_calibration(echoed):
             continue
         epoch = float(echoed["last_measured_epoch"])
@@ -386,14 +442,16 @@ def _persist_model_profiles(
             echoed.get("calibration_key") if isinstance(echoed.get("calibration_key"), dict) else None,
             key_hash,
             datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc),
+            echoed.get("calibration_duration_s"),
         )
         recorded[model_name] = epoch
         if new_revision is not None:
             changed.append(model_name)
     db.session.commit()
-    # Only now: a rolled-back write must not count as stored.
-    for model_name, (digest, material) in written.items():
-        _profile_write_cache.remember(provider_id, model_name, digest, material, now)
+    # Only now: a rolled-back write must not count as stored, and one that
+    # a reset or invalidation overtook since must not mask that change.
+    for model_name, (digest, material, generation) in written.items():
+        _profile_write_cache.remember(provider_id, model_name, digest, material, now, generation)
     for model_name in changed:
         _profile_write_cache.forget(provider_id, model_name)
     for model_name, epoch in recorded.items():
@@ -404,7 +462,7 @@ def _persist_model_profiles(
 def _mirror_local_profiles(db: DBManager, provider_id: int, model_profiles: Dict[str, Any]) -> None:
     """Mirror a worker that still keeps its own profile file."""
     pending = {
-        model_name: (data, profile_digest(0, data))
+        model_name: (data, profile_digest(0, data), _profile_write_cache.generation(provider_id, model_name))
         for model_name, data in model_profiles.items()
         if isinstance(data, dict)
     }
@@ -415,9 +473,9 @@ def _mirror_local_profiles(db: DBManager, provider_id: int, model_profiles: Dict
     }
     if not pending:
         return
-    db.upsert_model_profiles(provider_id, {model_name: data for model_name, (data, _) in pending.items()})
-    for model_name, (_, digest) in pending.items():
-        _profile_write_cache.remember(provider_id, model_name, digest)
+    db.upsert_model_profiles(provider_id, {model_name: data for model_name, (data, _, _) in pending.items()})
+    for model_name, (_, digest, generation) in pending.items():
+        _profile_write_cache.remember(provider_id, model_name, digest, generation=generation)
 
 
 def _load_effective_profiles(provider_id: int, model_names: list[str] | None = None) -> Dict[str, Dict[str, Any]]:
@@ -430,13 +488,16 @@ async def _push_model_profiles(
     provider_id: int,
     model_names: list[str] | None = None,
     calibration_key_hashes: Dict[str, str] | None = None,
+    slice_gpu_counts: Dict[str, int] | None = None,
 ) -> None:
     """Send the stored profiles to a worker that syncs with the database."""
     if not _main._logosnode_registry.supports_action(provider_id, SYNC_MODEL_PROFILES_ACTION):
         return
     try:
         if calibration_key_hashes:
-            await asyncio.to_thread(_update_reported_calibration_keys, provider_id, calibration_key_hashes)
+            await asyncio.to_thread(
+                _update_reported_calibration_keys, provider_id, calibration_key_hashes, slice_gpu_counts
+            )
         profiles = await asyncio.to_thread(_load_effective_profiles, provider_id, model_names)
         await _main._logosnode_registry.send_command(
             provider_id,
@@ -453,17 +514,89 @@ async def _push_model_profiles(
         )
 
 
-def _update_reported_calibration_keys(provider_id: int, calibration_key_hashes: Dict[str, str]) -> None:
+def _update_reported_calibration_keys(
+    provider_id: int,
+    calibration_key_hashes: Dict[str, str],
+    slice_gpu_counts: Dict[str, int] | None = None,
+) -> None:
+    """Store what a node reports about its models, then let it adopt."""
     with DBManager() as db:
-        db.update_reported_calibration_keys(provider_id, calibration_key_hashes)
+        db.update_reported_calibration_keys(provider_id, calibration_key_hashes, slice_gpu_counts)
+        try:
+            with _adoption_gate:
+                # Its own result for the model in progress would be discarded.
+                busy = _models_in_calibration(provider_id)
+                models = [name for name in calibration_key_hashes if name not in busy]
+                # Switched off, a calibration that stopped fitting still goes.
+                adopted = db.adopt_shared_calibrations(
+                    provider_id, models, shared_profile_max_age_days(), adopt=shared_profiles_enabled()
+                )
+        except Exception:
+            # Sharing is an optimisation; it must not keep a worker from
+            # starting or from receiving its profiles.
+            db.session.rollback()
+            logger.warning("Calibration sharing failed for provider %s", provider_id, exc_info=True)
+            return
+    for model_name, calibration_id in adopted:
+        _profile_write_cache.forget(provider_id, model_name)
+        logger.info(
+            "calibration_adopted provider=%s model=%s calibration_id=%s at=%s",
+            _resolve_provider_name(provider_id),
+            model_name,
+            calibration_id,
+            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        )
+
+
+def _models_in_calibration(provider_id: int) -> frozenset[str]:
+    lookup = getattr(_main._logosnode_registry, "models_in_calibration", None)
+    return lookup(provider_id) if lookup is not None else frozenset()
+
+
+def _snapshots_linked(provider_id: int, model_names: list[str]) -> None:
+    lift = getattr(_main._logosnode_registry, "snapshots_linked", None)
+    if lift is not None:
+        lift(provider_id, model_names)
+
+
+def _offer_calibrations_to_siblings(provider_id: int, model_names: list[str]) -> Dict[int, list[str]]:
+    """Let every other node of the same key adopt what this node just measured."""
+    if not shared_profiles_enabled():
+        return {}
+    adopters: Dict[int, list[str]] = {}
+    adopted: list[tuple[int, str, int]] = []
+    with _adoption_gate, DBManager() as db:
+        for model_name in model_names:
+            for sibling, calibration_id in db.adopt_shared_calibration_for_siblings(
+                provider_id,
+                model_name,
+                shared_profile_max_age_days(),
+                skip=lambda sibling, model_name=model_name: model_name in _models_in_calibration(sibling),
+            ):
+                adopters.setdefault(sibling, []).append(model_name)
+                if calibration_id is not None:
+                    adopted.append((sibling, model_name, calibration_id))
+    for sibling, names in adopters.items():
+        for model_name in names:
+            _profile_write_cache.forget(sibling, model_name)
+    for sibling, model_name, calibration_id in adopted:
+        logger.info(
+            "calibration_adopted provider=%s model=%s calibration_id=%s at=%s",
+            _resolve_provider_name(sibling),
+            model_name,
+            calibration_id,
+            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        )
+    return adopters
 
 
 def _schedule_model_profile_push(
     provider_id: int,
     model_names: list[str] | None = None,
     calibration_key_hashes: Dict[str, str] | None = None,
+    slice_gpu_counts: Dict[str, int] | None = None,
 ) -> None:
-    task = asyncio.create_task(_push_model_profiles(provider_id, model_names, calibration_key_hashes))
+    task = asyncio.create_task(_push_model_profiles(provider_id, model_names, calibration_key_hashes, slice_gpu_counts))
     _main._background_tasks.add(task)
     task.add_done_callback(_main._background_tasks.discard)
 
@@ -509,6 +642,12 @@ def _forget_provider_state(provider_id: int) -> None:
     for key in [key for key in _recorded_calibrations if key[0] == provider_id]:
         del _recorded_calibrations[key]
     _profile_write_cache.forget(provider_id)
+
+
+def _int_map(value: Any) -> Dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): v for k, v in value.items() if isinstance(v, int) and not isinstance(v, bool) and v > 0}
 
 
 def _string_map(value: Any) -> Dict[str, str]:
@@ -611,7 +750,7 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
     """
     Root-only provider bootstrap endpoint for LogosWorkerNode providers.
     """
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
 
     provider_name = (data.provider_name or "").strip()
     if not provider_name:
@@ -734,7 +873,7 @@ async def logosnode_model_profiles(data: LogosNodeModelProfilesRequest, request:
                     _resolve_provider_name(provider_id),
                 )
         if data.calibration_key_hashes:
-            _update_reported_calibration_keys(provider_id, data.calibration_key_hashes)
+            _update_reported_calibration_keys(provider_id, data.calibration_key_hashes, data.slice_gpu_counts)
         return _load_effective_profiles(provider_id)
 
     _profile_write_cache.forget(provider_id)
@@ -777,6 +916,35 @@ async def logosnode_maintenance_release(data: LogosNodeMaintenanceRequest, reque
     """End the cordon of the caller's node. Repeating the call is harmless."""
     provider_id = await _maintenance_provider_id(data, request)
     return _main._node_maintenance.release(provider_id, data.deployment_id)
+
+
+@router.post("/logosdb/providers/logosnode/calibration-reservation", tags=["logosnode"])
+async def logosnode_calibration_reservation(data: LogosNodeCalibrationReservationRequest, request: Request):
+    """Bar adoption for a model a worker is about to calibrate.
+
+    Answers with the model's profile as of the reservation, so the worker
+    probes from the revision Logos holds, and skips a model another node's
+    calibration just reached. The key the worker sends is stored first, so a
+    config edit still marks the profile stale.
+    """
+    _require_tls_request(request)
+    provider_id = int(_logosnode_provider_for_key(data.shared_key)["id"])
+
+    def _reserve() -> Dict[str, Dict[str, Any]]:
+        with _adoption_gate:
+            reserve = getattr(_main._logosnode_registry, "reserve_calibration", None)
+            if reserve is not None:
+                reserve(provider_id, data.model_name)
+            if data.calibration_key_hash:
+                # Staleness is judged against the key Logos has on file.
+                counts = {data.model_name: data.slice_gpu_count} if data.slice_gpu_count else None
+                with DBManager() as db:
+                    db.update_reported_calibration_keys(
+                        provider_id, {data.model_name: data.calibration_key_hash}, counts
+                    )
+            return _load_effective_profiles(provider_id, [data.model_name])
+
+    return {"profiles": await asyncio.to_thread(_reserve)}
 
 
 @router.websocket("/logosdb/providers/logosnode/session")
@@ -823,10 +991,17 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
                     ),
                     actions=(payload.get("actions") if isinstance(payload.get("actions"), list) else None),
+                    calibrating_model=(
+                        payload["calibrating_model"] if isinstance(payload.get("calibrating_model"), str) else None
+                    ),
+                    pending_snapshots=(
+                        payload["pending_snapshots"] if isinstance(payload.get("pending_snapshots"), list) else None
+                    ),
                 )
                 _schedule_model_profile_push(
                     ticket.provider_id,
                     calibration_key_hashes=_string_map(payload.get("calibration_key_hashes")),
+                    slice_gpu_counts=_int_map(payload.get("slice_gpu_counts")),
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
@@ -862,6 +1037,8 @@ async def logosnode_session(websocket: WebSocket, token: str):
                             _resolve_provider_name(ticket.provider_id),
                             exc_info=True,
                         )
+                elif event.get("event") == "calibration_rejected":
+                    await _handle_calibration_rejected(ticket.provider_id, event)
             elif msg_type == "heartbeat":
                 await _main._logosnode_registry.mark_heartbeat(ticket.provider_id)
             elif msg_type == "vllm_metrics":
@@ -893,7 +1070,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
 
 @router.post("/logosdb/providers/logosnode/status", tags=["logosnode"])
 async def logosnode_status(data: LogosNodeStatusRequest):
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
     try:
         return await _main._logosnode_registry.get_runtime_snapshot(data.provider_id)
     except LogosNodeOfflineError as exc:
@@ -902,7 +1079,7 @@ async def logosnode_status(data: LogosNodeStatusRequest):
 
 @router.post("/logosdb/providers/logosnode/devices", tags=["logosnode"])
 async def logosnode_devices(data: LogosNodeStatusRequest):
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
     try:
         return {"devices": await _main._logosnode_registry.get_devices(data.provider_id)}
     except LogosNodeOfflineError as exc:
@@ -911,7 +1088,7 @@ async def logosnode_devices(data: LogosNodeStatusRequest):
 
 @router.post("/logosdb/providers/logosnode/lanes", tags=["logosnode"])
 async def logosnode_lanes(data: LogosNodeStatusRequest):
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
     try:
         return {"lanes": await _main._logosnode_registry.get_lanes(data.provider_id)}
     except LogosNodeOfflineError as exc:
@@ -920,7 +1097,7 @@ async def logosnode_lanes(data: LogosNodeStatusRequest):
 
 @router.post("/logosdb/providers/logosnode/lanes/apply", tags=["logosnode"])
 async def logosnode_apply_lanes(data: LogosNodeApplyLanesRequest):
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="apply_lanes",
@@ -930,7 +1107,7 @@ async def logosnode_apply_lanes(data: LogosNodeApplyLanesRequest):
 
 @router.post("/logosdb/providers/logosnode/lanes/sleep", tags=["logosnode"])
 async def logosnode_sleep_lane(data: LogosNodeSleepLaneRequest):
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="sleep_lane",
@@ -940,7 +1117,7 @@ async def logosnode_sleep_lane(data: LogosNodeSleepLaneRequest):
 
 @router.post("/logosdb/providers/logosnode/lanes/wake", tags=["logosnode"])
 async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest):
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="wake_lane",
@@ -950,17 +1127,45 @@ async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest):
 
 @router.post("/logosdb/providers/logosnode/lanes/delete", tags=["logosnode"])
 async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
-    _require_root_access(data.logos_key)
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="delete_lane",
-        params={"lane_id": data.lane_id},
-    )
+    await asyncio.to_thread(_require_root_access, data.logos_key)
+    attempt = None
+    if _main._capacity_planner is not None:
+        # An operator unloads on purpose: a locked lane must not come back.
+        try:
+            attempt = await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
+        except RestoreRecordError as exc:
+            return JSONResponse(status_code=503, content={"error": str(exc)})
+    dispatched = []
+    planner = _main._capacity_planner
+    try:
+        result = await _dispatch_logosnode_command(
+            provider_id=data.provider_id,
+            action="delete_lane",
+            params={"lane_id": data.lane_id},
+            on_dispatched=dispatched.append,
+        )
+    except BaseException:
+        # Cancelled before an answer: settle the attempt all the same, or the
+        # live lane would stay out of the restore records.
+        if planner is not None and attempt is not None:
+            await asyncio.shield(
+                planner.settle_unload_attempt(
+                    data.provider_id, data.lane_id, attempt, dispatched[0] if dispatched else None
+                )
+            )
+        raise
+    # Not unloaded, or not known yet: one never sent records the lane again,
+    # a sent one is decided by its answer, also a late one.
+    if planner is not None and attempt is not None and getattr(result, "status_code", 200) >= 400:
+        await planner.settle_unload_attempt(
+            data.provider_id, data.lane_id, attempt, dispatched[0] if dispatched else None
+        )
+    return result
 
 
 @router.post("/logosdb/providers/logosnode/lanes/reconfigure", tags=["logosnode"])
 async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="reconfigure_lane",
@@ -978,7 +1183,7 @@ async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
     the session was started and reports which models the worker will see
     as uncalibrated right now.
     """
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
     snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
@@ -1035,7 +1240,7 @@ async def logosnode_stop_calibration(data: LogosNodeStatusRequest):
     written for the model in progress — it's just left uncalibrated for
     a later session.
     """
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
     snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
@@ -1080,7 +1285,7 @@ async def logosnode_stop_calibration(data: LogosNodeStatusRequest):
 @router.post("/logosdb/providers/logosnode/model-profiles/clear-unsupported", tags=["logosnode"])
 async def logosnode_clear_unsupported(data: LogosNodeClearUnsupportedRequest):
     """Let calibration retry a model a node marked permanently unsupported."""
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
 
     def _clear() -> int | None:
         with DBManager() as db:
@@ -1100,7 +1305,7 @@ async def logosnode_clear_unsupported(data: LogosNodeClearUnsupportedRequest):
 @router.post("/logosdb/providers/logosnode/model-calibrations/invalidate", tags=["logosnode"])
 async def logosnode_invalidate_calibration(data: LogosNodeInvalidateCalibrationRequest):
     """Stop trusting a calibration; nodes using it re-calibrate the model."""
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
 
     def _invalidate() -> list[tuple[int, str]]:
         with DBManager() as db:
@@ -1119,6 +1324,13 @@ async def logosnode_invalidate_calibration(data: LogosNodeInvalidateCalibrationR
     }
 
 
+@router.post("/logosdb/providers/logosnode/calibration-sharing", tags=["logosnode"])
+async def logosnode_calibration_sharing(data: LogosKeyModel):
+    """Whether nodes may adopt each other's calibrations; changes nothing."""
+    await asyncio.to_thread(_require_root_access, data.logos_key)
+    return {"shared_profiles": shared_profiles_enabled(), "max_age_days": shared_profile_max_age_days()}
+
+
 @router.post("/logosdb/providers/logosnode/model-profiles/reset", tags=["logosnode"])
 async def logosnode_reset_profiles(data: LogosNodeResetProfilesRequest):
     """Empty a node's profiles so its next calibration measures from scratch.
@@ -1126,7 +1338,7 @@ async def logosnode_reset_profiles(data: LogosNodeResetProfilesRequest):
     A connected worker adopts the empty profiles at once; echoes of its old
     state carry an outdated revision and are rejected.
     """
-    _require_root_access(data.logos_key)
+    await asyncio.to_thread(_require_root_access, data.logos_key)
 
     def _reset() -> list[str]:
         with DBManager() as db:
@@ -1138,4 +1350,4 @@ async def logosnode_reset_profiles(data: LogosNodeResetProfilesRequest):
         _recorded_calibrations.pop((data.provider_id, model_name), None)
     if reset:
         await _push_model_profiles(data.provider_id, reset)
-    return {"provider_id": data.provider_id, "reset": reset}
+    return {"provider_id": data.provider_id, "reset": reset, "shared_profiles": shared_profiles_enabled()}

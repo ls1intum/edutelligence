@@ -1,0 +1,55 @@
+<section class="nightly" [class.nightly--active]="state()?.enabled" aria-label="Nightly benchmarks">
+  <div class="nightly__heading">
+    <div>
+      <strong><i class="pi pi-moon" aria-hidden="true"></i> Nightly benchmarks · {{ providerName }}</strong>
+      <p role="status">{{ state() ? (state()!.enabled ? 'Nightly runs activated' : 'Nightly runs deactivated') : 'Loading nightly status…' }}</p>
+    </div>
+    <button type="button" (click)="review()" [disabled]="!state() || saving() || (!state()!.enabled && (!window || state()!.recovery_required))">
+      {{ state()?.enabled ? 'Disable nightly runs…' : 'Enable nightly runs…' }}
+    </button>
+  </div>
+  <dl class="nightly__plan">
+    <div><dt>Model</dt><dd>{{ modelName }}</dd></div>
+    <div>
+      <dt>Parameters to be tested</dt>
+      <dd>
+        @for (parameter of plannedParameters; track parameter.name) {
+          <div><code>{{ parameter.name }}</code>: {{ parameter.values }}</div>
+        } @empty {
+          {{ state()?.plan ? 'Current configuration only' : 'Loading plan…' }}
+        }
+        @if (plannedParameters.length) { <small>Current settings first, then one parameter at a time.</small> }
+      </dd>
+    </div>
+  </dl>
+  <p>Up to 2 enabled model/worker pairs per night · never tested or oldest run first</p>
+  @if (window; as timing) {
+    <p>{{ timing.start }}–{{ timing.end }} · {{ timing.timezone }} · calibration first, then benchmarks</p>
+    <p>No new benchmark configuration after {{ timing.benchmark_start_cutoff }}. At {{ timing.end }}: finish the current run at ≥50% complete; otherwise stop. Five minutes without progress stops the run.</p>
+  } @else {
+    <p>Waiting for the shared maintenance window…</p>
+  }
+  @if (state(); as status) {
+    <small>Latest state: {{ statusLabel(status.status) }} @if (status.last_run_date) { · {{ status.last_run_date }} }</small>
+    @if (status.recovery_required) { <p role="alert">Worker recovery is pending. Further nightly benchmarks are paused.</p> }
+    @if (status.report.length) {
+      <details><summary>Latest nightly results</summary>
+        <ul>@for (result of status.report; track $index) {
+          <li>@if (result.configuration) {Configuration {{ result.configuration }} · }{{ statusLabel(result.status) }}
+            @if (result.attempt) { · attempt {{ result.attempt }} }
+            @if (result.benchmark_id) { · benchmark #{{ result.benchmark_id }} }
+            @if (result.reason) { — {{ result.reason }} }
+          </li>
+        }</ul>
+        <p>Successful measurements appear in the performance comparison below. Production settings are restored after the nightly plan.</p>
+      </details>
+    }
+  }
+  @if (error() && !confirming()) { <p role="alert">{{ error() }}</p> }
+</section>
+<app-modal-confirm [visible]="confirming()" (visibleChange)="!saving() && confirming.set($event)"
+  [title]="enabling ? 'Enable nightly runs?' : 'Disable nightly runs?'"
+  [message]="confirmationMessage" [confirmLabel]="enabling ? 'Enable nightly runs' : 'Disable nightly runs'"
+  [danger]="!enabling" icon="pi-moon" [loading]="saving()" (confirmed)="confirm()">
+  @if (error()) { <p modal-error role="alert">{{ error() }}</p> }
+</app-modal-confirm>

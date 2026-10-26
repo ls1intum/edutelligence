@@ -90,6 +90,34 @@ class OrchestratorNotificationServiceTest {
     }
 
     @Test
+    void pushesALaneLockChangeOnceItsTransactionCommits() {
+        TransactionSynchronizationManager.initSynchronization();
+        service.notifyLaneLock(3, "lane-a", true, 7L);
+        verify(restTemplate, never()).postForEntity(any(String.class), any(), any());
+
+        TransactionSynchronizationUtils.triggerAfterCommit();
+
+        ArgumentCaptor<HttpEntity<Map<String, Object>>> body = captor();
+        verify(restTemplate).postForEntity(
+            eq("http://orchestrator:8000/internal/lane_lock_changed"), body.capture(), any());
+        assertThat(body.getValue().getBody())
+            .containsEntry("provider_id", 3)
+            .containsEntry("lane_id", "lane-a")
+            .containsEntry("locked", true)
+            .containsEntry("revision", 7L);
+    }
+
+    @Test
+    void aFailedLaneLockPushDoesNotFailTheCaller() {
+        when(restTemplate.postForEntity(any(String.class), any(), any()))
+            .thenThrow(new ResourceAccessException("connection refused"));
+
+        service.notifyLaneLock(3, "lane-a", false, 8L);
+
+        verify(restTemplate).postForEntity(eq("http://orchestrator:8000/internal/lane_lock_changed"), any(), any());
+    }
+
+    @Test
     void announcesNothingWhenTheTransactionRollsBack() {
         TransactionSynchronizationManager.initSynchronization();
         service.notifyRefresh(true, false);

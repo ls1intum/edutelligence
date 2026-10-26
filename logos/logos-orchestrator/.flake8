@@ -10,7 +10,6 @@ exclude =
     __pycache__,
     .idea,
     .venv,
-    shared,
     logos-ui,
     # Benchmark scripts — script style, not library code.
     logos/logos-orchestrator/tests/performance,

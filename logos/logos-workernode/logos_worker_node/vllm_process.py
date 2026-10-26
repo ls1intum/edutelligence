@@ -18,6 +18,7 @@ Key characteristics:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -38,6 +39,7 @@ import httpx
 from logos_worker_node.model_profiles import ModelProfileRegistry, reconfigured_vram_mb
 from logos_worker_node.models import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
+    HF_REDUNDANT_WEIGHT_PATTERNS,
     LaneConfig,
     ProcessState,
     ProcessStatus,
@@ -67,6 +69,7 @@ from logos_worker_node.vllm_compat import (
     _VLLM_METRIC_TTFT_BUCKET,
     _VLLM_METRIC_TTFT_COUNT,
     _VLLM_METRIC_TTFT_SUM,
+    LANE_ENV_MARKER,
     _infer_default_chat_template_kwargs,
     _infer_reasoning_parser,
     _infer_tool_call_parser,
@@ -134,7 +137,12 @@ def resolve_model_snapshot(
 
     cache_dir = os.path.join(hf_home, "hub") if hf_home else None
     effective_token = token if token is not None else (os.environ.get("HF_TOKEN") or None)
-    kwargs: dict[str, Any] = {"repo_id": model, "cache_dir": cache_dir, "token": effective_token}
+    kwargs: dict[str, Any] = {
+        "repo_id": model,
+        "cache_dir": cache_dir,
+        "token": effective_token,
+        "ignore_patterns": HF_REDUNDANT_WEIGHT_PATTERNS,
+    }
     if revision:
         kwargs["revision"] = revision
     if allow_patterns:
@@ -463,6 +471,117 @@ def _speculative_decoding_requested(vc: Any) -> bool:
     if str(getattr(vc, "speculative_config", "") or "").strip():
         return True
     return any(str(a).startswith("--speculative-config") for a in (getattr(vc, "extra_args", None) or []))
+
+
+ATTENTION_BACKEND_FLAG = "--attention-config.backend"
+
+# nvidia-smi compute capabilities of this node, e.g. "7.5" or "7.5;8.6".
+# None = not probed yet, "" = probed and no GPU found.
+_cached_cuda_arch: str | None = None
+
+
+def detect_cuda_arch() -> str | None:
+    """Return the node's GPU compute capabilities via nvidia-smi, cached per process."""
+    global _cached_cuda_arch
+    if _cached_cuda_arch is not None:
+        return _cached_cuda_arch or None
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            caps = {line.strip() for line in result.stdout.strip().splitlines() if line.strip()}
+            if caps:
+                _cached_cuda_arch = ";".join(sorted(caps))
+                return _cached_cuda_arch
+    except Exception:
+        pass
+    _cached_cuda_arch = ""
+    return None
+
+
+def auto_attention_backend(cuda_arch: str | None) -> str:
+    """Attention backend for a node without an explicit override.
+
+    Returns TRITON_ATTN when every GPU is pre-Ampere (compute < 8.0), where
+    FlashInfer JIT crashes the driver. Returns "" otherwise (mixed nodes, Ampere+
+    or unknown) so vLLM picks its own default.
+    """
+    if not cuda_arch:
+        return ""
+    try:
+        caps = [float(c) for c in cuda_arch.split(";") if c.strip()]
+    except ValueError:
+        return ""
+    if caps and max(caps) < 8.0:
+        return "TRITON_ATTN"
+    return ""
+
+
+def reset_cuda_arch_cache() -> None:
+    """Forget the detected compute capabilities, so the next call probes again."""
+    global _cached_cuda_arch
+    _cached_cuda_arch = None
+
+
+_BACKEND_FLAGS = ("--attention-backend", f"{ATTENTION_BACKEND_FLAG}", "-ac.backend")
+_ATTENTION_CONFIG_FLAGS = ("--attention-config", "-ac")
+
+
+def _config_value_sets_backend(value: str) -> bool:
+    """True when an ``--attention-config`` value (JSON or ``key=value``) names a backend."""
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return re.search(r"(^|[,\s])backend\s*=", value) is not None
+    return isinstance(parsed, dict) and "backend" in parsed
+
+
+def extra_args_set_attention_backend(extra_args: list[str] | None) -> bool:
+    """True when raw vLLM args already choose the attention backend.
+
+    Other attention settings, such as ``--attention-config.flash_attn_version``,
+    leave the backend choice open.
+    """
+    args = [str(arg) for arg in (extra_args or [])]
+    for index, arg in enumerate(args):
+        name, has_value, inline = arg.partition("=")
+        if name in _BACKEND_FLAGS:
+            return True
+        if name in _ATTENTION_CONFIG_FLAGS:
+            value = inline if has_value else (args[index + 1] if index + 1 < len(args) else "")
+            if _config_value_sets_backend(value):
+                return True
+    return False
+
+
+def resolve_attention_backend(
+    explicit_backend: str,
+    extra_args: list[str] | None,
+    auto_backend: Callable[[], str],
+) -> str:
+    """The backend Logos passes as ``--attention-config.backend``, or "" for none.
+
+    An explicit ``attention_backend`` wins, otherwise ``auto_backend`` decides.
+    Nothing is passed when ``extra_args`` already set the backend, so the
+    command carries a single choice and the operator's raw flag is the one used.
+    """
+    if extra_args_set_attention_backend(extra_args):
+        return ""
+    return str(explicit_backend or "").strip() or auto_backend()
+
+
+def attention_backend_args(
+    explicit_backend: str,
+    extra_args: list[str] | None,
+    auto_backend: Callable[[], str],
+) -> list[str]:
+    """The ``--attention-config.backend`` arguments a lane (or its probe) runs with."""
+    backend = resolve_attention_backend(explicit_backend, extra_args, auto_backend)
+    return [ATTENTION_BACKEND_FLAG, backend] if backend else []
 
 
 class VllmProcessHandle:
@@ -2011,11 +2130,15 @@ class VllmProcessHandle:
         # kernels under TP>1.
         if vc.enforce_eager or lane_config.flash_attention is False:
             cmd.append("--enforce-eager")
-        # Attention application server: explicit config wins, otherwise auto-detect.
+        # Attention backend: explicit config wins, otherwise auto-detect.
         # FlashInfer JIT crashes drivers on pre-Ampere (compute < 8.0).
-        attn_backend = vc.attention_backend or self._auto_attention_backend()
-        if attn_backend:
-            cmd.extend(["--attention-config.backend", attn_backend])
+        cmd.extend(
+            attention_backend_args(
+                vc.attention_backend,
+                [*self._vllm_engine_config.global_extra_args, *vc.extra_args],
+                self._auto_attention_backend,
+            )
+        )
         if vc.enable_prefix_caching:
             cmd.append("--enable-prefix-caching")
         # vLLM only reports usage.prompt_tokens_details (cached_tokens) when
@@ -2104,52 +2227,12 @@ class VllmProcessHandle:
         )
 
     def _auto_attention_backend(self) -> str:
-        """Auto-select attention backend based on GPU compute capability.
-
-        Returns TRITON_ATTN on pre-Ampere GPUs (compute < 8.0) where FlashInfer
-        JIT crashes the driver. Returns empty string on Ampere+ to let vLLM pick
-        its own default.
-        """
-        arch = self._detect_cuda_arch()
-        if arch is None:
-            return ""
-        # arch is e.g. "7.5" or "8.6;8.6" for multi-GPU nodes; all GPUs must be
-        # pre-Ampere for the override to apply — a mixed node gets vLLM default.
-        try:
-            caps = [float(c) for c in arch.split(";") if c.strip()]
-        except ValueError:
-            return ""
-        if caps and max(caps) < 8.0:
-            return "TRITON_ATTN"
-        return ""
-
-    _cached_cuda_arch: str | None = None
+        """Auto-select the attention backend from this node's GPU compute capability."""
+        return auto_attention_backend(self._detect_cuda_arch())
 
     def _detect_cuda_arch(self) -> str | None:
-        """Auto-detect GPU compute capability via nvidia-smi. Cached per process."""
-        if VllmProcessHandle._cached_cuda_arch is not None:
-            return VllmProcessHandle._cached_cuda_arch or None
-        try:
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0:
-                caps = set()
-                for line in result.stdout.strip().splitlines():
-                    cap = line.strip()
-                    if cap:
-                        caps.add(cap)
-                if caps:
-                    arch = ";".join(sorted(caps))
-                    VllmProcessHandle._cached_cuda_arch = arch
-                    return arch
-        except Exception:
-            pass
-        VllmProcessHandle._cached_cuda_arch = ""
-        return None
+        """GPU compute capabilities of this node (see ``detect_cuda_arch``)."""
+        return detect_cuda_arch()
 
     def _resolve_vllm_binary(self, configured_binary: str) -> list[str]:
         """Resolve the vLLM CLI executable with actionable fallback order.
@@ -2256,7 +2339,7 @@ class VllmProcessHandle:
     def _build_env(self, lane_config: LaneConfig) -> dict[str, str]:
         """Build environment variables for this lane's vLLM process."""
         gc = self._global_config
-        env: dict[str, str] = {}
+        env: dict[str, str] = {LANE_ENV_MARKER: self.lane_id}
 
         # GPU device pinning. The indices come from nvidia-smi, which numbers
         # GPUs by PCI bus; CUDA's default FASTEST_FIRST order can differ (for
@@ -2719,6 +2802,10 @@ class VllmProcessHandle:
             pass
         except Exception:
             logger.debug("[%s] vLLM log streaming ended", self.lane_id, exc_info=True)
+
+    @property
+    def recent_log_tail(self) -> str:
+        return self._recent_log_tail()
 
     def _recent_log_tail(self) -> str:
         if not self._recent_logs:

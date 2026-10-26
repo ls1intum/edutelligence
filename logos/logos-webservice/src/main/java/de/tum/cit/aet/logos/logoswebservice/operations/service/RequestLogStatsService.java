@@ -10,6 +10,7 @@ import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.RequestLatencyProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelBreakdownProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelTimeSeriesProjection;
@@ -116,6 +117,65 @@ public class RequestLogStatsService {
         payload.put("range", range);
         payload.put("bucketSeconds", bucketSeconds);
         payload.put("stats", stats);
+        return payload;
+    }
+
+    /**
+     * Delay percentiles of finished requests in a range, per model, provider
+     * and reasoning effort, under the same scope as {@link #getRequestLogStats}.
+     * Local workers and cloud providers are both covered; {@code local} on a
+     * row tells them apart.
+     *
+     * <p>The queue figure is the time a request spent inside Logos before the
+     * provider was called (key lookup, rate limit, budget check, waiting for a
+     * database connection); the upstream figure is the provider's own time;
+     * the time to first token runs from arrival. A default range is the last
+     * 24 hours: percentiles read single rows, so the default stays short.
+     */
+    public Map<String, Object> getRequestLatencyStats(String startDate, String endDate,
+                                                      Integer userId, Integer teamId, Integer providerId,
+                                                      Integer apiKeyId, boolean errorsOnly,
+                                                      List<Integer> modelIds) {
+        ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
+        ZonedDateTime endDt = endDate != null ? ZonedDateTime.parse(endDate).withZoneSameInstant(ZoneOffset.UTC) : now;
+        ZonedDateTime startDt = startDate != null
+                ? ZonedDateTime.parse(startDate).withZoneSameInstant(ZoneOffset.UTC)
+                : endDt.minusDays(1);
+        if (startDt.isAfter(endDt)) {
+            throw new IllegalArgumentException("start_date must be before end_date");
+        }
+        List<Integer> ids = modelIds == null ? List.of() : modelIds;
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (RequestLatencyProjection p : logEntryRepository.findRequestLatency(
+                Timestamp.from(startDt.toInstant()), Timestamp.from(endDt.toInstant()),
+                userId, teamId, providerId, apiKeyId, ids.isEmpty(), queryIds(ids), errorsOnly)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("modelId", p.getModelId());
+            m.put("modelName", p.getModelName());
+            m.put("providerId", p.getProviderId());
+            m.put("providerName", p.getProviderName());
+            m.put("local", Boolean.TRUE.equals(p.getLocal()));
+            m.put("reasoningEffort", p.getReasoningEffort());
+            m.put("requestCount", p.getRequestCount());
+            m.put("errorCount", p.getErrorCount());
+            m.put("queueP50Ms", p.getQueueP50Ms());
+            m.put("queueP95Ms", p.getQueueP95Ms());
+            m.put("upstreamP50Ms", p.getUpstreamP50Ms());
+            m.put("upstreamP95Ms", p.getUpstreamP95Ms());
+            m.put("ttftSamples", p.getTtftSamples());
+            m.put("ttftP50Ms", p.getTtftP50Ms());
+            m.put("ttftP95Ms", p.getTtftP95Ms());
+            rows.add(m);
+        }
+
+        Map<String, Object> range = new LinkedHashMap<>();
+        range.put("start", startDt.toInstant().toString());
+        range.put("end", endDt.toInstant().toString());
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("range", range);
+        payload.put("rows", rows);
         return payload;
     }
 

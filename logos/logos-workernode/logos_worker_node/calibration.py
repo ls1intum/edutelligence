@@ -52,6 +52,8 @@ from typing import Any, Callable, Iterable, Iterator
 from logos_worker_node.vllm_compat import (
     _BAKED_QUANT_METHODS_FILENAME,
     _FATAL_LOAD_ERROR_PATTERNS,
+    LANE_ENV_MARKER,
+    PROBE_ENV_MARKER,
     FatalLoadErrorPattern,
     _extract_vllm_kv_gib_needed_for_full,
     _extract_vllm_max_concurrency,
@@ -81,6 +83,11 @@ _VRAM_SETTLE_S = 4.0
 _VRAM_SAMPLE_COUNT = 3
 _VRAM_SAMPLE_INTERVAL_S = 1.0
 _CALIBRATION_PORT = 11499
+# Process groups of the probes this worker process spawned (each probe starts
+# its own session, so its pid is the group id of all its workers).
+_probe_process_groups: set[int] = set()
+_PROC_ROOT = Path("/proc")
+_probe_process_groups_lock = threading.Lock()
 _KV_CACHE_MIN_STEP_MB = 1024.0  # sweep step and safety margin
 _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
 _FINAL_MEASUREMENT_RETRIES = 3  # retries for the final VRAM measurement startup
@@ -1151,8 +1158,33 @@ def _build_vllm_cmd(
         cmd.append("--enforce-eager")
     if disable_custom_all_reduce:
         cmd.append("--disable-custom-all-reduce")
+    backend = probe_attention_backend(plan)
+    if backend:
+        from logos_worker_node.vllm_process import ATTENTION_BACKEND_FLAG  # noqa: PLC0415
+
+        cmd.extend([ATTENTION_BACKEND_FLAG, backend])
     cmd.extend(extra_args)
     return cmd
+
+
+def probe_attention_backend(plan: dict[str, Any]) -> str:
+    """The attention backend a probe of *plan* passes, or "" when it passes none.
+
+    Same rule as the serving lane: the plan's ``attention_backend`` (from the
+    model overrides) wins, otherwise the serving auto-detection; a backend
+    already set in ``extra_args`` is left to them.
+    """
+    from logos_worker_node.vllm_process import (  # noqa: PLC0415
+        auto_attention_backend,
+        detect_cuda_arch,
+        resolve_attention_backend,
+    )
+
+    return resolve_attention_backend(
+        str(plan.get("attention_backend") or ""),
+        list(plan.get("extra_args") or []),
+        lambda: auto_attention_backend(detect_cuda_arch()),
+    )
 
 
 def spawn_vllm(
@@ -1173,6 +1205,9 @@ def spawn_vllm(
 
     env = os.environ.copy()
     env["VLLM_SERVER_DEV_MODE"] = "1"
+    env[PROBE_ENV_MARKER] = "1"
+    # A worker started from a lane's environment must not pass as a lane.
+    env.pop(LANE_ENV_MARKER, None)
     # The probe's GPU slice is measured with nvidia-smi indices; number CUDA's
     # devices the same way, as the serving lane does.
     env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -1247,43 +1282,90 @@ def spawn_vllm(
     finally:
         log_file.close()
 
+    with _probe_process_groups_lock:
+        _probe_process_groups.add(proc.pid)
     logger.info("  Spawned PID=%d  log=%s", proc.pid, log_path)
     logger.info("  Command: %s", " ".join(cmd))
     return proc, cmd
 
 
-def _kill_stale_vllm_workers() -> None:
-    """Kill any orphaned ``VLLM::Worker`` or ``vllm`` processes.
+def _read_proc_file(entry: Path, name: str) -> bytes:
+    try:
+        return (entry / name).read_bytes()
+    except OSError:
+        return b""
 
-    Scans ``/proc`` directly (no psutil dependency) for processes whose
-    ``/proc/<pid>/comm`` contains ``vllm`` (case-insensitive) — this
-    catches both the ``VLLM::Worker`` subprocesses and lingering ``vllm
-    serve`` parents.
+
+def _proc_pgid(entry: Path) -> int | None:
+    """Process group id from ``/proc/<pid>/stat`` (field 5, after the comm)."""
+    stat = _read_proc_file(entry, "stat").decode("utf-8", errors="replace")
+    fields = stat.rpartition(")")[2].split()
+    try:
+        return int(fields[2])
+    except (IndexError, ValueError):
+        return None
+
+
+def _is_probe_server_cmdline(args: list[str]) -> bool:
+    """A ``vllm serve`` command line bound to the calibration port."""
+    if "serve" not in args or not any("vllm" in arg.lower() for arg in args):
+        return False
+    port = str(_CALIBRATION_PORT)
+    return any(
+        (arg == "--port" and index + 1 < len(args) and args[index + 1] == port) or arg == f"--port={port}"
+        for index, arg in enumerate(args)
+    )
+
+
+def _kill_stale_vllm_workers() -> None:
+    """Kill leftover calibration probe processes, and only those.
+
+    A process counts as a probe when its process group is one this worker
+    spawned for a probe, when its environment carries ``PROBE_ENV_MARKER``
+    (probe workers inherit it, so orphans are found after their parent died),
+    or, for probes started before the marker existed, when it is a
+    ``vllm serve`` on the calibration port or belongs to the process group of
+    one. A process whose environment carries ``LANE_ENV_MARKER`` belongs to a
+    serving lane and is never touched, whatever its command line or GPUs say:
+    lanes outside the calibration's GPU slice keep serving during a session.
     """
-    proc_root = Path("/proc")
+    proc_root = _PROC_ROOT
     if not proc_root.exists():
         return  # not Linux
-    killed = 0
+    with _probe_process_groups_lock:
+        spawned = set(_probe_process_groups)
+    probes: list[int] = []
+    unmarked: list[tuple[int, int | None]] = []
+    legacy_servers: set[int] = set()
     for entry in proc_root.iterdir():
         if not entry.name.isdigit():
-            continue
-        try:
-            cmdline = (entry / "cmdline").read_bytes().decode("utf-8", errors="replace")
-        except Exception:
-            continue
-        # Match both "vllm serve ..." parents and "VLLM::Worker" children
-        if "vllm" not in cmdline.lower():
             continue
         pid = int(entry.name)
         if pid == os.getpid():
             continue
+        environ = set(_read_proc_file(entry, "environ").split(b"\0"))
+        if any(item.startswith(LANE_ENV_MARKER.encode() + b"=") for item in environ):
+            continue
+        pgid = _proc_pgid(entry)
+        if f"{PROBE_ENV_MARKER}=1".encode() in environ or (pgid is not None and pgid in spawned):
+            # Every process of a probe, whatever its command line.
+            probes.append(pid)
+            continue
+        args = [a for a in _read_proc_file(entry, "cmdline").decode("utf-8", errors="replace").split("\0") if a]
+        if any("vllm" in arg.lower() for arg in args):
+            if _is_probe_server_cmdline(args):
+                legacy_servers.add(pid)
+            unmarked.append((pid, pgid))
+    targets = probes + [pid for pid, pgid in unmarked if pid in legacy_servers or pgid in legacy_servers]
+    killed = 0
+    for pid in targets:
         try:
             os.kill(pid, signal.SIGKILL)
             killed += 1
         except OSError:
             pass
     if killed:
-        logger.info("  Killed %d stale vLLM process(es)", killed)
+        logger.info("  Killed %d stale calibration probe process(es)", killed)
         time.sleep(_VRAM_SETTLE_S)  # let GPU memory release
 
 
@@ -1377,6 +1459,8 @@ def stop_vllm(proc: subprocess.Popen[str] | None) -> None:
             os.killpg(pgid, signal.SIGKILL)
         except OSError:
             pass  # already gone
+    with _probe_process_groups_lock:
+        _probe_process_groups.discard(proc.pid)
 
     # Reap the main process
     try:

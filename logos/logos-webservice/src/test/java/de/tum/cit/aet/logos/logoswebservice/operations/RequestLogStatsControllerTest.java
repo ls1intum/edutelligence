@@ -53,6 +53,143 @@ class RequestLogStatsControllerTest {
            .andExpect(jsonPath("$.stats.modelBreakdown").isArray());
     }
 
+    // ── Request latency ──────────────────────────────────────────────────────
+    // Both seeded requests wait 60 s before forwarding, run 60 s after it, and
+    // see their first token 30 s and 60 s after arrival.
+
+    @Test
+    void requestLatencyStats_reportsPercentilesPerModelAndProvider() throws Exception {
+        jdbc.update("UPDATE providers SET privacy_level = 'CLOUD_IN_EU_BY_US_PROVIDER' WHERE id = 6001");
+
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.range.start").isString())
+           .andExpect(jsonPath("$.rows.length()").value(1))
+           .andExpect(jsonPath("$.rows[0].modelId").value(5001))
+           .andExpect(jsonPath("$.rows[0].providerId").value(6001))
+           .andExpect(jsonPath("$.rows[0].local").value(false))
+           .andExpect(jsonPath("$.rows[0].reasoningEffort").isEmpty())
+           .andExpect(jsonPath("$.rows[0].requestCount").value(2))
+           .andExpect(jsonPath("$.rows[0].errorCount").value(0))
+           .andExpect(jsonPath("$.rows[0].queueP50Ms").value(60000.0))
+           .andExpect(jsonPath("$.rows[0].upstreamP95Ms").value(60000.0))
+           .andExpect(jsonPath("$.rows[0].ttftSamples").value(2))
+           .andExpect(jsonPath("$.rows[0].ttftP50Ms").value(45000.0));
+    }
+
+    @Test
+    void requestLatencyStats_keepsARenamedModelInOneRowUnderItsCurrentName() throws Exception {
+        jdbc.update("UPDATE providers SET privacy_level = 'CLOUD_IN_EU_BY_US_PROVIDER' WHERE id = 6001");
+        jdbc.update("UPDATE log_entry SET model_name = 'gpt-4-old' WHERE id = 9001");
+        jdbc.update("UPDATE log_entry SET model_name = 'gpt-4-older' WHERE id = 9002");
+
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.rows.length()").value(1))
+           .andExpect(jsonPath("$.rows[0].modelId").value(5001))
+           .andExpect(jsonPath("$.rows[0].modelName").value("gpt-4"))
+           .andExpect(jsonPath("$.rows[0].requestCount").value(2));
+    }
+
+    @Test
+    void requestLatencyStats_groupsADeletedModelByItsCapturedName() throws Exception {
+        jdbc.update("UPDATE providers SET privacy_level = 'CLOUD_IN_EU_BY_US_PROVIDER' WHERE id = 6001");
+        jdbc.update("UPDATE log_entry SET model_id = NULL, model_name = 'retired-a' WHERE id = 9001");
+        jdbc.update("UPDATE log_entry SET model_id = NULL, model_name = 'retired-b' WHERE id = 9002");
+
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.rows.length()").value(2))
+           .andExpect(jsonPath("$.rows[0].modelName").value("retired-a"))
+           .andExpect(jsonPath("$.rows[0].requestCount").value(1))
+           .andExpect(jsonPath("$.rows[1].modelName").value("retired-b"));
+    }
+
+    @Test
+    void requestLatencyStats_includesLocalProvidersAndMarksThem() throws Exception {
+        // The seeded provider is LOCAL: its requests count, marked as local.
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.rows.length()").value(1))
+           .andExpect(jsonPath("$.rows[0].providerId").value(6001))
+           .andExpect(jsonPath("$.rows[0].local").value(true))
+           .andExpect(jsonPath("$.rows[0].requestCount").value(2))
+           .andExpect(jsonPath("$.rows[0].queueP50Ms").value(60000.0));
+    }
+
+    @Test
+    void requestLatencyStats_splitsAModelByTheEffortItWasServedWith() throws Exception {
+        jdbc.update("UPDATE log_entry SET reasoning_effort = 'high' WHERE id = 9001");
+        jdbc.update("UPDATE log_entry SET reasoning_effort = 'low' WHERE id = 9002");
+
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.rows.length()").value(2))
+           .andExpect(jsonPath("$.rows[0].reasoningEffort").value("high"))
+           .andExpect(jsonPath("$.rows[0].requestCount").value(1))
+           .andExpect(jsonPath("$.rows[1].reasoningEffort").value("low"))
+           .andExpect(jsonPath("$.rows[1].requestCount").value(1));
+    }
+
+    @Test
+    void requestLatencyStats_keepsRequestsWithoutAnEffortInTheirOwnRow() throws Exception {
+        jdbc.update("UPDATE log_entry SET reasoning_effort = 'medium' WHERE id = 9002");
+
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.rows.length()").value(2))
+           .andExpect(jsonPath("$.rows[0].reasoningEffort").isEmpty())
+           .andExpect(jsonPath("$.rows[1].reasoningEffort").value("medium"));
+    }
+
+    @Test
+    void requestLatencyStats_narrowsToTheGivenScope() throws Exception {
+        jdbc.update("UPDATE providers SET privacy_level = 'CLOUD_IN_EU_BY_US_PROVIDER' WHERE id = 6001");
+
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"team_id\": 2001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.rows[0].requestCount").value(1));
+    }
+
+    @Test
+    void requestLatencyStats_refusesAnAppAdmin() throws Exception {
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void requestLatencyStats_rejectsAnInvertedRange() throws Exception {
+        mvc.perform(post("/logosdb/request_latency_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"start_date\": \"2026-01-02T00:00:00Z\", \"end_date\": \"2026-01-01T00:00:00Z\"}"))
+           .andExpect(status().isBadRequest());
+    }
+
     @Test
     void requestLogStats_rejectsUnauthenticated() throws Exception {
         mvc.perform(post("/logosdb/request_log_stats")

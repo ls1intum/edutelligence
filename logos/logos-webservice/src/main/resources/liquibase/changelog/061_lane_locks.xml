@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Worker lanes an administrator has locked warm.
+
+         The capacity planner in logos-orchestrator puts an idle lane to sleep
+         and unloads lanes when another model needs the VRAM. A model whose
+         first request after such a sleep must not wait for a wake (an
+         embedding model every chat depends on, a demo model) is locked here
+         from the statistics page: the planner reads this table every cycle and
+         never sleeps, drains or unloads a locked lane, and wakes a locked lane
+         it finds asleep.
+
+         Stored in the database rather than in the orchestrator's memory so a
+         lock survives orchestrator restarts and deploys. The key is the lane
+         id the worker reports, which is stable for a model on a worker;
+         model_name is kept for display and for the planner's logs. A lane that
+         no longer exists keeps its row harmlessly until an administrator
+         unlocks it; deleting the provider removes its locks. -->
+    <changeSet id="061-lane-locks" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="lane_locks"/></not>
+        </preConditions>
+        <sql>
+            CREATE TABLE lane_locks (
+                provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+                lane_id     TEXT NOT NULL,
+                model_name  TEXT,
+                locked_by   TEXT,
+                locked_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (provider_id, lane_id)
+            );
+        </sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS lane_locks;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

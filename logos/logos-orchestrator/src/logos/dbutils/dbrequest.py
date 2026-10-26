@@ -1,6 +1,6 @@
 from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from logos.benchmarks.configuration import BenchmarkBatch, BenchmarkSettings
 from logos.dbutils.dbmodules import ThresholdLevel
@@ -8,6 +8,16 @@ from logos.dbutils.dbmodules import ThresholdLevel
 
 class LogosKeyModel(BaseModel):
     logos_key: str
+
+
+class NightlyStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_provider_id: int = Field(gt=0)
+
+
+class NightlyUpdateRequest(NightlyStatusRequest):
+    enabled: StrictBool
+    expected_enabled: StrictBool
 
 
 class WebSearchRequest(BaseModel):
@@ -121,7 +131,18 @@ class LogosNodeModelProfilesRequest(BaseModel):
     shared_key: str
     # model name -> calibration key hash the worker computes for it right now
     calibration_key_hashes: dict[str, str] = Field(default_factory=dict, max_length=_MAX_PROFILE_MODELS)
+    # model name -> GPUs the node can calibrate and serve the model on
+    slice_gpu_counts: dict[str, int] = Field(default_factory=dict, max_length=_MAX_PROFILE_MODELS)
     legacy_import: LogosNodeLegacyProfileImport | None = None
+
+
+class LogosNodeCalibrationReservationRequest(BaseModel):
+    shared_key: str
+    model_name: str
+    # The key and GPU count the worker computed for the model just now; a
+    # config edit may not have reached Logos through a status yet.
+    calibration_key_hash: str | None = None
+    slice_gpu_count: int | None = None
 
 
 class LogosNodeClearUnsupportedRequest(LogosKeyModel):
@@ -181,12 +202,37 @@ class RefreshPipelineRequest(BaseModel):
     sync_cloud_models: bool = False
 
 
+class LaneLockChangedRequest(BaseModel):
+    """A lane lock the webservice just committed, pushed so the planner applies it at once."""
+
+    provider_id: int
+    lane_id: str
+    locked: bool
+    # Order of the change among all changes of this lane; the pushes can
+    # arrive out of order, so an older revision is ignored.
+    revision: int
+    # The lock's restore record as committed (JSON text, None for none). Sent
+    # by webservices that know the record; a push without the field leaves
+    # the record the planner holds.
+    restore_lanes_json: Optional[str] = None
+
+
 class InternalCalibrateRequest(BaseModel):
     provider_id: int
 
 
 class InternalStopCalibrationRequest(BaseModel):
     provider_id: int
+
+
+class InternalReleaseCalibrationClaimRequest(BaseModel):
+    provider_id: int
+    claim_token: str
+
+
+class InternalReleaseRecoveryRequest(BaseModel):
+    model_provider_id: int
+    force: bool = False
 
 
 class InternalDeleteLaneRequest(BaseModel):

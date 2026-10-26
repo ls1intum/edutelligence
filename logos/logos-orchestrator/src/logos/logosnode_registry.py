@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
+from logos.benchmarks.nightly import LEASE_CHECK, NIGHTLY_CONTEXT
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.monitoring import prometheus_metrics as prom
 from logos.terminal_logging import (
     BOLD,
@@ -43,6 +45,14 @@ class LogosNodeOfflineError(RuntimeError):
 
 class LogosNodeCommandError(RuntimeError):
     """Raised when a worker command RPC returns an error."""
+
+
+class LogosNodeCommandRejectedError(LogosNodeCommandError):
+    """The worker explicitly refused a command without accepting it."""
+
+
+class MaintenanceBusyError(LogosNodeCommandError):
+    """Another maintenance operation owns the cluster slot."""
 
 
 class LogosNodeSessionConflictError(RuntimeError):
@@ -269,6 +279,18 @@ CALIBRATION_SESSION_STARTED_EVENT = "calibration_session_started"
 # calibrating the moment it dispatches this, rather than waiting for the
 # worker's started event — see send_command for why.
 START_CALIBRATION_SESSION_ACTION = "start_calibration_session"
+CALIBRATION_MODEL_STARTED_EVENTS = frozenset({"calibration_model_selected", "calibration_model_started"})
+CALIBRATION_MODEL_COMPLETED_EVENT = "calibration_model_completed"
+# How long a finished model stays protected from adoption while its result
+# waits to be snapshotted; far above the worker's status interval.
+PENDING_SNAPSHOT_SECONDS = 60.0
+CALIBRATION_MODEL_ENDED_EVENTS = frozenset(
+    {
+        "calibration_model_failed",
+        "calibration_model_skipped",
+        "calibration_model_cancelled",
+    }
+)
 TERMINAL_CALIBRATION_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
 
 # How long the optimistic mark set when start_calibration_session is dispatched
@@ -359,6 +381,18 @@ class ProviderSession:
     # worker has freed all VRAM for its probes, so its idle lanes and free
     # VRAM are reserved rather than available.
     calibrating: bool = False
+    # The model the running session is calibrating right now, from its live
+    # events; None between models.
+    calibrating_model: str | None = None
+    # Models whose calibration finished but is not snapshotted yet, with the
+    # monotonic time the protection lapses. Adopting a shared snapshot now
+    # would outdate the result in flight.
+    pending_snapshots: dict[str, float] = field(default_factory=dict)
+    # Models the worker has reserved for calibration; its events reach us up to
+    # a second late, so a reservation is what bars adoption. Each is lifted by
+    # the events naming that model alone: a late event of an earlier model
+    # says nothing about this one.
+    reserved_models: set[str] = field(default_factory=set)
     # Set when start_calibration_session is dispatched: until it passes, a
     # status reporting no session is treated as a snapshot that predates the
     # command rather than as proof the session ended. See
@@ -771,6 +805,8 @@ class LogosNodeRuntimeRegistry:
         configured_models: list[str] | None = None,
         calibrating: bool | None = None,
         actions: list[str] | None = None,
+        calibrating_model: str | None = None,
+        pending_snapshots: list[str] | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -795,6 +831,12 @@ class LogosNodeRuntimeRegistry:
         if calibrating is not None:
             session.optimistic_calibration_until = None
             self._set_calibrating(session, bool(calibrating), "hello")
+            # A new session knows nothing of the model its worker is probing;
+            # the replayed start event is never applied.
+            session.calibrating_model = (calibrating_model or None) if calibrating else None
+        for model in pending_snapshots or ():
+            if isinstance(model, str) and model:
+                session.pending_snapshots[model] = time.monotonic() + PENDING_SNAPSHOT_SECONDS
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:
@@ -1008,7 +1050,27 @@ class LogosNodeRuntimeRegistry:
             self._set_calibrating(session, True, event_name)
         elif event_name in TERMINAL_CALIBRATION_SESSION_EVENTS:
             session.optimistic_calibration_until = None
+            session.calibrating_model = None
+            session.reserved_models.clear()
             self._set_calibrating(session, False, event_name)
+        elif event_name in CALIBRATION_MODEL_STARTED_EVENTS:
+            model = str(event.get("model") or "")
+            session.calibrating_model = model or None
+            session.reserved_models.discard(model)
+        elif event_name == CALIBRATION_MODEL_COMPLETED_EVENT:
+            model = str(event.get("model") or "")
+            session.reserved_models.discard(model)
+            if model:
+                now = time.monotonic()
+                session.pending_snapshots = {m: t for m, t in session.pending_snapshots.items() if t > now}
+                session.pending_snapshots[model] = now + PENDING_SNAPSHOT_SECONDS
+            if session.calibrating_model in (model, None):
+                session.calibrating_model = None
+        elif event_name in CALIBRATION_MODEL_ENDED_EVENTS:
+            model = str(event.get("model") or "")
+            session.reserved_models.discard(model)
+            if session.calibrating_model in (model, None):
+                session.calibrating_model = None
 
     def _reconcile_calibrating_from_status(self, session: ProviderSession, calibrating: bool) -> None:
         """Settle ``session.calibrating`` from the worker's own status snapshot.
@@ -1060,6 +1122,45 @@ class LogosNodeRuntimeRegistry:
                 session.worker_id or str(session.provider_id),
                 source,
             )
+
+    def calibrating_model(self, provider_id: int) -> str | None:
+        """The model a node is calibrating right now, if it reported one."""
+        session = self._sessions.get(int(provider_id))
+        return session.calibrating_model if session is not None and session.calibrating else None
+
+    def models_in_calibration(self, provider_id: int) -> frozenset[str]:
+        """Models a node is calibrating or has just finished: not to be adopted.
+
+        Read from worker threads; it never mutates.
+        """
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return frozenset()
+        now = time.monotonic()
+        busy = {model for model, until in list(session.pending_snapshots.items()) if until > now}
+        if session.calibrating and session.calibrating_model:
+            busy.add(session.calibrating_model)
+        busy.update(list(session.reserved_models))
+        return frozenset(busy)
+
+    def reserve_calibration(self, provider_id: int, model_name: str) -> bool:
+        """Bar adoption for a model the worker is about to calibrate.
+
+        Called from a request thread, synchronously: unlike the worker's
+        events it takes effect before the caller continues.
+        """
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return False
+        session.reserved_models.add(model_name)
+        return True
+
+    def snapshots_linked(self, provider_id: int, models: list[str]) -> None:
+        """Lift the protection of models whose result is now snapshotted."""
+        session = self._sessions.get(int(provider_id))
+        if session is not None:
+            for model in models:
+                session.pending_snapshots.pop(model, None)
 
     def is_calibrating(self, provider_id: int) -> bool:
         """Return True while the worker is running a calibration session."""
@@ -1167,6 +1268,40 @@ class LogosNodeRuntimeRegistry:
                 }
             )
 
+    @staticmethod
+    def _check_benchmark_reservation(session, action, params, request_id) -> None:
+        if NIGHTLY_CONTEXT.get() and action not in {
+            "cancel_command",
+            "get_runtime",
+            "get_lanes",
+            "get_calibration_status",
+        }:
+            if not LEASE_CHECK.get()():
+                raise LogosNodeCommandError("Nightly execution lease was lost before worker dispatch")
+        if (
+            action
+            in {
+                "add_lane",
+                "delete_lane",
+                "reconfigure_lane",
+                "sleep_lane",
+                "wake_lane",
+                "apply_lanes",
+                "start_calibration_session",
+            }
+            and benchmark_reservations.owner(session.provider_id, "*") is not None
+            and not NIGHTLY_CONTEXT.get()
+        ):
+            raise LogosNodeCommandError("Worker is reserved for nightly benchmarks")
+        if action not in {"infer", "infer_stream"}:
+            return
+        lane_id = (params or {}).get("lane_id")
+        lanes = (session.latest_runtime or {}).get("lanes") or []
+        lane = next((lane for lane in lanes if lane.get("lane_id") == lane_id), None)
+        model = lane.get("model") if lane else ((params or {}).get("payload") or {}).get("model")
+        if model and not benchmark_reservations.allows(session.provider_id, model, request_id):
+            raise LogosNodeCommandError("The lane is reserved for an active benchmark")
+
     async def send_command(
         self,
         provider_id: int,
@@ -1175,6 +1310,44 @@ class LogosNodeRuntimeRegistry:
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
         on_sent: Callable[[], None] | None = None,
+        request_id: str | None = None,
+        on_dispatched: Callable[[asyncio.Future], None] | None = None,
+    ) -> dict[str, Any]:
+        coordinator = getattr(self, "maintenance", None)
+
+        async def send(dispatched=on_dispatched):
+            def notify(future):
+                if dispatched:
+                    dispatched(future)
+                if on_dispatched and on_dispatched is not dispatched:
+                    on_dispatched(future)
+
+            return await self._send_command(
+                provider_id,
+                action,
+                params,
+                timeout_seconds,
+                stale_after_seconds,
+                on_sent,
+                request_id,
+                notify if dispatched or on_dispatched else None,
+            )
+
+        if coordinator is not None and action == "start_calibration_session":
+            return await coordinator.start_calibration(provider_id, send)
+        if coordinator is not None and action == "stop_calibration_session":
+            return await coordinator.stop_calibration(provider_id, send)
+        return await send()
+
+    async def _send_command(
+        self,
+        provider_id: int,
+        action: str,
+        params: dict[str, Any] | None = None,
+        timeout_seconds: int = 20,
+        stale_after_seconds: int = 30,
+        on_sent: Callable[[], None] | None = None,
+        request_id: str | None = None,
         on_dispatched: Callable[[asyncio.Future], None] | None = None,
     ) -> dict[str, Any]:
         """Send a command to the worker and wait for its answer.
@@ -1227,6 +1400,8 @@ class LogosNodeRuntimeRegistry:
         writing = False
         try:
             async with session.send_lock:
+                self._check_benchmark_reservation(session, action, params, request_id)
+
                 # Handed over right before the frame is written: a caller
                 # cancelled while it is being written cannot tell whether the
                 # worker got it, so the answer must already be in its hands.
@@ -1305,7 +1480,7 @@ class LogosNodeRuntimeRegistry:
         # timeout — so it is raised like any other command failure.
         if isinstance(payload, dict) and payload.get("ok") is False:
             _undo_optimistic_calibration_mark()
-            raise LogosNodeCommandError(str(payload.get("error", f"worker refused '{action}'")))
+            raise LogosNodeCommandRejectedError(str(payload.get("error", f"worker refused '{action}'")))
         return payload
 
     async def send_stream_command(
@@ -1316,6 +1491,7 @@ class LogosNodeRuntimeRegistry:
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
         on_sent: Callable[[], None] | None = None,
+        request_id: str | None = None,
     ) -> AsyncIterator[bytes]:
         session = await self._get_active_session(provider_id, stale_after_seconds)
         cmd_id = str(uuid.uuid4())
@@ -1330,6 +1506,7 @@ class LogosNodeRuntimeRegistry:
         }
         try:
             async with session.send_lock:
+                self._check_benchmark_reservation(session, action, params, request_id)
                 await session.websocket.send_json(message)
         except Exception as exc:  # noqa: BLE001
             session.pending_streams.pop(cmd_id, None)
@@ -1644,8 +1821,11 @@ class LogosNodeRuntimeRegistry:
         provider_id: int,
         model_name: str,
         stale_after_seconds: int = 30,
+        request_id: str | None = None,
     ) -> dict[str, Any] | None:
         session = await self._get_active_session(provider_id, stale_after_seconds)
+        if not benchmark_reservations.allows(provider_id, model_name, request_id):
+            return None
         if session.capabilities_models and model_name not in session.capabilities_models:
             return None
         lanes = (session.latest_runtime or {}).get("lanes") or []

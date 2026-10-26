@@ -12,10 +12,13 @@ import copy
 import logging
 import os
 import time
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from itertools import combinations
 from typing import Any, Callable, Dict, List, Optional
 
+from logos.background_refresh import BackgroundRefreshedValue
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
 from logos.pipeline.latency_store import LatencyStore
@@ -41,7 +44,27 @@ from logos.terminal_logging import (
 from .demand_tracker import DemandTracker
 from .host_ram_ledger import HostRamLedger
 from .lane_comparator import best_lane
+from .lane_restore import (
+    RESLEEP,
+    UNLOADING,
+    WORKER_LOCK_ID,
+    missing_lanes,
+    observed_lanes,
+    unload_attempts,
+    unloading_lanes,
+    updated_record,
+)
 from .vram_ledger import VRAMLedger
+
+# Lane locks per (provider_id, lane_id): (locked, revision of the last change,
+# restore record). The lane id WORKER_LOCK_ID locks the whole worker. The
+# restore record is what lane_restore puts back after a worker restart.
+LaneLockState = Dict[tuple[int, str], tuple[bool, int, Optional[dict]]]
+# apply_lane_lock without a record from the push: keep the one held.
+_KEEP_RECORD = object()
+# Set while a nightly benchmark that already ran puts its worker back the way
+# it was: that cleanup must finish on a worker locked meanwhile.
+MAINTENANCE_RECOVERY: ContextVar[bool] = ContextVar("maintenance_recovery", default=False)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +74,10 @@ logger = logging.getLogger(__name__)
 # worker is holding lanes it will never get back.
 _UNPLANNABLE_WARN_AFTER_SECONDS = 45 * 60.0
 _UNPLANNABLE_WARN_EVERY_SECONDS = 15 * 60.0
+
+
+class RestoreRecordError(RuntimeError):
+    """A lock's restore record could not be updated."""
 
 
 class CapacityPlanner:
@@ -69,7 +96,14 @@ class CapacityPlanner:
     """
 
     # Idle tier thresholds (seconds of no activity)
-    IDLE_SLEEP_L1 = 120  # vLLM lane idle 2min → sleep level 1
+    # An awake lane with no requests for this long goes to sleep level 1.
+    # Sleeping frees VRAM on a shared GPU, but every request that then arrives
+    # pays a wake, and a request that lands while a lane is going to sleep
+    # used to wait for a wake that nobody triggered. Demand-driven eviction
+    # still sleeps an idle lane at once when another model needs its VRAM, so
+    # the timer only covers the case without contention: 30 minutes keeps
+    # lanes warm through normal gaps in traffic.
+    IDLE_SLEEP_L1 = 1800  # 30 min
     # L1→L2 deepening was previously a 10-min timer that fired unconditionally,
     # dropping the residual cache (~1.5 GB/lane) even when the GPU had ample
     # headroom. Result: idle lanes silently lost their fast-wake state and were
@@ -292,6 +326,8 @@ class CapacityPlanner:
         enabled: bool = True,
         on_state_change: Optional[Any] = None,
         latency_store: Optional[LatencyStore] = None,
+        lane_lock_reader: Optional[Callable[[], Optional[List[tuple]]]] = None,
+        lane_restore_writer: Optional[Callable[[list[tuple[int, str, int, dict]]], bool]] = None,
     ) -> None:
         self._facade = logosnode_facade
         self._registry = logosnode_registry
@@ -300,6 +336,13 @@ class CapacityPlanner:
         self._enabled = enabled
         self._on_state_change = on_state_change
         self._latency_store = latency_store
+        # Returns the operator lane locks as (provider_id, lane_id) pairs, or
+        # None when they could not be read. Wired to the database at startup;
+        # without one no lane is ever locked.
+        self._lane_lock_reader = lane_lock_reader
+        # Writes locks' restore records, all or none: a list of (provider_id,
+        # lane_id, revision, record) -> whether every lock still held its revision.
+        self._lane_restore_writer = lane_restore_writer
         self._lane_idle_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_level: dict[tuple[int, str], int] = {}
@@ -455,6 +498,20 @@ class CapacityPlanner:
         # Key: model_name → (provider_id, registered_at)
         self._pending_capacity: dict[str, tuple[int, float]] = {}
 
+        # Requests that hold a reservation for a model on a provider but found
+        # no ready lane there (the lane went to sleep, or is still waking).
+        # They are not in the scheduler queue any more, so without this the
+        # planner would see no queued demand and never wake a lane for them.
+        # Key: request_id → (provider_id, model_name, registered_at).
+        self._lane_waiters: dict[str, tuple[int, str, float]] = {}
+
+        # Lanes an operator locked warm: never idle-slept, never evicted for
+        # another model, and woken when found asleep. Key: (provider_id,
+        # lane_id). Served from memory: the webservice pushes every lock change
+        # (apply_lane_lock), and the ``lane_locks`` table is only re-read in
+        # the background to catch a push that was lost.
+        self._lane_locks = self._new_lane_lock_cache()
+
         # Structural load-failure cooldown: lanes whose add_lane was rejected
         # by the worker for a non-transient reason (e.g. no feasible GPU
         # subset). Suppresses new load actions on the lane until expiry.
@@ -607,6 +664,677 @@ class CapacityPlanner:
         """
         self._announced_use.pop(model_name, None)
 
+    # A waiter older than this is treated as gone: the request resolves within
+    # its own context timeout, so an entry this old was leaked by a caller that
+    # never cleared it.
+    LANE_WAITER_TTL_SECONDS = 900.0
+
+    def register_lane_waiter(self, request_id: str, provider_id: int, model_name: str) -> None:
+        """Record that ``request_id`` waits for a ready lane of ``model_name``.
+
+        The request already holds a reservation, so it is not in the scheduler
+        queue that the demand pass reads. Registering it makes it count as
+        queued demand for the model on this provider: the wake gate's queued
+        bypass applies, and the idle pass does not sleep the model's lanes
+        while it waits. Also wakes the cycle at once.
+        """
+        if not request_id or not model_name:
+            return
+        self._waiters()[request_id] = (int(provider_id), model_name, time.time())
+        self.hint_capacity_needed(model_name, provider_id=provider_id)
+
+    def clear_lane_waiter(self, request_id: str) -> None:
+        """Forget a waiter once its request has a lane, moved elsewhere, or ended."""
+        self._waiters().pop(request_id, None)
+
+    def _waiters(self) -> dict[str, tuple[int, str, float]]:
+        # Tolerates a planner built without __init__ (several tests do that).
+        waiters = getattr(self, "_lane_waiters", None)
+        if waiters is None:
+            waiters = self._lane_waiters = {}
+        return waiters
+
+    def _lane_waiter_count(self, provider_id: int, model_name: str) -> int:
+        """Live waiters for ``model_name`` on ``provider_id`` (expired ones are dropped)."""
+        waiters = self._waiters()
+        if not waiters:
+            return 0
+        cutoff = time.time() - self.LANE_WAITER_TTL_SECONDS
+        expired = [rid for rid, (_, _, at) in waiters.items() if at < cutoff]
+        for rid in expired:
+            waiters.pop(rid, None)
+        return sum(1 for pid, model, _ in waiters.values() if pid == provider_id and model == model_name)
+
+    def _lane_waiter_models(self, provider_id: int) -> set[str]:
+        """Models with a live waiter on ``provider_id`` (expired ones are dropped)."""
+        waiters = self._waiters()
+        if not waiters:
+            return set()
+        cutoff = time.time() - self.LANE_WAITER_TTL_SECONDS
+        return {model for pid, model, at in waiters.values() if pid == provider_id and at >= cutoff}
+
+    # How long the in-memory lane locks are trusted before they are re-read
+    # in the background, and how soon a failed read is retried. Every change
+    # made through the webservice is pushed at once, so the re-read only
+    # catches a lost push.
+    LANE_LOCK_REFRESH_S = 300.0
+    LANE_LOCK_RETRY_S = 10.0
+
+    def _new_lane_lock_cache(self) -> BackgroundRefreshedValue[LaneLockState]:
+        return BackgroundRefreshedValue(
+            self._read_lane_locks,
+            initial={},
+            refresh_after_s=self.LANE_LOCK_REFRESH_S,
+            retry_after_s=self.LANE_LOCK_RETRY_S,
+            name="lane locks",
+        )
+
+    def _lock_cache(self) -> BackgroundRefreshedValue[LaneLockState]:
+        # Tolerates a planner built without __init__ (several tests do that).
+        cache = getattr(self, "_lane_locks", None)
+        if cache is None:
+            cache = self._lane_locks = self._new_lane_lock_cache()
+        return cache
+
+    def _read_lane_locks(self) -> Optional[LaneLockState]:
+        """The ``lane_locks`` table as {(provider_id, lane_id): (locked, revision, record)}; ``None`` when unreadable.
+
+        A reader row is ``(provider_id, lane_id, locked, revision[, restore record])``;
+        a bare ``(provider_id, lane_id)`` pair counts as locked at revision 0.
+        """
+        reader = getattr(self, "_lane_lock_reader", None)
+        if reader is None:
+            return None
+        rows = reader()
+        if rows is None:
+            return None
+        state: LaneLockState = {}
+        for row in rows:
+            locked, revision = (bool(row[2]), int(row[3])) if len(row) >= 4 else (True, 0)
+            record = row[4] if len(row) >= 5 and isinstance(row[4], dict) else None
+            state[(int(row[0]), str(row[1]))] = (locked, revision, record)
+        return state
+
+    def is_lane_locked(self, provider_id: int, lane_id: str) -> bool:
+        """Whether an operator locked this lane warm (from memory; never waits for the database)."""
+        cache = self._lock_cache()
+        # Without a reader there is nothing to refresh from; only pushed changes count.
+        locks = cache.get() if getattr(self, "_lane_lock_reader", None) is not None else cache.peek()
+        entry = locks.get((int(provider_id), lane_id))
+        return entry is not None and entry[0]
+
+    def is_worker_locked(self, provider_id: int) -> bool:
+        """Whether an operator locked the whole worker: no automatic load, wake, sleep or unload there."""
+        return self.is_lane_locked(provider_id, WORKER_LOCK_ID)
+
+    def apply_lane_lock(
+        self, provider_id: int, lane_id: str, locked: bool, revision: int, record: Any = _KEEP_RECORD
+    ) -> None:
+        """Apply a lock change the webservice just committed, without waiting for a re-read.
+
+        The pushes can arrive out of order: a change older than the one held
+        for the lane (by push or by the last read) is ignored.
+        """
+        key = (int(provider_id), str(lane_id))
+
+        def apply(locks: LaneLockState) -> LaneLockState:
+            held = locks.get(key)
+            if held is not None and held[1] >= revision:
+                return locks
+            # The push carries the record as committed. Without it, locking a
+            # locked lane again keeps the held record; a new lock starts
+            # without one, as the webservice clears it in the table.
+            if record is not _KEEP_RECORD:
+                kept = record if locked else None
+            else:
+                kept = held[2] if held is not None and held[0] and locked else None
+            return {**locks, key: (bool(locked), int(revision), kept)}
+
+        applied = self._lock_cache().update(apply).get(key, (None, None))[:2] == (bool(locked), int(revision))
+        logger.info(
+            "%s on worker=%s %s (revision %d)%s",
+            "Worker" if lane_id == WORKER_LOCK_ID else f"Lane {lane_id}",
+            self._facade.get_provider_name(provider_id) or provider_id,
+            ("locked" if lane_id == WORKER_LOCK_ID else "locked warm") if locked else "unlocked",
+            revision,
+            "" if applied else "; ignored, a newer change is already held",
+        )
+
+    async def _ensure_lane_locks_loaded(self) -> None:
+        """Load the locks once before the first cycle plans with them; later reads refresh in the background."""
+        if getattr(self, "_lane_lock_reader", None) is None:
+            return
+        cache = self._lock_cache()
+        if not cache.loaded:
+            await cache.refresh_async()
+
+    def _refresh_lane_locks(self) -> None:
+        """Re-read the locks now (startup and tests). A failed read keeps the previous set."""
+        self._lock_cache().refresh()
+
+    # ------------------------------------------------------------------
+    # Restoring locked lanes after a worker restart (see lane_restore)
+    # ------------------------------------------------------------------
+
+    def _restore_record_lock(self, provider_id: int) -> asyncio.Lock:
+        """Serializes every change to one worker's restore records.
+
+        A record is rewritten whole, so two changes that read it at the same
+        time would each drop what the other wrote.
+        """
+        locks = self.__dict__.setdefault("_restore_record_locks", {})
+        return locks.setdefault(int(provider_id), asyncio.Lock())
+
+    def _restore_sleep_pending(self) -> set[tuple[int, str]]:
+        """Lanes of locked workers put back awake that slept before the restart."""
+        pending = self.__dict__.get("_restore_sleep_pending_lanes")
+        if pending is None:
+            pending = self._restore_sleep_pending_lanes = set()
+        return pending
+
+    async def _compute_restore_actions(
+        self,
+        provider_id: int,
+        cycle_reserved_lane_ids: Optional[dict[int, set[str]]] = None,
+    ) -> List[CapacityPlanAction]:
+        """Record the locked lanes of a worker and put back the ones it no longer reports.
+
+        Runs first for every plannable worker, locked or not. A lane put back
+        loads with its recorded config, so it lands on the same GPUs with the
+        same settings. A lane of a locked worker that slept before is put to
+        sleep again once it runs.
+        """
+        registry = self._registry
+        snapshot = registry.peek_runtime_snapshot(provider_id) if registry is not None else None
+        if snapshot is None:
+            return []
+        runtime_lanes = (snapshot.get("runtime") or {}).get("lanes") or []
+        if not isinstance(runtime_lanes, list):
+            return []
+        if not any(pid == provider_id and entry[0] for (pid, _), entry in self._lock_cache().peek().items()):
+            return []
+        await self._retry_unsettled_refusals(provider_id)
+        present = {str(lane.get("lane_id")) for lane in runtime_lanes if isinstance(lane, dict)}
+        pending = self._restore_sleep_pending()
+        async with self._restore_record_lock(provider_id):
+            # Read under the lock: a change waited for may have rewritten a record.
+            locks = [
+                (lane_id, revision, record)
+                for (pid, lane_id), (locked, revision, record) in self._lock_cache().peek().items()
+                if pid == provider_id and locked
+            ]
+            unloading: dict[str, list[float]] = {}
+            # The re-sleeps due are those the current worker lock marks, also
+            # after an orchestrator restart; an earlier lock's do not carry over.
+            pending.difference_update({key for key in pending if key[0] == provider_id})
+            for lock_id, _revision, record in locks:
+                unloading.update(unloading_lanes(record))
+                if lock_id == WORKER_LOCK_ID:
+                    pending.update(
+                        (provider_id, lid)
+                        for lid, entry in (record or {}).items()
+                        if isinstance(entry, dict) and entry.get(RESLEEP)
+                    )
+            # An unload is done once the lane is gone. It may wait behind
+            # other commands for a long time, so only a definite failure
+            # (unload_refused) brings the lane back into the records.
+            done = {lane_id for lane_id in unloading if lane_id not in present}
+            observed = {
+                lane_id: entry for lane_id, entry in observed_lanes(runtime_lanes).items() if lane_id not in unloading
+            }
+            records = []
+            for lock_id, revision, record in locks:
+                cleaned = {lane_id: entry for lane_id, entry in (record or {}).items() if lane_id not in done}
+                new_record = updated_record(cleaned, observed, lock_id, self._kept_asleep(provider_id))
+                if new_record != (record or {}):
+                    await self._save_restore_record(provider_id, lock_id, revision, new_record)
+                records.append((lock_id, new_record))
+        ready = {
+            str(lane.get("lane_id"))
+            for lane in runtime_lanes
+            if isinstance(lane, dict) and str(lane.get("runtime_state") or "") in {"loaded", "running"}
+        }
+        before = self._kept_asleep(provider_id)
+        revisions = {lock_id: revision for lock_id, revision, _record in locks}
+        actions = self._plan_restore(provider_id, records, observed, present, cycle_reserved_lane_ids, ready)
+        for action in actions:
+            # The lock the action serves: checked again right before dispatch.
+            lock_id = WORKER_LOCK_ID if action.action != "load" else action.restore_lock
+            action.restore_lock = (lock_id, revisions.get(lock_id))
+        after = self._kept_asleep(provider_id)
+        planned_sleeps = {a.lane_id for a in actions if a.action == "sleep_l1"}
+        # A planned sleep keeps its mark until it is attempted (see the executor).
+        set_on, set_off = after - before, before - after - planned_sleeps
+        if (set_on or set_off) and not await self._mark_resleep(provider_id, set_on=set_on, set_off=set_off):
+            # Without the mark, a restart would leave the sleeper awake: do not
+            # load it yet, and try again next cycle.
+            for lane_id in set_on:
+                pending.discard((provider_id, lane_id))
+            actions = [a for a in actions if not (a.action == "load" and a.lane_id in set_on)]
+        return actions
+
+    async def _mark_resleep(self, provider_id: int, set_on: set[str], set_off: set[str]) -> bool:
+        """Persist which lanes of a locked worker still go back to sleep, before their loads go out.
+
+        Returns whether the record holds the marks now.
+        """
+        async with self._restore_record_lock(provider_id):
+            entry = self._lock_cache().peek().get((int(provider_id), WORKER_LOCK_ID))
+            if entry is None or not entry[0] or not entry[2]:
+                return not set_on
+            record = {lane_id: dict(value) for lane_id, value in entry[2].items() if isinstance(value, dict)}
+            for lane_id in set_on & set(record):
+                record[lane_id][RESLEEP] = True
+            for lane_id in set_off & set(record):
+                record[lane_id].pop(RESLEEP, None)
+            if record == entry[2]:
+                return True
+            return await self._save_restore_record(provider_id, WORKER_LOCK_ID, entry[1], record)
+
+    def _restore_lock_holds(self, action: CapacityPlanAction) -> bool:
+        """Whether a restore action is still wanted: its lock unchanged, and its record still asking for it.
+
+        An operator may unload the lane, or a sleep may settle, while the
+        action waits behind others in the cycle.
+        """
+        if not isinstance(action.restore_lock, tuple):
+            return True
+        lock_id, revision = action.restore_lock
+        held = self._lock_cache().peek().get((int(action.provider_id), lock_id))
+        if held is None or not held[0] or held[1] != revision:
+            return False
+        entry = (held[2] or {}).get(action.lane_id)
+        if not isinstance(entry, dict) or UNLOADING in entry:
+            return False
+        return bool(entry.get(RESLEEP)) if action.action == "sleep_l1" else True
+
+    def _kept_asleep(self, provider_id: int) -> set[str]:
+        return {lane_id for pid, lane_id in self._restore_sleep_pending() if pid == provider_id}
+
+    def _plan_restore(
+        self,
+        provider_id: int,
+        records: list[tuple[str, dict]],
+        observed: dict[str, dict],
+        present: set[str],
+        cycle_reserved_lane_ids: Optional[dict[int, set[str]]],
+        ready: Optional[set[str]] = None,
+    ) -> List[CapacityPlanAction]:
+        """Loads for recorded lanes the worker does not report, then sleeps for those put back that slept."""
+        pending = self._restore_sleep_pending()
+        busy = self._claimed_load_lane_ids(provider_id)
+        actions: List[CapacityPlanAction] = []
+        planned: set[str] = set()
+        worker = self._facade.get_provider_name(provider_id) or provider_id
+        # Lanes that slept go first, and awake lanes on their GPUs wait until
+        # they sleep again: before the restart they fit side by side only
+        # because the sleepers held little memory, and an awake lane loaded
+        # first could leave no room for a sleeper's full start.
+        unsettled_gpus: set[int] | None = set()
+        for lock_id, new_record in records:
+            if lock_id != WORKER_LOCK_ID:
+                continue
+            for lane_id, entry in new_record.items():
+                if not entry.get("sleeping"):
+                    continue
+                if lane_id in present and (provider_id, lane_id) not in pending:
+                    continue  # back and asleep, or awake for good
+                if lane_id not in present and self._lane_is_in_load_failure_cooldown(provider_id, lane_id):
+                    continue  # its load failed: do not hold the awake lanes back for it
+                gpus = self._parse_restore_gpus(entry)
+                unsettled_gpus = None if gpus is None or unsettled_gpus is None else unsettled_gpus | gpus
+        for lock_id, new_record in sorted(records, key=lambda item: item[0] != WORKER_LOCK_ID):
+            missing = sorted(missing_lanes(new_record, present), key=lambda item: not item[1].get("sleeping"))
+            for lane_id, entry in missing:
+                if lane_id in planned or lane_id in busy:
+                    continue
+                if not entry.get("sleeping") and self._overlaps(self._parse_restore_gpus(entry), unsettled_gpus):
+                    continue
+                if self._lane_is_in_load_failure_cooldown(provider_id, lane_id):
+                    continue
+                planned.add(lane_id)
+                if cycle_reserved_lane_ids is not None:
+                    cycle_reserved_lane_ids.setdefault(provider_id, set()).add(lane_id)
+                lane_config = dict(entry["lane_config"])
+                actions.append(
+                    CapacityPlanAction(
+                        action="load",
+                        provider_id=provider_id,
+                        lane_id=lane_id,
+                        model_name=str(lane_config["model"]),
+                        params=lane_config,
+                        reason="Restoring a locked lane as it was before the worker restarted",
+                        restore=True,
+                        restore_lock=lock_id,
+                    )
+                )
+                logger.info(
+                    "Restoring lane %s (%s) on worker=%s on GPU(s) %s",
+                    lane_id,
+                    lane_config["model"],
+                    worker,
+                    lane_config.get("gpu_devices") or "chosen by the worker",
+                )
+                if lock_id == WORKER_LOCK_ID and entry.get("sleeping"):
+                    pending.add((provider_id, lane_id))
+        for key in [key for key in pending if key[0] == provider_id]:
+            lane = observed.get(key[1])
+            if key[1] in planned or lane is None:
+                if key[1] not in present and key[1] not in planned:
+                    pending.discard(key)  # neither running nor being put back
+                continue
+            if ready is not None and key[1] not in ready:
+                continue  # still starting: sleep it once it serves
+            # One attempt: a sleep that fails leaves the lane awake, which the
+            # next report then records.
+            pending.discard(key)
+            if lane["sleeping"]:
+                continue
+            actions.append(
+                CapacityPlanAction(
+                    action="sleep_l1",
+                    provider_id=provider_id,
+                    lane_id=key[1],
+                    model_name=str(lane["lane_config"]["model"]),
+                    params={"level": 1},
+                    reason="Restoring a locked worker: the lane slept before the worker restarted",
+                    restore=True,
+                )
+            )
+        return actions
+
+    @staticmethod
+    def _parse_restore_gpus(entry: dict) -> Optional[set[int]]:
+        """GPUs of a recorded lane; None when it may use every GPU."""
+        lane_config = entry.get("lane_config") or {}
+        overrides = (lane_config.get("vllm_config") or {}).get("env_overrides") or {}
+        raw = str(lane_config.get("gpu_devices") or "").replace(" ", "")
+        if "CUDA_VISIBLE_DEVICES" in overrides or raw.lower() in {"", "all"}:
+            return None
+        return {int(part) for part in raw.split(",") if part.isdigit()}
+
+    @staticmethod
+    def _overlaps(gpus: Optional[set[int]], others: Optional[set[int]]) -> bool:
+        if others is not None and not others:
+            return False
+        return gpus is None or others is None or bool(gpus & others)
+
+    async def _save_restore_record(self, provider_id: int, lock_id: str, revision: int, record: dict) -> bool:
+        """Store a lock's record, in the table and then in memory, unless the lock changed meanwhile.
+
+        Returns whether it was stored.
+        """
+        return await self._save_restore_records(provider_id, [(lock_id, revision, record)])
+
+    async def _save_restore_records(self, provider_id: int, changes: list[tuple[str, int, dict]]) -> bool:
+        """Store several locks' records of one worker, all or none. Returns whether they were stored."""
+        if not changes:
+            return True
+        writer = getattr(self, "_lane_restore_writer", None)
+        if writer is not None:
+            try:
+                rows = [(int(provider_id), lock_id, revision, record) for lock_id, revision, record in changes]
+                if not await asyncio.to_thread(writer, rows):
+                    return False  # unlocked or locked again since: the next read brings the new state
+            except Exception:
+                logger.warning("Could not store the restore records of worker=%s", provider_id, exc_info=True)
+                return False
+
+        def apply(locks: LaneLockState) -> LaneLockState:
+            updated = dict(locks)
+            for lock_id, revision, record in changes:
+                key = (int(provider_id), lock_id)
+                held = updated.get(key)
+                if held is not None and held[0] and held[1] == revision:
+                    updated[key] = (True, revision, record)
+            return updated
+
+        self._lock_cache().update(apply)
+        return True
+
+    async def unload_refused(self, provider_id: int, lane_id: str, attempt: float) -> None:
+        """The worker refused the unload *attempt*: the lane stays, so record it again.
+
+        Only that attempt's mark is cleared: a later unload of the lane keeps its own.
+        A write that fails is retried every cycle until it lands.
+        """
+        key = (int(provider_id), lane_id, attempt)
+        if await self._set_unloading(provider_id, lane_id, None, attempt=attempt):
+            self._unsettled_refusals().discard(key)
+        else:
+            self._unsettled_refusals().add(key)
+
+    def _unsettled_refusals(self) -> set[tuple[int, str, float]]:
+        """Refused unload attempts whose mark could not be cleared yet."""
+        return self.__dict__.setdefault("_unsettled_refusal_keys", set())
+
+    async def _retry_unsettled_refusals(self, provider_id: int) -> None:
+        for pid, lane_id, attempt in [key for key in self._unsettled_refusals() if key[0] == int(provider_id)]:
+            await self.unload_refused(pid, lane_id, attempt)
+
+    async def forget_restored_lane(self, provider_id: int, lane_id: str) -> float:
+        """Mark a lane an operator unloads on purpose: it is not put back.
+
+        Called before the unload goes out, so no cycle puts the lane back in
+        between. The mark is kept in the restore records, so it survives an
+        orchestrator restart, and the lane leaves the records once the worker
+        no longer reports it. Raises RestoreRecordError when a record could
+        not be updated: the caller must not unload then, or the lane would be
+        put back. Returns the attempt, which names this unload to unload_refused.
+        """
+        self._restore_sleep_pending().discard((int(provider_id), lane_id))
+        attempt = time.time()
+        # The write runs to its end even when the caller is cancelled: it may
+        # already be committing, and a mark nobody knows of would keep the
+        # live lane out of the records. A cancelled caller sends no unload,
+        # so its attempt is cleared again before the cancellation goes on.
+        marking = asyncio.ensure_future(self._set_unloading(provider_id, lane_id, attempt))
+        try:
+            marked = await asyncio.shield(marking)
+        except asyncio.CancelledError:
+            if await marking:
+                await asyncio.shield(self.unload_refused(provider_id, lane_id, attempt))
+            raise
+        if not marked:
+            raise RestoreRecordError(
+                f"Lane {lane_id} is recorded to be restored after a restart, and the record could not "
+                "be updated; it was not unloaded. Try again."
+            )
+        return attempt
+
+    async def _set_unloading(
+        self, provider_id: int, lane_id: str, since: Optional[float], attempt: Optional[float] = None
+    ) -> bool:
+        """Set (or, with None, clear) the unloading mark of a lane in every lock that records it.
+
+        Setting adds *since* as one more attempt; clearing removes *attempt*
+        and keeps the mark while another attempt may still unload the lane.
+        """
+        changes: list[tuple[str, int, dict]] = []
+        async with self._restore_record_lock(provider_id):
+            for (pid, lock_id), (locked, revision, record) in list(self._lock_cache().peek().items()):
+                if pid != int(provider_id) or not locked:
+                    continue
+                # A lock marks the lane it would record even before it has:
+                # a worker lock every lane, a lane lock its own.
+                if lane_id not in (record or {}) and (since is None or lock_id not in (WORKER_LOCK_ID, lane_id)):
+                    continue
+                current = (record or {}).get(lane_id, {})
+                attempts = unload_attempts(current)
+                if since is not None:
+                    attempts = [*attempts, since]
+                elif attempt is not None:
+                    if attempt not in attempts:
+                        continue  # that attempt was settled already
+                    attempts = [a for a in attempts if a != attempt]
+                else:
+                    attempts = []
+                entry = {k: v for k, v in current.items() if k != UNLOADING}
+                if attempts:
+                    entry[UNLOADING] = attempts
+                if entry:
+                    new_record = {**(record or {}), lane_id: entry}
+                else:
+                    # Only the mark was there: drop the entry, so the lane is recorded again.
+                    new_record = {k: v for k, v in (record or {}).items() if k != lane_id}
+                if new_record != record:
+                    changes.append((lock_id, revision, new_record))
+            # One write for every lock: an unload marked in some of them only
+            # would keep the lane out of the records although none went out.
+            return await self._save_restore_records(provider_id, changes)
+
+    def _compute_lock_wake_actions(
+        self,
+        provider_id: int,
+        lanes: List[LaneSchedulerSignals],
+        cycle_planned_models: Optional[set[str]] = None,
+    ) -> List[CapacityPlanAction]:
+        """Wake locked lanes that are asleep.
+
+        A lock means the lane stays warm, so one found asleep (it was asleep
+        when it was locked, or an operator slept it on purpose) is woken. The
+        wake goes through VRAM validation like any other; it never evicts.
+
+        Every locked lane is considered on its own: the model-wide cycle set is
+        only written here, never read. Reading it would let a locked copy on
+        one worker whose wake fails VRAM validation suppress the wake of a
+        locked copy on another worker that has the memory, every cycle.
+        Writing it still keeps the demand pass from planning a second wake for
+        the same model in this cycle, but only for a wake that fits the free
+        VRAM now. One that does not fit is left to the demand pass: a request
+        waiting for the model can still reclaim an idle unlocked lane and wake
+        the locked one, instead of the standalone wake failing validation every
+        cycle. The caller drops this wake when the demand pass plans the same.
+        """
+        actions: List[CapacityPlanAction] = []
+        profiles = None
+        capacity = None
+        for lane in lanes:
+            if not self.is_lane_locked(provider_id, lane.lane_id):
+                continue
+            if lane.sleep_state != "sleeping" and lane.runtime_state != "sleeping":
+                continue
+            if self._lane_is_in_wake_failure_cooldown(provider_id, lane.lane_id):
+                continue
+            actions.append(
+                CapacityPlanAction(
+                    action="wake",
+                    provider_id=provider_id,
+                    lane_id=lane.lane_id,
+                    model_name=lane.model_name,
+                    reason="Lane is locked warm",
+                )
+            )
+            if cycle_planned_models is None:
+                continue
+            if profiles is None:
+                profiles = self._safe_get_profiles(provider_id)
+                capacity = self._safe_get_capacity(provider_id)
+            if self._lock_wake_fits(provider_id, lane, profiles, capacity):
+                cycle_planned_models.add(lane.model_name)
+        return actions
+
+    async def _locked_since_planning(self, action: CapacityPlanAction) -> bool:
+        """Whether an operator locked the lane of this automatic sleep or stop.
+
+        Read right before the command goes out: the drain ahead of it can wait
+        up to a minute, long enough for an operator to lock the lane.
+        """
+        if action.operator_initiated:
+            return False
+        if action.restore and not self._restore_lock_holds(action):
+            logger.info(
+                "Aborting %s of lane %s on worker=%s: the lock that planned it changed while the lane drained",
+                action.action,
+                action.lane_id,
+                self._facade.get_provider_name(action.provider_id) or action.provider_id,
+            )
+            return True
+        if self.is_worker_locked(action.provider_id) and not (action.restore or MAINTENANCE_RECOVERY.get()):
+            logger.info(
+                "Aborting %s of lane %s on worker=%s: the worker was locked while the lane drained",
+                action.action,
+                action.lane_id,
+                self._facade.get_provider_name(action.provider_id) or action.provider_id,
+            )
+            return True
+        if not self.is_lane_locked(action.provider_id, action.lane_id):
+            return False
+        logger.info(
+            "Aborting %s of lane %s on worker=%s: the lane was locked warm while it drained",
+            action.action,
+            action.lane_id,
+            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+        )
+        return True
+
+    @staticmethod
+    def _merge_lock_wakes(
+        lock_wakes: List[CapacityPlanAction],
+        demand_actions: List[CapacityPlanAction],
+    ) -> List[CapacityPlanAction]:
+        """One worker's lock wakes followed by its demand plan, each lane woken once.
+
+        A locked lane the demand pass also wakes (after reclaiming room for it)
+        keeps only the demand plan's wake, which runs after its victims.
+        """
+        demand_wakes = {a.lane_id for a in demand_actions if a.action == "wake"}
+        return [a for a in lock_wakes if a.lane_id not in demand_wakes] + list(demand_actions)
+
+    def _lock_wake_fits(self, provider_id: int, lane: LaneSchedulerSignals, profiles: dict, capacity) -> bool:
+        """Whether waking this sleeping lane fits the free VRAM now.
+
+        Checked on the lane's own GPUs when the snapshot reports them, since
+        the wake reserves memory per GPU: free memory on another GPU does not
+        help. Rough like the ranking otherwise: without a profile or a
+        capacity reading the wake is assumed to fit, as before.
+        """
+        profile = profiles.get(lane.model_name) if profiles else None
+        if profile is None or capacity is None:
+            return True
+        needed_mb = max(
+            self._estimate_model_loaded_vram(profile) - float(profile.sleeping_residual_mb or 0.0),
+            0.0,
+        )
+        gpu_ids = []
+        for part in str(lane.gpu_devices or "").split(","):
+            try:
+                gpu_ids.append(int(part.strip()))
+            except ValueError:
+                continue
+        per_gpu_free = self._get_per_gpu_free(provider_id) if gpu_ids else None
+        if gpu_ids and per_gpu_free:
+            per_gpu_needed = needed_mb / len(gpu_ids)
+            return all(per_gpu_free.get(gpu, 0.0) >= per_gpu_needed for gpu in gpu_ids)
+        return needed_mb <= float(getattr(capacity, "available_vram_mb", 0) or 0)
+
+    def _model_inflight_without_other_lane(self, provider_id: int, model_name: str, lane_id: str) -> bool:
+        """Whether taking ``lane_id`` away would strand requests reserved for its model.
+
+        A request reserved for the model on this provider but not yet at the
+        worker does not show in the lane's active_requests. If no other awake
+        lane of the model on the provider can take it, sleeping ``lane_id``
+        leaves it waiting for a wake.
+        """
+        try:
+            reported = self._facade.get_inflight_request_count_by_model_name(model_name, provider_id)
+        except Exception:  # noqa: BLE001
+            reported = 0
+        # Only a real count is trusted; a facade that cannot tell must not
+        # keep lanes awake.
+        inflight = reported if isinstance(reported, int) and not isinstance(reported, bool) else 0
+        inflight += self._lane_waiter_count(provider_id, model_name)
+        if inflight <= 0:
+            return False
+        for other in self._safe_get_lanes(provider_id):
+            if other.lane_id == lane_id or other.model_name != model_name:
+                continue
+            if self.is_lane_marked_cold(provider_id, other.lane_id):
+                continue
+            if other.runtime_state in ("loaded", "running") and other.sleep_state != "sleeping":
+                return False
+        return True
+
     async def stop(self) -> None:
         """Stop the planner."""
         if self._task and not self._task.done():
@@ -665,6 +1393,8 @@ class CapacityPlanner:
           a lane placed or woken here would be lost, and the requests it
           drains must not be disturbed. A peer takes the load meanwhile.
         """
+        if benchmark_reservations.owner(provider_id, "*") is not None:
+            return False
         if self._registry is None:
             return True
         if not self._registry.has_received_first_status(provider_id):
@@ -739,6 +1469,7 @@ class CapacityPlanner:
             logger.warning("Cleaned %d stale host-RAM reservations", stale_host_ram)
 
         self._demand.decay_all()
+        await self._ensure_lane_locks_loaded()
 
         # Keep pending-capacity models alive in the demand signal. A model lands
         # in _pending_capacity when a request is actively waiting but its lane
@@ -810,7 +1541,9 @@ class CapacityPlanner:
         # because it was iterated first.
         best_provider_for_model: Optional[dict[str, int]] = None
         if self._cross_provider_best_first:
-            ready_provider_ids = [pid for pid in provider_ids if self._is_plannable(pid)]
+            ready_provider_ids = [
+                pid for pid in provider_ids if self._is_plannable(pid) and not self.is_worker_locked(pid)
+            ]
             best_provider_for_model = self._rank_providers_for_demanded_models(
                 ready_provider_ids,
                 self._demand.get_ranked_models(),
@@ -849,19 +1582,33 @@ class CapacityPlanner:
             self._reconcile_load_failures(provider_id, lanes)
             self._update_idle_tracking(provider_id, lanes)
             self._record_kv_pressure_history(provider_id, lanes)
+            restore_actions = await self._compute_restore_actions(provider_id, cycle_reserved_lane_ids)
+            all_actions.extend(restore_actions)
+            # A model being put back is planned here: no other pass loads it again.
+            restored_models = {a.model_name for a in restore_actions if a.action == "load"}
+            cycle_planned_models |= restored_models
+            if self.is_worker_locked(provider_id):
+                # An operator locked the worker: nothing loads, wakes, sleeps
+                # or unloads there on its own, apart from putting it back the
+                # way it was after a restart.
+                continue
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
-            all_actions.extend(
-                self._compute_demand_actions(
-                    provider_id,
-                    lanes,
-                    cycle_planned_models=cycle_planned_models,
-                    cycle_planned_additional_models=cycle_planned_additional_models,
-                    best_provider_for_model=best_provider_for_model,
-                    cluster_lanes_by_model=cluster_lanes_by_model,
-                    cycle_balance_wake_models=cycle_balance_wake_models,
-                    cycle_reserved_lane_ids=cycle_reserved_lane_ids,
-                )
+            lock_wakes = self._compute_lock_wake_actions(provider_id, lanes, cycle_planned_models)
+            demand_actions = self._compute_demand_actions(
+                provider_id,
+                lanes,
+                cycle_planned_models=cycle_planned_models,
+                cycle_planned_additional_models=cycle_planned_additional_models,
+                best_provider_for_model=best_provider_for_model,
+                cluster_lanes_by_model=cluster_lanes_by_model,
+                cycle_balance_wake_models=cycle_balance_wake_models,
+                cycle_reserved_lane_ids=cycle_reserved_lane_ids,
             )
+            if restored_models:
+                demand_actions = [
+                    a for a in demand_actions if not (a.action == "load" and a.model_name in restored_models)
+                ]
+            all_actions.extend(self._merge_lock_wakes(lock_wakes, demand_actions))
             all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
             # TODO: KV fleet rebalancing disabled — was computing budgets from total
             # worker VRAM instead of per-lane GPU VRAM, causing OOM on reconfigure.
@@ -878,7 +1625,7 @@ class CapacityPlanner:
         if self._replicate_on_free_vram and cluster_lanes_by_model is not None:
             all_actions.extend(
                 self._compute_replication_actions(
-                    provider_ids,
+                    [pid for pid in provider_ids if not self.is_worker_locked(pid)],
                     self._demand.get_ranked_models(),
                     cluster_lanes_by_model,
                     cycle_planned_models,
@@ -901,6 +1648,8 @@ class CapacityPlanner:
                     # a cold load takes ~90s, so a calibration session can start
                     # after this action was planned. Acting on the stale verdict
                     # would place the very lane the guard exists to prevent.
+                    if benchmark_reservations.owner(action.provider_id, action.model_name) is not None:
+                        continue
                     if not self._is_plannable(action.provider_id):
                         logger.info(
                             "Dropping planned %s on worker=%s model=%s lane=%s: "
@@ -1208,12 +1957,14 @@ class CapacityPlanner:
         model_name: str,
         timeout_seconds: float = 600.0,
     ) -> bool:
-        """Prepare a benchmark model alongside other requests using normal capacity handling."""
+        """Prepare a benchmark model and drain existing traffic before measurement."""
+        self._refuse_benchmark_on_locked_worker(provider_id)
         if self._registry and not self._registry.has_received_first_status(provider_id):
             raise RuntimeError(f"Worker {provider_id} has not reported its status yet. Retry after it connects.")
 
         target = self._pick_request_target_lane(provider_id, model_name)
         if target is not None and self._benchmark_lane_is_ready(target):
+            await self._drain_benchmark_lane(provider_id, model_name, target.lane_id, timeout_seconds)
             return True
         if target is not None and target.runtime_state == "starting":
             await self._wait_for_benchmark_lane_ready(provider_id, model_name, timeout_seconds)
@@ -1226,7 +1977,30 @@ class CapacityPlanner:
         if target is None or not self._benchmark_lane_is_ready(target):
             state = target.runtime_state if target is not None else "missing"
             raise RuntimeError(f"Benchmark model '{model_name}' on worker {provider_id} is not ready (state: {state}).")
+        await self._drain_benchmark_lane(provider_id, model_name, target.lane_id, timeout_seconds)
         return True
+
+    def _refuse_benchmark_on_locked_worker(self, provider_id: int) -> None:
+        """A benchmark wakes, loads, reconfigures and drains lanes, which a locked worker does not allow."""
+        if self.is_worker_locked(provider_id) and not MAINTENANCE_RECOVERY.get():
+            worker = self._facade.get_provider_name(provider_id) or provider_id
+            raise RuntimeError(f"Worker {worker} is locked. Unlock it to run a benchmark there.")
+
+    async def _drain_benchmark_lane(
+        self, provider_id: int, model_name: str, lane_id: str, timeout_seconds: float
+    ) -> None:
+        if benchmark_reservations.owner(provider_id, model_name) is None:
+            return
+        deadline = time.monotonic() + timeout_seconds
+        # A recovery restores production settings; the requests it waits for are
+        # the worker's, and _drain_lane reads those. The local counter can stay
+        # above zero after a request ended and would hold the recovery forever.
+        while not MAINTENANCE_RECOVERY.get() and self._facade.model_inflight_requests(provider_id, model_name) > 0:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Timed out waiting for existing requests on the benchmark lane to finish")
+            await asyncio.sleep(0.2)
+        if not await self._drain_lane(provider_id, lane_id, max(0, deadline - time.monotonic())):
+            raise RuntimeError("Timed out waiting for existing requests on the benchmark lane to finish")
 
     async def prepare_configured_benchmark_lane(
         self,
@@ -1237,6 +2011,7 @@ class CapacityPlanner:
         progress_callback: Callable[[str], None] | None = None,
     ) -> bool:
         """Reload an idle vLLM lane and wait for its new configuration to be reported."""
+        self._refuse_benchmark_on_locked_worker(provider_id)
         from logos.benchmarks.guidellm_runner import apply_serving_overrides
         from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
 
@@ -1244,13 +2019,30 @@ class CapacityPlanner:
             overrides, worker_limits(self._registry.peek_runtime_snapshot(provider_id), model_name)
         )
 
-        if not await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds):
-            return False
         target = self._pick_request_target_lane(provider_id, model_name)
+        recovering = False
+        if target is None:
+            target = next(
+                (
+                    lane
+                    for lane in self._safe_get_lanes(provider_id)
+                    if lane.model_name == model_name and lane.runtime_state in {"error", "stopped"}
+                ),
+                None,
+            )
+            recovering = target is not None
+        # A failed lane must receive the corrected configuration before another
+        # startup attempt; starting the old configuration can fail indefinitely.
+        if not recovering:
+            if not await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds):
+                return False
+            target = self._pick_request_target_lane(provider_id, model_name)
         if target is None:
             raise RuntimeError(
                 f"Benchmark model '{model_name}' disappeared from worker {provider_id} before reconfiguration."
             )
+        if recovering:
+            await self._drain_benchmark_lane(provider_id, model_name, target.lane_id, timeout_seconds)
         async with self._lane_lock(provider_id, target.lane_id):
             snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
             lane = next(
@@ -1267,7 +2059,7 @@ class CapacityPlanner:
             validate_worker_overrides(overrides, worker_limits(snapshot, model_name))
             current = config.get("vllm_config") or {}
             updated = apply_serving_overrides(current, overrides)
-            if updated == current:
+            if updated == current and not recovering:
                 return True
             self._hold_lane_cold(provider_id, target.lane_id)
             try:
@@ -1276,7 +2068,12 @@ class CapacityPlanner:
                 result = await self._registry.send_command(
                     provider_id,
                     "reconfigure_lane",
-                    {"lane_id": target.lane_id, "updates": {"vllm_config": updated}, "require_idle": True},
+                    {
+                        "lane_id": target.lane_id,
+                        "updates": {"vllm_config": updated},
+                        "require_idle": True,
+                        **({"force_restart": True} if recovering else {}),
+                    },
                     timeout_seconds=int(timeout_seconds),
                 )
                 reported = (result.get("lane_config") or {}).get("vllm_config")
@@ -1559,6 +2356,8 @@ class CapacityPlanner:
             if lane.model_name == loading_model:
                 continue
             if lane.sleep_state != "sleeping":
+                continue
+            if self.is_lane_locked(provider_id, lane.lane_id):
                 continue
             stop_action = CapacityPlanAction(
                 action="stop",
@@ -2199,6 +2998,10 @@ class CapacityPlanner:
         min_wait: Optional[float] = None
 
         for lane in lanes:
+            if benchmark_reservations.owner(provider_id, lane.model_name) is not None:
+                continue
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue  # never reclaimable, so never worth waiting for
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests > 0 or lane.queue_waiting > 0:
@@ -2277,6 +3080,10 @@ class CapacityPlanner:
         min_wait: Optional[float] = None
 
         for lane in lanes:
+            if benchmark_reservations.owner(provider_id, lane.model_name) is not None:
+                continue
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue  # never reclaimable, so never worth waiting for
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests > 0 or lane.queue_waiting > 0:
@@ -2345,6 +3152,10 @@ class CapacityPlanner:
         target_gpu_ids = self._parse_gpu_device_ids(target.gpu_devices)
 
         for lane in lanes:
+            if benchmark_reservations.owner(provider_id, lane.model_name) is not None:
+                continue
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue  # never reclaimable, so never worth waiting for
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests <= 0 and lane.queue_waiting <= 0:
@@ -2419,6 +3230,10 @@ class CapacityPlanner:
         target_eff = self._effective_demand(target.model_name, provider_id, lanes)
 
         for lane in lanes:
+            if benchmark_reservations.owner(provider_id, lane.model_name) is not None:
+                continue
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue  # never reclaimable, so never worth waiting for
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests <= 0 and lane.queue_waiting <= 0:
@@ -2591,7 +3406,7 @@ class CapacityPlanner:
             model_name,
             provider_id,
         )
-        return lane_total + scheduler_queue
+        return lane_total + scheduler_queue + self._lane_waiter_count(provider_id, model_name)
 
     def _get_queue_depth_across_deployments(self, model_name: str) -> int:
         """Sum scheduler queue depth across every provider serving this model.
@@ -2719,6 +3534,8 @@ class CapacityPlanner:
         # empty. Each entry is (lane_id, model_name, reason).
         skipped: list[tuple[str, str, str]] = []
         for lane in lanes:
+            if benchmark_reservations.owner(provider_id, lane.model_name) is not None:
+                continue
             # The lane being woken can never be its own eviction victim:
             # `stop` destroys the wakee (the follow-up wake then fails with
             # "Lane '<id>' not found" and the model goes permanently absent),
@@ -2729,6 +3546,9 @@ class CapacityPlanner:
             # intentionally allow same-model siblings through).
             if target_lane_id is not None and lane.lane_id == target_lane_id:
                 skipped.append((lane.lane_id, lane.model_name, "is-wake-target"))
+                continue
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                skipped.append((lane.lane_id, lane.model_name, "locked"))
                 continue
             total_demand = self._get_queue_depth_for_model(provider_id, lane.model_name, lanes)
             # Phase 3.1: under LOGOS_EVICTION_GATE_V2, hard-block only on
@@ -3198,7 +4018,11 @@ class CapacityPlanner:
         for lane in lanes:
             key = self._lane_key(provider_id, lane.lane_id)
             active_keys.add(key)
-            is_active = lane.active_requests > 0 or lane.queue_waiting > 0
+            is_active = (
+                lane.active_requests > 0
+                or lane.queue_waiting > 0
+                or self._lane_waiter_count(provider_id, lane.model_name) > 0
+            )
             is_sleeping = lane.sleep_state == "sleeping"
             was_sleeping = key in self._lane_sleep_since or self._lane_sleep_level.get(key, 0) > 0
 
@@ -3283,6 +4107,16 @@ class CapacityPlanner:
 
             # Skip lanes that are already stopped/error
             if lane.runtime_state in ("stopped", "error", "cold"):
+                continue
+
+            # A lane an operator locked warm never goes to sleep on a timer.
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue
+
+            # Requests already reserved for this model that have not reached
+            # the worker yet do not show in active_requests. Sleeping the only
+            # lane that could serve them strands them until a wake.
+            if self._model_inflight_without_other_lane(provider_id, lane.model_name, lane.lane_id):
                 continue
 
             # Sleep L2 after 10 minutes of observed L1 sleep
@@ -3531,13 +4365,22 @@ class CapacityPlanner:
         if needed_mb > free_vram:
             # Eviction will be needed. Pick the cheapest available victim type:
             # sleep_l1 if any non-target lane can sleep, otherwise stop.
-            other_can_sleep = any(
-                lane.runtime_state in ("loaded", "running")
-                and lane.sleep_state == "awake"
-                and lane.model_name != model_name
+            # A locked lane is never evicted, so it is no victim here either:
+            # counting it would let a worker that cannot make room outrank one
+            # that can, and the planning pass would then place nothing.
+            victims = [
+                lane
                 for lane in lanes
+                if lane.model_name != model_name and not self.is_lane_locked(provider_id, lane.lane_id)
+            ]
+            if len(victims) < sum(1 for lane in lanes if lane.model_name != model_name):
+                freeable_mb = sum(float(lane.effective_vram_mb or 0.0) for lane in victims)
+                if free_vram + freeable_mb < needed_mb:
+                    return None
+            other_can_sleep = any(
+                lane.runtime_state in ("loaded", "running") and lane.sleep_state == "awake" for lane in victims
             )
-            other_has_any_lane = any(lane.model_name != model_name for lane in lanes)
+            other_has_any_lane = bool(victims)
             if other_can_sleep:
                 victim_cost = self.VICTIM_ACTION_COST_S["sleep_l1"]
             elif other_has_any_lane:
@@ -3840,13 +4683,19 @@ class CapacityPlanner:
 
         # Build candidate list: ranked demand models + any capability model
         # with queued scheduler requests (covers cold models whose demand
-        # decayed but still have requests waiting in the scheduler queue).
+        # decayed but still have requests waiting in the scheduler queue)
+        # + any model with a request waiting for a lane here. A waiter can
+        # have no demand score at all: demand is recorded only for the top
+        # classification choice, and a score decays while the request waits.
         candidates: list[tuple[str, float]] = list(ranked)
         ranked_names = {m for m, _ in ranked}
         for cap_model in capabilities - ranked_names:
             sq = self._facade.get_scheduler_queue_depth_by_model_name(cap_model, provider_id)
             if sq > 0:
                 candidates.append((cap_model, 0.0))
+        listed = {m for m, _ in candidates}
+        for waiter_model in sorted(self._lane_waiter_models(provider_id) - listed):
+            candidates.append((waiter_model, 0.0))
 
         for model_name, score in candidates:
             if capabilities and model_name not in capabilities:
@@ -4863,6 +5712,12 @@ class CapacityPlanner:
                     continue
                 if lane.active_requests == 0 and lane.queue_waiting == 0:
                     continue  # Already idle — normal reclaim handles this
+                if self.is_lane_locked(provider_id, lane.lane_id):
+                    # A locked lane is never a victim. Skipping it here, not
+                    # only in the executor, lets the next busy lane be drained
+                    # instead of a rejected drain blocking the starving model
+                    # every cycle (and counting as freed VRAM in validation).
+                    continue
                 if self._should_initiate_drain(
                     provider_id,
                     lane,
@@ -5521,12 +6376,15 @@ class CapacityPlanner:
         profiles: dict[str, ModelProfile],
         required_free_mb: float = 0.0,
     ) -> Optional[CapacityPlanAction]:
+        lanes = [lane for lane in lanes if benchmark_reservations.owner(provider_id, lane.model_name) is None]
         sleep_candidates: list[tuple[float, CapacityPlanAction]] = []
         stop_candidates: list[tuple[float, CapacityPlanAction]] = []
         now = time.time()
 
         for lane in lanes:
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
+                continue
+            if self.is_lane_locked(provider_id, lane.lane_id):
                 continue
             if lane.active_requests > 0 or lane.queue_waiting > 0:
                 # Lane is busy — add as reclaim candidate if it qualifies for eviction.
@@ -6447,6 +7305,13 @@ class CapacityPlanner:
         including VRAM freed by sleep/stop actions in the same batch and
         VRAM reserved by in-flight operations.
         """
+        # Reserved lanes cannot contribute memory to a load plan.
+        actions = [
+            action
+            for action in actions
+            if action.action not in {"sleep_l1", "sleep_l2", "stop", "reconfigure_kv_cache"}
+            or benchmark_reservations.owner(action.provider_id, action.model_name) is None
+        ]
         # Pre-pass: drop load actions in load-failure cooldown AND any reclaim
         # actions paired with them. Without this the planner sleeps/stops a
         # victim to make room for a load that the cooldown will refuse —
@@ -6959,6 +7824,7 @@ class CapacityPlanner:
                         model_name=model_name,
                         params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
                         reason="Manual load requested by an operator",
+                        operator_initiated=True,
                     )
                     self.clear_lane_action_failure(provider_id, lane_id)
                     self.record_manual_load_outcome(provider_id, model_name, "running", lane_id=lane_id)
@@ -7152,6 +8018,7 @@ class CapacityPlanner:
                         lane_id=lane_id,
                         model_name=model,
                         reason="manual drain: the operator took a busy lane offline",
+                        operator_initiated=True,
                     )
                 else:
                     unload_reason = (
@@ -7176,6 +8043,7 @@ class CapacityPlanner:
                         # reclaiming a lane it just placed, not to refuse an
                         # operator taking a lane offline.
                         bypass_load_cooldown=True,
+                        operator_initiated=True,
                     )
 
                 # The executor owns the desired-lane sync, the VRAM ledger, and
@@ -8124,6 +8992,62 @@ class CapacityPlanner:
         self._cold_mark_holds.pop(key, None)
         self._unmark_lane_cold(*key)
 
+    @staticmethod
+    def _answer_refused(answer: Optional[asyncio.Future]) -> bool:
+        """Whether the worker answered a lifecycle command with a refusal or a rollback."""
+        if answer is None or not answer.done() or answer.cancelled() or answer.exception() is not None:
+            return False  # no answer yet, or the session ended: the outcome is unknown
+        message = answer.result()
+        if not isinstance(message, dict):
+            return False
+        result = message.get("result")
+        if not message.get("success", False):
+            return True
+        # A refusal can also travel in the payload of a delivered command.
+        return isinstance(result, dict) and (result.get("ok") is False or bool(result.get("rolled_back")))
+
+    async def settle_unload_attempt(
+        self, provider_id: int, lane_id: str, attempt: float, answer: Optional[asyncio.Future]
+    ) -> None:
+        """Settle an unload attempt that did not end confirmed.
+
+        Never sent (no answer to wait for): the lane stays, so record it
+        again. Sent: the answer decides, also one that comes later.
+        """
+        if answer is None:
+            await self.unload_refused(provider_id, lane_id, attempt)
+        else:
+            await self.settle_unload(provider_id, lane_id, attempt, answer)
+
+    async def settle_unload(
+        self, provider_id: int, lane_id: str, attempt: float, answer: Optional[asyncio.Future]
+    ) -> None:
+        """Record the lane again once the worker's answer shows the unload was refused.
+
+        The answer may come long after the caller stopped waiting: until then
+        the lane stays out of the records. An answer that never comes (the
+        session ended) settles nothing; the lane leaves the records once gone.
+        """
+        if answer is None:
+            return
+        if answer.done():
+            if self._answer_refused(answer):
+                await self.unload_refused(provider_id, lane_id, attempt)
+            return
+
+        async def settle() -> None:
+            try:
+                await asyncio.shield(answer)
+            except Exception:  # noqa: BLE001 — the outcome is unknown
+                return
+            if self._answer_refused(answer):
+                await self.unload_refused(provider_id, lane_id, attempt)
+
+        task = asyncio.get_running_loop().create_task(settle())
+        settlers = self.__dict__.setdefault("_unload_settlers", set())
+        settlers.add(task)
+        task.add_done_callback(settlers.discard)
+
     def _track_lifecycle_command(self, provider_id: int, lane_id: str) -> Callable[[asyncio.Future], None]:
         def on_dispatched(answer: asyncio.Future) -> None:
             self._lifecycle_commands_sent[(provider_id, lane_id)] = answer
@@ -8692,14 +9616,72 @@ class CapacityPlanner:
         _settle_cold_mark). Every such command, and every sleep or stop still
         running, holds the mark; it is cleared when the last one lets go.
         """
+        if (
+            action.action in {"stop", "sleep_l1", "sleep_l2", "reconfigure_kv_cache"}
+            and benchmark_reservations.owner(action.provider_id, action.model_name) is not None
+        ):
+            return False
+        if action.restore and not self._restore_lock_holds(action):
+            logger.info(
+                "Skipping %s of lane %s on worker=%s: the lock that planned it changed",
+                action.action,
+                action.lane_id,
+                self._facade.get_provider_name(action.provider_id) or action.provider_id,
+            )
+            return False
+        if self.is_worker_locked(action.provider_id) and not (
+            action.operator_initiated or action.restore or MAINTENANCE_RECOVERY.get()
+        ):
+            # Last line of defence for a locked worker, as below for a locked
+            # lane: whatever planned this, nothing changes there on its own.
+            logger.info(
+                "Skipping %s of lane %s on worker=%s: the worker is locked",
+                action.action,
+                action.lane_id,
+                self._facade.get_provider_name(action.provider_id) or action.provider_id,
+            )
+            return False
+        unload_attempt: Optional[float] = None
+        if action.action == "stop" and action.operator_initiated:
+            try:
+                unload_attempt = await self.forget_restored_lane(action.provider_id, action.lane_id)
+            except RestoreRecordError as exc:
+                logger.warning("Skipping stop of lane %s: %s", action.lane_id, exc)
+                self.record_lane_action_failure(action.provider_id, action.lane_id, str(exc))
+                return False
         key = (action.provider_id, action.lane_id)
         marks_cold = action.action in ("sleep_l1", "sleep_l2", "stop")
+        if marks_cold and not action.operator_initiated and self.is_lane_locked(action.provider_id, action.lane_id):
+            # Last line of defence: the planning passes skip locked lanes, but
+            # a path that does not (or a lock taken after planning) must not
+            # sleep or unload a lane an operator locked warm.
+            logger.info(
+                "Skipping %s of lane %s on worker=%s: the lane is locked warm",
+                action.action,
+                action.lane_id,
+                self._facade.get_provider_name(action.provider_id) or action.provider_id,
+            )
+            return False
         confirmed = False
         if marks_cold:
             self._hold_cold_mark(key)
         try:
             confirmed = await self._execute_action_core(action, timeout_seconds=timeout_seconds, deadline=deadline)
+            sent = key in self._lifecycle_commands_sent
+            if action.restore and action.action == "sleep_l1" and (confirmed or sent):
+                # The sleep went to the worker: the re-sleep is settled,
+                # whatever its outcome. One that never went out stays due.
+                await self._mark_resleep(action.provider_id, set_on=set(), set_off={action.lane_id})
         finally:
+            if unload_attempt is not None and not confirmed:
+                # Also when cancelled (during the drain, or waiting to send):
+                # an attempt left unsettled would keep the live lane out of
+                # the records for good. Shielded, so it completes regardless.
+                await asyncio.shield(
+                    self.settle_unload_attempt(
+                        action.provider_id, action.lane_id, unload_attempt, self._lifecycle_commands_sent.get(key)
+                    )
+                )
             if marks_cold:
                 answer = self._lifecycle_commands_sent.pop(key, None)
                 if answer is not None and not confirmed:
@@ -8859,6 +9841,11 @@ class CapacityPlanner:
                         # reject the escalation on a freshly loaded lane — exactly
                         # the case the safety valve exists to handle.
                         bypass_load_cooldown=True,
+                        # An operator's sleep of a locked lane stays an operator
+                        # action when it escalates, or the lock guard refuses it.
+                        operator_initiated=action.operator_initiated,
+                        # Not a restore: a lane unloaded here would only be
+                        # put back and slept again, every cycle.
                     )
                     # The escalated stop keeps the caller's shared deadline:
                     # it spends the same pot the sleep was spending.
@@ -8892,6 +9879,24 @@ class CapacityPlanner:
                         logger.warning(
                             "Cannot sleep lane %s for reclaim: " "active requests did not drain within 60s",
                             action.lane_id,
+                        )
+                        return False
+                    if await self._locked_since_planning(action):
+                        return False
+                    # The lane is out of the rotation now, but a request the
+                    # scheduler reserved for the model before the cold mark
+                    # landed may still be on its way to this lane. If no other
+                    # awake lane of the model can take it, sleeping now strands
+                    # it until something wakes the lane again.
+                    if not action.operator_initiated and self._model_inflight_without_other_lane(
+                        action.provider_id, action.model_name, action.lane_id
+                    ):
+                        logger.info(
+                            "Aborting %s of lane %s on worker=%s: requests reserved for %s " "have no other awake lane",
+                            action.action,
+                            action.lane_id,
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                            action.model_name,
                         )
                         return False
 
@@ -9253,6 +10258,8 @@ class CapacityPlanner:
                         "Cannot stop lane %s: active requests did not drain within timeout",
                         action.lane_id,
                     )
+                    return False
+                if await self._locked_since_planning(action):
                     return False
 
                 if self._use_additive_loads:

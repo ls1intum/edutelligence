@@ -319,7 +319,7 @@ def test_the_start_is_logged_with_the_docker_versions_and_missing_files(settings
         ),
         (
             {"drain_enabled": True},
-            "Draining is on, but NODE_MANAGER_ORCHESTRATOR_URL or NODE_MANAGER_NODE_KEY is missing",
+            "Draining is enabled, but NODE_MANAGER_ORCHESTRATOR_URL or NODE_MANAGER_NODE_KEY is missing",
         ),
     ],
 )

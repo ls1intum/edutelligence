@@ -7,7 +7,13 @@ import json
 import pytest
 
 from logos_worker_node.models import AppConfig, DeviceInfo
-from logos_worker_node.profile_fingerprint import calibration_keys, compute_calibration_key, key_hash, plan_hash
+from logos_worker_node.profile_fingerprint import (
+    calibration_keys,
+    compute_calibration_key,
+    key_hash,
+    plan_hash,
+    slice_gpu_counts,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -147,3 +153,9 @@ def test_a_worker_wide_vllm_flag_changes_the_key(tmp_path):
         return _key(plans_from_config(path)[0], [_gpu(0)])
 
     assert _keyed([]) != _keyed(["--kv-cache-dtype", "fp8"])
+
+
+def test_the_slice_size_is_the_gpus_a_plan_may_use():
+    devices = [_gpu(0), _gpu(1), _gpu(2)]
+    plans = [{"model": "org/pinned", "gpu_devices": "0,1"}]
+    assert slice_gpu_counts(plans, ["org/pinned", "org/free"], devices) == {"org/pinned": 2, "org/free": 3}

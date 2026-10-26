@@ -261,3 +261,123 @@ async def test_configured_benchmark_reports_missing_status_confirmation():
         await planner.prepare_configured_benchmark_lane(7, "org/model", overrides, timeout_seconds=0)
     assert planner.prepare_benchmark_lane.await_count == 1
     planner._unmark_lane_cold.assert_called_once_with(7, "model-lane")
+
+
+async def test_corrected_settings_are_applied_before_restarting_a_failed_model():
+    planner, overrides, updated = _configured_planner()
+    planner._pick_request_target_lane.return_value = None
+    planner._safe_get_lanes.return_value = [_lane("error", "unsupported")]
+
+    async def restart(*args, **kwargs):
+        planner.prepare_benchmark_lane.assert_not_awaited()
+        return {"lane_config": {"vllm_config": updated}}
+
+    planner._registry.send_command.side_effect = restart
+    assert await planner.prepare_configured_benchmark_lane(7, "org/model", overrides) is True
+    planner.prepare_benchmark_lane.assert_awaited_once()
+
+
+async def test_reserved_benchmark_waits_for_inflight_requests_before_worker_drain():
+    from logos.benchmarks.reservations import benchmark_reservations
+
+    planner = _planner(_lane("loaded", "awake"))
+    planner._facade.model_inflight_requests.side_effect = [1, 0]
+    planner._drain_lane = AsyncMock(return_value=True)
+    benchmark_reservations.reserve(7, "org/model", 7001)
+    try:
+        assert await planner.prepare_benchmark_lane(7, "org/model", 1) is True
+        assert planner._facade.model_inflight_requests.call_count == 2
+        planner._drain_lane.assert_awaited_once()
+    finally:
+        benchmark_reservations.release(7001)
+
+
+async def test_reserved_benchmark_fails_if_existing_requests_do_not_drain():
+    from logos.benchmarks.reservations import benchmark_reservations
+
+    planner = _planner(_lane("loaded", "awake"))
+    planner._facade.model_inflight_requests.return_value = 1
+    benchmark_reservations.reserve(7, "org/model", 7001)
+    try:
+        with pytest.raises(RuntimeError, match="existing requests"):
+            await planner.prepare_benchmark_lane(7, "org/model", 0)
+    finally:
+        benchmark_reservations.release(7001)
+
+
+async def test_measured_metal_batching_reaches_worker_reconfiguration():
+    from logos.benchmarks.configuration import ServingOverrides
+    from logos.benchmarks.guidellm_runner import apply_serving_overrides
+
+    planner, _, _ = _configured_planner()
+    overrides = ServingOverrides(max_num_seqs=20, max_num_batched_tokens=5120)
+    current = {"max_num_seqs": 16, "extra_args": ["--max-num-batched-tokens", "4096"]}
+    updated = apply_serving_overrides(current, overrides)
+
+    def snapshot(config):
+        return {
+            "runtime": {
+                "devices": {
+                    "mode": "metal",
+                    "telemetry_available": True,
+                    "nvidia_smi_available": False,
+                    "devices": [{"kind": "metal", "memory_total_mb": 24000}],
+                },
+                "lanes": [
+                    {
+                        "lane_id": "model-lane",
+                        "model": "org/model",
+                        "lane_config": {"vllm": True, "vllm_config": config},
+                    }
+                ],
+            }
+        }
+
+    planner._registry.peek_runtime_snapshot.side_effect = [snapshot(current), snapshot(current), snapshot(updated)]
+    planner._registry.send_command.return_value = {"lane_config": {"vllm_config": updated}}
+    assert await planner.prepare_configured_benchmark_lane(7, "org/model", overrides)
+    planner._registry.send_command.assert_awaited_once_with(
+        7,
+        "reconfigure_lane",
+        {"lane_id": "model-lane", "updates": {"vllm_config": updated}, "require_idle": True},
+        timeout_seconds=600,
+    )
+
+
+@pytest.mark.parametrize("state", ["error", "stopped"])
+async def test_unchanged_configuration_explicitly_restarts_recovering_lane(state):
+    from logos.benchmarks.configuration import ServingOverrides
+
+    planner, _, _ = _configured_planner()
+    planner._pick_request_target_lane.return_value = None
+    planner._safe_get_lanes.return_value = [_lane(state, "unsupported")]
+    current = {"dtype": "auto", "enable_sleep_mode": True, "tensor_parallel_size": 1}
+    snapshot = planner._registry.peek_runtime_snapshot(7)
+    planner._registry.peek_runtime_snapshot.side_effect = None
+    planner._registry.peek_runtime_snapshot.return_value = snapshot
+    planner._registry.send_command.return_value = {"lane_config": {"vllm_config": current}}
+    assert await planner.prepare_configured_benchmark_lane(7, "org/model", ServingOverrides(tensor_parallel_size=1))
+    assert planner._registry.send_command.await_args.args[2]["force_restart"] is True
+    planner.prepare_benchmark_lane.assert_awaited_once()
+
+
+async def test_recovery_relies_on_worker_counters_not_the_stale_local_one():
+    from logos.benchmarks.reservations import benchmark_reservations
+    from logos.capacity.capacity_planner import MAINTENANCE_RECOVERY
+
+    planner = _planner(_lane("loaded", "awake"))
+    planner._facade.model_inflight_requests.return_value = 3
+    planner._drain_lane = AsyncMock(return_value=True)
+    benchmark_reservations.reserve(7, "*", -31)
+    token = MAINTENANCE_RECOVERY.set(True)
+    try:
+        assert await planner.prepare_benchmark_lane(7, "org/model", 0) is True
+        planner._facade.model_inflight_requests.assert_not_called()
+        planner._drain_lane.assert_awaited_once()
+        # The worker's own counters still decide.
+        planner._drain_lane.return_value = False
+        with pytest.raises(RuntimeError, match="existing requests"):
+            await planner.prepare_benchmark_lane(7, "org/model", 0)
+    finally:
+        MAINTENANCE_RECOVERY.reset(token)
+        benchmark_reservations.release(-31)

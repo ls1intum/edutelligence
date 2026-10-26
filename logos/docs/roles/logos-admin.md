@@ -44,6 +44,87 @@ copy the commit. With this information, you can find which workers have the
 update. If a worker cannot report a commit, the page shows `version: unknown`.
 The icon then shows the reason.
 
+### Maintenance status
+
+Above the workers, the **Maintenance** box shows what holds the maintenance
+slot. Calibration, benchmarks and nightly recovery share this slot. While one
+of them holds it, the others cannot start. The box shows the kind of work, the
+worker and the time when the work started. If nothing holds the slot, the box
+shows **Free**.
+
+- **Calibrating**: click **Stop calibration** to end the calibration.
+- **Benchmarking**: click **Cancel benchmark** to end the benchmark.
+- **Nightly recovery**: the scheduler puts the original settings of the
+  worker back. This usually ends on its own. If it does not, click
+  **Release recovery**. Logos checks that the model runs its original settings
+  again, and then frees the slot.
+
+A worker confirms the end of its calibration before the slot is free again. An
+offline worker cannot confirm it, and neither can a worker with old software.
+For these workers, and after a stop that did not free the slot, the box shows
+**Release claim**. Logos tries a normal stop first. If the worker still reports
+a calibration, the claim stays. The claim also stays if the worker is online
+but does not answer. Try again later, or wait until the worker is offline. Otherwise Logos releases it and records the
+release in the audit log. Release the claim of an offline worker only if the
+worker cannot continue the calibration.
+
+If Logos cannot check the settings, for example because the worker is
+offline, it refuses the release. The box then shows **Force release**. A forced
+release frees the slot without the check. The model keeps the settings it has
+now, and these can be benchmark settings. Check the model on the worker first.
+The audit log records every release.
+
+The box updates together with the rest of the page.
+
+### Idle lanes and lane locks
+
+The capacity planner puts a lane to sleep after the lane has no requests for
+30 minutes (`LOGOS_IDLE_SLEEP_L1_S`, see
+[deployment](../deployment.md#environment-variables)). A sleeping lane frees
+most of its GPU memory. The next request to the lane must wait until the lane
+wakes.
+
+To keep a lane warm, lock it. In the lane list of a worker, click the lock icon
+next to the lane. A closed lock shows a locked lane. The capacity planner does
+not put a locked lane to sleep and does not unload it to make memory free for
+other models. If a locked lane sleeps, the planner wakes it. To release the
+lane, click the lock icon again. The lock stays after a restart of Logos. Only a
+Logos admin can lock or unlock a lane.
+
+A worker that restarts comes back without lanes. The capacity planner then loads
+each locked lane again. It uses the same model, the same GPUs and the same
+settings as before the restart. If you unload a locked lane, the planner does
+not load it again.
+
+![Lanes of two workers, the upper lane locked](/img/roles/logos-admin-statistics-lanes.png)
+
+The **Sleep** action on a locked lane still puts the lane to sleep. Use it only
+if you must make memory free at once. The planner then wakes the locked lane
+again.
+
+### Worker locks
+
+To keep all lanes of a worker as they are, lock the worker. Above the lane list
+of the worker, click **Lock worker**. While the worker is locked, the capacity
+planner does not load, wake, put to sleep or unload a lane on that worker.
+Requests go to a lane of the worker only while that lane is awake. Automatic
+calibration and nightly benchmarks skip the worker, and you cannot start a
+benchmark there.
+
+Your own actions in the lane list still work: **Load lane**, **Unload**,
+**Sleep**, **Wake** and **Drain**. After a restart of the worker, the planner
+loads all lanes again on the same GPUs. A lane that was asleep before the
+restart goes to sleep again. To release the worker, click **Worker locked**.
+
+![A locked worker with two lanes](/img/roles/logos-admin-statistics-worker-lock.png)
+
+### Parallel lane actions
+
+A worker unloads a lane at once, also while it loads or wakes another lane. It
+loads two lanes at the same time only if they use different GPUs. If the only
+GPUs that fit are in use by a lane that loads, the second lane waits until the
+first lane has started.
+
 ![Statistics page](/img/roles/logos-admin-statistics.png)
 
 ## Models
@@ -55,6 +136,82 @@ model to open its **Model Details** view. This view shows the request history,
 the error reports and the scheduling statistics of the model.
 
 ![Models page](/img/roles/logos-admin-models.png)
+
+The **Delays** tab of the **Model Details** view shows where the time of a
+request goes. The tab shows local and cloud providers. It has one row for each
+provider of the model and for each reasoning effort. A **Local** or **Cloud** tag
+next to the provider name shows the provider type. The row shows these values,
+each as the median (p50) and as the 95th percentile (p95):
+
+- **Logos wait**: the time from the arrival of the request at Logos until the
+  call to the provider. This includes the authentication, the rate limit, the
+  budget check and the scheduling.
+- **Provider**: the time from the call to the provider until the end of the
+  response.
+- **TTFT**: the time from the arrival of the request until the first token.
+  **TTFT N** shows how many requests these values come from: only requests
+  that sent a first token count. If this number is less than **Requests**,
+  the cell also shows the number of requests (for example, "5 of 60").
+
+The **Effort** column shows the reasoning effort that Logos sent to the
+provider. Some local models accept only some effort levels. For these models,
+Logos changes the effort of the client to the nearest level that the model
+accepts. The column then shows the changed level, not the level of the client.
+The value `default` shows that the request did not contain an effort.
+
+If the **Logos wait** values increase, Logos itself slows the requests down.
+Use the time range bar of the tab to select the period.
+
+![Delays tab of a model](/img/roles/logos-admin-model-details-delays.png)
+
+### Model benchmarks
+
+Open the model's **Performance** tab to configure and start a benchmark.
+The orchestrator reserves the selected model lanes during a worker benchmark.
+The [Model Benchmarks guide](../admin/model-benchmarks.md) explains the confirmation dialog, single-run charts, batches and failed-model retries.
+
+### Nightly benchmarks
+
+The **Performance** tab provides nightly benchmarks for each model/worker pair.
+Calibration runs first. Benchmarks use the remaining time.
+The configured maintenance limit controls simultaneous workers, including manual starts. The default is 1 worker.
+Schedules are off by default. Activation requires an updated, connected worker.
+See [deployment requirements](../deployment.md#nightly-benchmarks) before activation.
+See the [nightly benchmark guide](../admin/nightly-benchmarks.md) for rotation, parameter values and recovery rules.
+
+1. Open a model from **Models**.
+2. Select **Performance**.
+3. Find the **Nightly benchmarks** card for the intended worker.
+4. Check **Model** and **Parameters to be tested**.
+5. Select **Enable nightly runs…**.
+6. Read the dialog and select **Enable nightly runs**.
+
+Select **Cancel** to keep the current schedule state.
+The confirmation dialog shows the time window and the rules for incomplete runs.
+
+![Confirmation dialog to enable nightly benchmarks](../static/img/roles/logos-admin-nightly-enable.png)
+
+The card then shows **Nightly runs activated**.
+The schedule stays active after a page reload.
+Each night, Logos selects up to 2 eligible pairs, with new or older attempts first.
+The card shows possible parameter values for this pair, not a guaranteed place for tonight.
+
+The example shows the state before the first benchmark, so the results section is empty.
+Select **Run benchmark** below the card to open the dataset editor and question previews for manual benchmarks.
+These controls do not change the nightly workload.
+
+![Active schedule with the model, parameter values and dataset previews](../static/img/roles/logos-admin-nightly-benchmarks.png)
+
+To remove the pair from the nightly rotation:
+
+1. Select **Disable nightly runs…**.
+2. Read the dialog and select **Disable nightly runs**.
+3. Check that the card shows **Nightly runs deactivated**.
+
+Select **Cancel** to keep the schedule active.
+Deactivation stops an active benchmark and restores the worker configuration before production resumes.
+
+![Confirmation dialog to disable nightly benchmarks](../static/img/roles/logos-admin-nightly-disable.png)
 
 ## Providers
 

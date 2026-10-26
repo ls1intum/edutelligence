@@ -5,7 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
@@ -203,5 +205,75 @@ class GatewayUsageCaptureTest {
         assertThat(GatewayUsageCapture.isEventStream("TEXT/EVENT-STREAM; charset=utf-8")).isTrue();
         assertThat(GatewayUsageCapture.isEventStream("application/json")).isFalse();
         assertThat(GatewayUsageCapture.isEventStream(null)).isFalse();
+    }
+
+    /** Writes each chunk on its own, one tick of the clock apart. */
+    private GatewayUsageCapture streamTicking(String contentType, String... chunks) throws IOException {
+        Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        AtomicInteger tick = new AtomicInteger();
+        GatewayUsageCapture capture = new GatewayUsageCapture(new ByteArrayOutputStream(), mapper, contentType,
+            false, () -> start.plusSeconds(tick.getAndIncrement()));
+        for (String chunk : chunks) {
+            byte[] bytes = chunk.getBytes(StandardCharsets.UTF_8);
+            capture.write(bytes, 0, bytes.length);
+        }
+        capture.close();
+        return capture;
+    }
+
+    @Test
+    void sseStream_firstTokenIsTheFirstEventWithContentNotTheFirstByte() throws IOException {
+        GatewayUsageCapture capture = streamTicking(SSE,
+            ": keep-alive\n\n",
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n");
+
+        assertThat(capture.firstByteAt()).isEqualTo(Instant.parse("2026-01-01T00:00:00Z"));
+        assertThat(capture.firstTokenAt()).isEqualTo(Instant.parse("2026-01-01T00:00:02Z"));
+    }
+
+    @Test
+    void sseStream_withoutRecognisedContent_fallsBackToTheFirstByte() throws IOException {
+        GatewayUsageCapture capture = streamTicking(SSE,
+            "data: {\"something\":\"else\"}\n\n",
+            "data: {\"something\":\"more\"}\n\n");
+
+        assertThat(capture.firstTokenAt()).isEqualTo(Instant.parse("2026-01-01T00:00:00Z"));
+    }
+
+    @Test
+    void jsonResponse_firstTokenIsTheStartOfTheBody() throws IOException {
+        GatewayUsageCapture capture = streamTicking("application/json",
+            "{\"choices\":[{\"message\":", "{\"content\":\"hi\"}}]}");
+
+        assertThat(capture.firstTokenAt()).isEqualTo(capture.firstByteAt())
+            .isEqualTo(Instant.parse("2026-01-01T00:00:00Z"));
+    }
+
+    @Test
+    void emptyResponse_hasNoFirstToken() throws IOException {
+        assertThat(streamTicking(SSE).firstTokenAt()).isNull();
+    }
+
+    @Test
+    void contentEventsAreRecognisedAcrossTheStreamFormats() throws IOException {
+        assertThat(carries("{\"choices\":[{\"delta\":{\"content\":\"a\"}}]}")).isTrue();
+        assertThat(carries("{\"choices\":[{\"delta\":{\"reasoning_content\":\"a\"}}]}")).isTrue();
+        assertThat(carries("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0}]}}]}")).isTrue();
+        assertThat(carries("{\"choices\":[{\"text\":\"a\"}]}")).isTrue();
+        assertThat(carries("{\"type\":\"response.output_text.delta\",\"delta\":\"a\"}")).isTrue();
+        assertThat(carries(
+            "{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"a\"}}"))
+            .isTrue();
+
+        assertThat(carries("{\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}")).isFalse();
+        assertThat(carries("{\"choices\":[],\"usage\":{\"prompt_tokens\":1}}")).isFalse();
+        assertThat(carries("{\"type\":\"response.created\"}")).isFalse();
+        assertThat(carries("{\"type\":\"message_start\"}")).isFalse();
+    }
+
+    private boolean carries(String event) throws IOException {
+        return GatewayUsageCapture.carriesContent(mapper.readTree(event));
     }
 }

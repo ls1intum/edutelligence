@@ -51,11 +51,14 @@ def test_a_cordoned_worker_is_not_reported_as_stuck(caplog):
 def _calibration_orchestrator(cordoned: set[int]) -> CalibrationOrchestrator:
     orch = CalibrationOrchestrator.__new__(CalibrationOrchestrator)
     orch._completed_this_window = set()
+    orch._active_provider_ids = set()
     orch._facade = MagicMock(**{"provider_ids.return_value": [1, 2]})
     orch._registry = MagicMock()
     orch._registry.has_received_first_status.return_value = True
     orch._registry.is_cordoned.side_effect = lambda provider_id: provider_id in cordoned
     orch._provider_is_unhealthy = lambda provider_id: False
+    orch._worker_locked = lambda provider_id: False
+    orch._supports_calibration = lambda provider_id: True
     orch._provider_has_active_requests = lambda provider_id: False
     orch._provider_has_uncalibrated_models = lambda provider_id: True
     return orch

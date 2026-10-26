@@ -58,6 +58,137 @@ def test_worker_events_flip_the_calibrating_flag():
     assert registry.is_calibrating(1) is False
 
 
+def test_the_model_in_calibration_follows_the_worker_events():
+    registry, _ = _registry_with_session()
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    assert registry.calibrating_model(1) is None
+
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_started", "model": "org/m", "details": ""}))
+    assert registry.calibrating_model(1) == "org/m"
+
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_completed", "model": "org/m", "details": ""}))
+    assert registry.calibrating_model(1) is None
+
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_started", "model": "org/n", "details": ""}))
+    asyncio.run(registry.append_event(1, _event("calibration_session_cancelled")))
+    assert registry.calibrating_model(1) is None
+
+
+def test_a_reconnecting_worker_restores_the_model_it_is_probing():
+    registry, _ = _registry_with_session()
+    asyncio.run(registry.on_hello(1, "worker-a", calibrating=True, calibrating_model="org/m"))
+    assert registry.calibrating_model(1) == "org/m"
+
+    asyncio.run(registry.on_hello(1, "worker-a", calibrating=False, calibrating_model="org/m"))
+    assert registry.calibrating_model(1) is None  # not calibrating: nothing to protect
+
+
+def test_a_model_is_protected_from_the_moment_the_worker_picks_it():
+    """The worker's precheck runs before the probe starts; the pick comes first."""
+    registry, _ = _registry_with_session()
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_selected", "model": "org/m", "details": ""}))
+    assert registry.models_in_calibration(1) == frozenset({"org/m"})
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_skipped", "model": "org/m", "details": ""}))
+    assert registry.models_in_calibration(1) == frozenset()
+
+
+def test_a_reservation_protects_a_model_before_any_event_arrives():
+    registry, _ = _registry_with_session()
+    assert registry.reserve_calibration(1, "org/m") is True
+    assert registry.models_in_calibration(1) == frozenset({"org/m"})
+    assert registry.reserve_calibration(9, "org/m") is False  # no session, nothing to protect
+
+
+def test_the_workers_events_take_over_from_the_reservation():
+    for event_name in ("calibration_model_selected", "calibration_model_skipped", "calibration_model_failed"):
+        registry, _ = _registry_with_session()
+        registry.reserve_calibration(1, "org/m")
+        asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+        asyncio.run(registry.append_event(1, {"event": event_name, "model": "org/m", "details": ""}))
+        expected = frozenset({"org/m"}) if event_name == "calibration_model_selected" else frozenset()
+        assert registry.models_in_calibration(1) == expected, event_name
+
+
+@pytest.mark.parametrize(
+    "late_event",
+    [
+        "calibration_model_selected",
+        "calibration_model_started",
+        "calibration_model_completed",
+        "calibration_model_skipped",
+        "calibration_model_failed",
+        "calibration_model_cancelled",
+    ],
+)
+def test_a_late_event_of_an_earlier_model_leaves_the_next_reservation_alone(late_event):
+    """The worker reserved B over HTTP while A's events were still buffered."""
+    registry, _ = _registry_with_session()
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    registry.reserve_calibration(1, "org/b")
+
+    asyncio.run(registry.append_event(1, {"event": late_event, "model": "org/a", "details": ""}))
+    assert "org/b" in registry.models_in_calibration(1)
+
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_selected", "model": "org/b", "details": ""}))
+    assert "org/b" in registry.models_in_calibration(1)  # now through its own event
+    assert registry.calibrating_model(1) == "org/b"
+
+
+def test_models_reserved_one_after_the_other_are_each_lifted_by_their_own_events():
+    registry, _ = _registry_with_session()
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    registry.reserve_calibration(1, "org/a")
+    registry.reserve_calibration(1, "org/b")
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_completed", "model": "org/a", "details": ""}))
+    assert registry.models_in_calibration(1) == frozenset({"org/a", "org/b"})  # A awaits its snapshot
+    registry.snapshots_linked(1, ["org/a"])
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_skipped", "model": "org/b", "details": ""}))
+    assert registry.models_in_calibration(1) == frozenset()
+
+
+def test_a_finished_session_drops_the_reservation():
+    registry, _ = _registry_with_session()
+    registry.reserve_calibration(1, "org/m")
+    asyncio.run(registry.append_event(1, _event("calibration_session_cancelled")))
+    assert registry.models_in_calibration(1) == frozenset()
+
+
+def test_a_finished_model_stays_protected_until_its_snapshot_is_linked():
+    registry, session = _registry_with_session()
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_started", "model": "org/m", "details": ""}))
+    assert registry.models_in_calibration(1) == frozenset({"org/m"})
+
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_completed", "model": "org/m", "details": ""}))
+    assert registry.calibrating_model(1) is None
+    assert registry.models_in_calibration(1) == frozenset({"org/m"})  # result not persisted yet
+
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_started", "model": "org/n", "details": ""}))
+    assert registry.models_in_calibration(1) == frozenset({"org/m", "org/n"})
+
+    registry.snapshots_linked(1, ["org/m"])
+    assert registry.models_in_calibration(1) == frozenset({"org/n"})
+
+
+def test_the_protection_of_a_finished_model_lapses_on_its_own():
+    registry, session = _registry_with_session()
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_completed", "model": "org/m", "details": ""}))
+    session.pending_snapshots["org/m"] = time.monotonic() - 1.0
+    assert registry.models_in_calibration(1) == frozenset()
+
+
+def test_a_reconnecting_worker_restores_the_results_it_has_not_handed_over():
+    registry, _ = _registry_with_session()
+    asyncio.run(registry.on_hello(1, "worker-a", calibrating=False, pending_snapshots=["org/m"]))
+    assert registry.models_in_calibration(1) == frozenset({"org/m"})
+
+
+def test_a_node_without_a_session_protects_nothing():
+    assert LogosNodeRuntimeRegistry().models_in_calibration(9) == frozenset()
+
+
 def test_cancelled_session_also_clears_the_flag():
     """A stop mid-session must not strand the worker as permanently excluded."""
     registry, _ = _registry_with_session()

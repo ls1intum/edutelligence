@@ -148,3 +148,38 @@ async def test_a_provider_change_before_startup_completes_is_not_an_error(monkey
     assert await internal_mod.internal_refresh_pipeline(data, _make_request("Bearer correct-secret")) == {
         "status": "ok"
     }
+
+
+@pytest.mark.asyncio
+async def test_lane_lock_change_is_applied_to_the_planner(monkeypatch):
+    from logos.dbutils.dbrequest import LaneLockChangedRequest
+
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
+    planner = MagicMock()
+    monkeypatch.setattr(main_mod, "_capacity_planner", planner, raising=False)
+
+    result = await internal_mod.internal_lane_lock_changed(
+        LaneLockChangedRequest(provider_id=3, lane_id="lane-a", locked=True, revision=7),
+        _make_request("Bearer correct-secret"),
+    )
+
+    assert result == {"status": "ok"}
+    planner.apply_lane_lock.assert_called_once_with(3, "lane-a", True, 7)
+
+
+@pytest.mark.asyncio
+async def test_lane_lock_change_needs_the_internal_secret(monkeypatch):
+    from logos.dbutils.dbrequest import LaneLockChangedRequest
+
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
+    planner = MagicMock()
+    monkeypatch.setattr(main_mod, "_capacity_planner", planner, raising=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await internal_mod.internal_lane_lock_changed(
+            LaneLockChangedRequest(provider_id=3, lane_id="lane-a", locked=True, revision=7),
+            _make_request("Bearer wrong"),
+        )
+
+    assert exc_info.value.status_code == 401
+    planner.apply_lane_lock.assert_not_called()

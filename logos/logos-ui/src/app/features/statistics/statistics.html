@@ -364,6 +364,9 @@
     <!-- ── Local Providers: what the hardware is doing right now ──────── -->
     } @else {
 
+      <!-- Who holds the maintenance slot, shown whatever state the providers are in. -->
+      <app-stats-maintenance-panel [now]="nowMs()" />
+
       @if (!vramReady()) {
         <div class="stats-glass-row">
           <div class="stats-panel-stack">

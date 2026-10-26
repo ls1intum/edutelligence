@@ -122,9 +122,16 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
     int deleteBenchmark(@Param("benchmarkId") int benchmarkId);
 
     @Query(value = """
-        SELECT m.id AS model_id, m.name AS model_name, mp.endpoint, mp.api_key
+        SELECT m.id AS model_id, m.name AS model_name, mp.endpoint, NULL::text AS api_key
         FROM model_provider mp JOIN models m ON m.id = mp.model_id
         WHERE mp.provider_id = :providerId ORDER BY m.name ASC
         """, nativeQuery = true)
     List<ProviderModelProjection> findModelsForProvider(@Param("providerId") int providerId);
+
+    @Query(value = """
+        SELECT m.id AS model_id, m.name AS model_name, mp.endpoint, mp.api_key
+        FROM model_provider mp JOIN models m ON m.id = mp.model_id
+        WHERE mp.provider_id = :providerId ORDER BY m.name ASC
+        """, nativeQuery = true)
+    List<ProviderModelProjection> findModelsForProviderWithCredentials(@Param("providerId") int providerId);
 }

@@ -3,8 +3,10 @@ package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -14,6 +16,7 @@ import org.springframework.web.client.RestClientResponseException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddLaneRequestDTO;
@@ -24,6 +27,11 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteProviderRequ
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DrainLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.LaneLoadStatusRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.LockLaneRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ReleaseCalibrationClaimRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ReleaseRecoveryRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UnlockLaneRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.LaneLockService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SleepLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.StopCalibrationRequestDTO;
@@ -48,8 +56,12 @@ public class ProviderController {
     private final OrchestratorWorkerAdminClient workerAdminClient;
     private final OrchestratorModelSyncClient modelSyncClient;
     private final ObjectMapper objectMapper;
+    private final LaneLockService laneLockService;
+    private final AuditLogService auditLog;
 
-    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService, ModelRepository modelRepository, OrchestratorWorkerAdminClient workerAdminClient, OrchestratorModelSyncClient modelSyncClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService, ModelRepository modelRepository, OrchestratorWorkerAdminClient workerAdminClient, OrchestratorModelSyncClient modelSyncClient, ObjectMapper objectMapper, LaneLockService laneLockService, AuditLogService auditLog) {
+        this.laneLockService = laneLockService;
+        this.auditLog = auditLog;
         this.providerService = providerService;
         this.priceUpdaterService = priceUpdaterService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
@@ -150,9 +162,10 @@ public class ProviderController {
 
     @PostMapping("/get_provider_models")
     public ResponseEntity<?> getProviderModels(
-            @RequestBody GetProviderModelsRequestDTO req) {
+            @RequestBody GetProviderModelsRequestDTO req,
+            @RequestAttribute("authContext") AuthContext auth) {
         if (req.providerId() == null) return ResponseEntity.badRequest().body(Map.of("error", "provider_id is required"));
-        return ResponseEntity.ok(providerService.getProviderModels(req.providerId()));
+        return ResponseEntity.ok(providerService.getProviderModels(req.providerId(), auth));
     }
 
     @PostMapping("/get_general_provider_stats")
@@ -184,6 +197,76 @@ public class ProviderController {
         } catch (Exception e) {
             return ResponseEntity.status(503).body(errorBody(e));
         }
+    }
+
+    /** What holds the maintenance slot: calibrations, benchmarks and nightly recoveries. */
+    @GetMapping("/providers/logosnode/maintenance")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> maintenanceStatus() {
+        try {
+            return workerAdminClient.maintenanceStatus();
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+    }
+
+    /**
+     * Releases a calibration claim that a normal stop could not release, for
+     * example because the worker is offline. Recorded in the audit trail.
+     */
+    @PostMapping("/providers/logosnode/maintenance/release_calibration")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> releaseCalibrationClaim(@RequestBody ReleaseCalibrationClaimRequestDTO req) {
+        if (req == null || req.providerId() == null || req.claimToken() == null || req.claimToken().isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and claim_token are required"));
+        ResponseEntity<Map> response;
+        try {
+            response = workerAdminClient.releaseCalibrationClaim(req.providerId(), req.claimToken());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+        Map<?, ?> body = response.getBody();
+        if (response.getStatusCode().is2xxSuccessful() && body != null && Boolean.TRUE.equals(body.get("released"))) {
+            Map<String, Object> after = new HashMap<>();
+            after.put("calibration_claim", null);
+            after.put("confirmed_by_worker", !Boolean.TRUE.equals(body.get("forced")));
+            auditLog.record("provider.calibration_claim_released", "provider", req.providerId(), null,
+                Map.of("calibration_claim", req.claimToken()), after);
+        }
+        return response;
+    }
+
+    /**
+     * Releases a nightly recovery that cannot finish on its own. Without force
+     * the worker must run the lane's original settings. Recorded in the audit trail.
+     */
+    @PostMapping("/providers/logosnode/maintenance/release_recovery")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> releaseRecovery(@RequestBody ReleaseRecoveryRequestDTO req) {
+        if (req == null || req.modelProviderId() == null)
+            return ResponseEntity.badRequest().body(Map.of("error", "model_provider_id is required"));
+        boolean force = Boolean.TRUE.equals(req.force());
+        ResponseEntity<Map> response;
+        try {
+            response = workerAdminClient.releaseRecovery(req.modelProviderId(), force);
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+        Map<?, ?> body = response.getBody();
+        if (response.getStatusCode().is2xxSuccessful() && body != null && Boolean.TRUE.equals(body.get("released"))) {
+            Map<String, Object> after = new HashMap<>();
+            after.put("nightly_recovery", null);
+            after.put("forced", Boolean.TRUE.equals(body.get("forced")));
+            auditLog.record("provider.nightly_recovery_released", "model_provider", req.modelProviderId(), null,
+                Map.of("nightly_recovery", "pending"), after);
+        }
+        return response;
     }
 
     @PostMapping("/providers/logosnode/lanes/add")
@@ -268,6 +351,41 @@ public class ProviderController {
         } catch (Exception e) {
             return ResponseEntity.status(503).body(errorBody(e));
         }
+    }
+
+    /**
+     * Lanes locked warm. The capacity planner reads the same table every
+     * cycle and never sleeps, drains or unloads a locked lane. A lock with
+     * lane id {@code *} locks the whole worker (see {@link LaneLockService}).
+     */
+    @GetMapping("/providers/logosnode/lanes/locks")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> getLaneLocks() {
+        return ResponseEntity.ok(laneLockService.listLocks());
+    }
+
+    /** Locks a lane warm. Idempotent: locking a locked lane keeps the existing lock. */
+    @PostMapping("/providers/logosnode/lanes/lock")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> lockLane(@RequestAttribute("authContext") AuthContext auth,
+                                      @RequestBody LockLaneRequestDTO req) {
+        if (req == null || req.providerId() == null || req.laneId() == null || req.laneId().isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
+        try {
+            return ResponseEntity.ok(laneLockService.lock(auth, req.providerId(), req.laneId().trim(), req.modelName()));
+        } catch (DataIntegrityViolationException e) {
+            return ResponseEntity.status(404).body(Map.of("error", "Unknown provider " + req.providerId()));
+        }
+    }
+
+    /** Releases a lane lock. Idempotent: unlocking an unlocked lane succeeds. */
+    @PostMapping("/providers/logosnode/lanes/unlock")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> unlockLane(@RequestBody UnlockLaneRequestDTO req) {
+        if (req == null || req.providerId() == null || req.laneId() == null || req.laneId().isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
+        boolean removed = laneLockService.unlock(req.providerId(), req.laneId().trim());
+        return ResponseEntity.ok(Map.of("unlocked", removed));
     }
 
     /** e.getMessage() is null for some exceptions, and Map.of rejects null values. */

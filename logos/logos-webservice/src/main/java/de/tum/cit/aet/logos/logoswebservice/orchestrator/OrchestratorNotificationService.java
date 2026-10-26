@@ -79,6 +79,62 @@ public class OrchestratorNotificationService {
         self.getObject().sendRefresh(rebuildClassifier, syncCloudModels);
     }
 
+    /**
+     * Tell the orchestrator that a lane lock changed, once the change is
+     * committed.
+     *
+     * <p>The capacity planner serves lane locks from memory and re-reads
+     * {@code lane_locks} only in the background every few minutes, so this
+     * push is what makes a lock or an unlock take effect at once. Deferred to
+     * {@code afterCommit} and sent off the request thread like
+     * {@link #notifyRefresh(boolean, boolean)}; a lost push is caught by the
+     * planner's next re-read. The sends can arrive out of order, so each
+     * carries the change's {@code revision}; the planner ignores a change
+     * older than the one it holds for the lane.
+     */
+    public void notifyLaneLock(int providerId, String laneId, boolean locked, long revision) {
+        notifyLaneLock(providerId, laneId, locked, revision, null);
+    }
+
+    /**
+     * Pushes a lane lock change with the lock's restore record as committed
+     * ({@code restore_lanes} as JSON text, or {@code null} for none). The
+     * planner takes the record from the push instead of keeping the one it
+     * held: a relock that overtakes its unlock must not inherit the lanes of
+     * the earlier lock.
+     */
+    public void notifyLaneLock(int providerId, String laneId, boolean locked, long revision, String restoreLanes) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    self.getObject().sendLaneLock(providerId, laneId, locked, revision, restoreLanes);
+                }
+            });
+            return;
+        }
+        self.getObject().sendLaneLock(providerId, laneId, locked, revision, restoreLanes);
+    }
+
+    @Async
+    public void sendLaneLock(int providerId, String laneId, boolean locked, long revision, String restoreLanes) {
+        if (orchestratorUrl.isBlank() || internalSecret.isBlank()) {
+            return;
+        }
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + internalSecret);
+            headers.set("Content-Type", "application/json");
+            Map<String, Object> body = new java.util.HashMap<>(
+                Map.of("provider_id", providerId, "lane_id", laneId, "locked", locked, "revision", revision));
+            body.put("restore_lanes_json", restoreLanes);
+            HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+            restTemplate.postForEntity(orchestratorUrl + "/internal/lane_lock_changed", request, Void.class);
+        } catch (Exception e) {
+            log.warn("Failed to notify orchestrator of a lane lock change: {}", e.getMessage());
+        }
+    }
+
     @Async
     public void sendRefresh(boolean rebuildClassifier, boolean syncCloudModels) {
         postRefresh(rebuildClassifier, syncCloudModels);

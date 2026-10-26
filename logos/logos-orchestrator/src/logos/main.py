@@ -13,7 +13,7 @@ import threading
 import time
 from contextlib import aclosing, asynccontextmanager, nullcontext, suppress
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 import grpc
 from fastapi import FastAPI, HTTPException, Request
@@ -45,6 +45,9 @@ from logos.benchmarks.guidellm_runner import (
     BENCHMARK_TOKEN_HEADER,
     benchmark_affinity_token,
 )
+from logos.benchmarks.maintenance import MaintenanceCoordinator
+from logos.benchmarks.nightly_scheduler import NightlyScheduler
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.billing.budget import check_monthly_budget
 from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
@@ -56,7 +59,7 @@ from logos.client_tags import ClientTagCancellationMiddleware
 from logos.context_budget import estimate_prompt_tokens, required_context_tokens
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.dbrequest import *
+from logos.dbutils.dbrequest import *  # noqa: F401,F403 - compatibility exports for callers
 from logos.dbutils.types import (
     Deployment,
     get_unique_models_from_deployments,
@@ -77,7 +80,11 @@ from logos.monitoring import prometheus_metrics as prom
 from logos.node_maintenance import NodeMaintenance
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
-from logos.pipeline.effort_normalization import adapt_payload_after_effort_rejection, parse_effort_rejection
+from logos.pipeline.effort_normalization import (
+    adapt_payload_after_effort_rejection,
+    effective_reasoning_effort,
+    parse_effort_rejection,
+)
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.latency_store import LatencyStore
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline, queue_role_rank
@@ -142,6 +149,7 @@ def _forget_benchmark_task(job_id: int, task: asyncio.Task) -> None:
     _benchmark_tasks.discard(task)
     _benchmark_tasks_by_job.pop(job_id, None)
     _benchmark_sessions_by_job.pop(job_id, None)
+    benchmark_reservations.release(job_id)
 
 
 def _cancel_benchmark_job(job_id: int, reason: str) -> bool:
@@ -225,6 +233,9 @@ _logosnode_registry.cordon_check = _node_maintenance.is_cordoned
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
+_nightly_scheduler: Optional[NightlyScheduler] = None
+_maintenance_coordinator: Optional[MaintenanceCoordinator] = None
+_pipeline: Optional[RequestPipeline] = None
 _azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
 _cloud_model_sync: Optional[CloudModelSyncService] = None
 
@@ -740,6 +751,8 @@ async def lifespan(app: FastAPI):
         if batch_task:
             batch_task.cancel()
             await asyncio.gather(batch_task, return_exceptions=True)
+    if _nightly_scheduler:
+        await _nightly_scheduler.stop()
     benchmark_tasks = list(_benchmark_tasks)
     for task in benchmark_tasks:
         task.cancel()
@@ -1198,6 +1211,18 @@ def _prefer_deployments_with_context_room(
     return fitting or deployments
 
 
+def _read_lane_locks() -> Optional[list[tuple]]:
+    """Operator lane locks for the capacity planner; ``None`` when unreadable."""
+    with DBManager() as db:
+        return db.get_lane_locks()
+
+
+def _write_lane_restore_records(changes: list[tuple[int, str, int, dict]]) -> bool:
+    """Store locks' restore records for the capacity planner, all or none (see logos.capacity.lane_restore)."""
+    with DBManager() as db:
+        return db.set_lane_restore_records(changes)
+
+
 async def start_pipeline():
     """Initialize the new request pipeline components."""
     global _pipeline, _queue_mgr, _logosnode_facade, _azure_facade, _context_resolver
@@ -1257,7 +1282,10 @@ async def start_pipeline():
         enabled=planner_enabled,
         on_state_change=scheduler.reevaluate_model_queues,
         latency_store=_latency_store,
+        lane_lock_reader=_read_lane_locks,
+        lane_restore_writer=_write_lane_restore_records,
     )
+    scheduler.set_worker_lock_check(_capacity_planner.is_worker_locked)
     # Every worker report restores the forwarding gate's budget, so it is
     # also the moment to reconsider requests being held for it.
     _logosnode_registry.set_on_runtime_updated(scheduler.on_worker_report)
@@ -1296,12 +1324,17 @@ async def start_pipeline():
         registry=_logosnode_registry,
         facade=_logosnode_facade,
         config=CalibrationConfig.from_env(),
+        worker_locked=_capacity_planner.is_worker_locked,
     )
-    await _calibration_orchestrator.start()
-    logger.info(
-        "Calibration orchestrator started (enabled=%s)",
-        _calibration_orchestrator._config.enabled,
+    global _nightly_scheduler, _maintenance_coordinator
+    _maintenance_coordinator = MaintenanceCoordinator(_logosnode_registry)
+    _logosnode_registry.maintenance = _maintenance_coordinator
+    _logosnode_registry.subscribe_to_events(_calibration_orchestrator._on_provider_event)
+    _nightly_scheduler = NightlyScheduler(
+        _logosnode_registry, _capacity_planner, _calibration_orchestrator, _logosnode_registry.maintenance
     )
+    await _nightly_scheduler.start()
+    logger.info("Nightly benchmark scheduler started; schedules require explicit admin opt-in")
 
     # Azure deployment auto-sync: discover deployed models and upsert them into
     # the DB on startup and every 24h. Runs after facade registration so its
@@ -1788,6 +1821,7 @@ async def _streaming_response(
 
     # Prepare headers and payload using context resolver
     headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
+    _record_sent_effort(request_id, prepared_payload)
 
     upstream_stream_headers: dict[str, str] = {}
 
@@ -1905,6 +1939,7 @@ async def _streaming_response(
             return _logosnode_registry.send_stream_command(
                 provider_id=provider_id,
                 action="infer_stream",
+                request_id=request_id,
                 params={
                     "lane_id": context.lane_id,
                     "payload": stream_payload,
@@ -2004,6 +2039,7 @@ async def _streaming_response(
                                     getattr(context, "model_name", None),
                                 )
                                 stream_payload = adapted
+                                _record_sent_effort(request_id, stream_payload)
                                 effort_retried = True
                                 continue
                             # Nothing to adapt: the client gets the upstream's
@@ -2176,6 +2212,7 @@ async def _streaming_response(
                 getattr(context, "model_name", None),
             )
             prepared_payload = adapted
+            _record_sent_effort(request_id, prepared_payload)
             stream_status = StreamingExecutionStatus()
             chunk_iter = _pipeline.executor.execute_streaming(
                 context.forward_url,
@@ -2524,6 +2561,20 @@ def _persist_terminal_response(
         )
 
 
+def _record_sent_effort(request_id: Optional[str], payload: Any) -> None:
+    """Note the reasoning effort ``payload`` sends upstream on the request's log row.
+
+    Called with the payload as prepared (after Logos remapped the effort onto
+    the model's scale) and again with a resend's payload, which wins.
+    """
+    if not request_id:
+        return
+    try:
+        _pipeline.record_reasoning_effort(request_id, effective_reasoning_effort(payload))
+    except Exception:  # noqa: BLE001 — bookkeeping must never fail the request
+        logger.debug("Could not note the reasoning effort for %s", request_id, exc_info=True)
+
+
 async def _sync_response(
     context,
     payload,
@@ -2555,6 +2606,7 @@ async def _sync_response(
         )
         # Prepare headers and payload using context resolver
         headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, upstream_payload)
+        _record_sent_effort(request_id, prepared_payload)
         # The provider-call stamp is taken at the actual dispatch below — after
         # preparation, and for LogosNode after session acquisition and the
         # send lock — so the queue/exec split excludes the rate-limit and
@@ -2583,6 +2635,7 @@ async def _sync_response(
                     rpc_result = await _logosnode_registry.send_command(
                         provider_id=provider_id,
                         action="infer",
+                        request_id=request_id,
                         params={
                             "lane_id": context.lane_id,
                             "payload": sync_payload,
@@ -2609,10 +2662,12 @@ async def _sync_response(
                             getattr(context, "model_name", None),
                         )
                         prepared_payload = adapted
+                        _record_sent_effort(request_id, prepared_payload)
                         sync_payload = force_non_streaming_payload(prepared_payload)
                         rpc_result = await _logosnode_registry.send_command(
                             provider_id=provider_id,
                             action="infer",
+                            request_id=request_id,
                             params={
                                 "lane_id": context.lane_id,
                                 "payload": sync_payload,
@@ -2728,6 +2783,7 @@ async def _sync_response(
                     getattr(context, "model_name", None),
                 )
                 prepared_payload = adapted
+                _record_sent_effort(request_id, prepared_payload)
                 exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
             # The executor captured both instants where they belong: the
             # dispatch after its request preparation (the multipart decode for
@@ -3828,6 +3884,8 @@ def _benchmark_provider_affinity(
             raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    if payload.get("recovery_fenced"):
+        raise HTTPException(status_code=409, detail="Benchmark recovery has fenced this execution")
 
     try:
         payload_provider_id = int(payload.get("provider_id"))
@@ -4756,14 +4814,21 @@ _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
 }
 
 
-async def _dispatch_logosnode_command(provider_id: int, action: str, params: dict[str, Any] | None = None):
+async def _dispatch_logosnode_command(
+    provider_id: int,
+    action: str,
+    params: dict[str, Any] | None = None,
+    on_dispatched: Callable[[asyncio.Future], None] | None = None,
+):
     try:
         timeout = _LOGOSNODE_CMD_TIMEOUTS.get(action, 20)
+        extra = {"on_dispatched": on_dispatched} if on_dispatched is not None else {}
         return await _logosnode_registry.send_command(
             provider_id,
             action=action,
             params=params or {},
             timeout_seconds=timeout,
+            **extra,
         )
     except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
@@ -5114,12 +5179,13 @@ def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
 # and is included last, so no route of another router can be shadowed by it.
 # Add new routers above that line.
 
-from logos.routers import admin, internal, logosnode, monitoring, user_facing  # noqa: E402
+from logos.routers import admin, internal, logosnode, monitoring, nightly_benchmarks, user_facing  # noqa: E402
 
 _logosnode_registry.on_cold_mark_changed = logosnode.republish_lane_snapshot
 
 app.include_router(monitoring.router)
 app.include_router(internal.router)
+app.include_router(nightly_benchmarks.router)
 app.include_router(logosnode.router)
 app.include_router(admin.router)
 app.include_router(user_facing.router)
