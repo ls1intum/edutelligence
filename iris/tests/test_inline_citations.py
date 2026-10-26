@@ -644,6 +644,21 @@ def test_mcq_fields_lose_source_markers(mcq_type):
     assert q["explanation"] == "Composition."
 
 
+def test_mcq_fields_keep_code_that_looks_like_a_marker():
+    payload = {
+        "type": "mcq",
+        "question": "What does `values[src:dst]` return? [src:1]",
+        "options": [{"text": "A copy of `values[src:dst]`", "correct": True}],
+        "explanation": "```python\nvalues[src:dst]\n```\nSlicing copies. [src:1]",
+    }
+
+    cleaned = json.loads(_strip_stray_citations(json.dumps(payload)))
+
+    assert cleaned["question"] == "What does `values[src:dst]` return?"
+    assert cleaned["options"][0]["text"] == "A copy of `values[src:dst]`"
+    assert cleaned["explanation"] == "```python\nvalues[src:dst]\n```\nSlicing copies."
+
+
 # --------------------------------------------------------------------------- prompts, config
 
 

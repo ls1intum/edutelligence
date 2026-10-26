@@ -14,6 +14,7 @@ from weaviate.classes.query import Filter
 from iris.common.logging_config import get_logger
 from iris.common.reply_language import previous_reply_language
 from iris.domain.status.activity_dto import ActivityKind
+from iris.pipeline.shared.citation_sources import strip_source_markers
 from iris.pipeline.shared.mcq_generation_pipeline import McqGenerationPipeline
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.retrieval.lecture.lecture_visibility import (
@@ -240,8 +241,9 @@ def _strip_stray_citations(mcq_json_str: str) -> str:
 
     Citations inside question text or answer options would confuse the client,
     so we remove them. The MCQ JSON is added after the answer's source markers were
-    turned into cite blocks, so it has to be cleaned of both here. The ``source``
-    field (if present) is also dropped since it is not consumed by the client.
+    turned into cite blocks, so it has to be cleaned of both here. Code such as
+    ``values[src:dst]`` stays as it is, like in the answer. The ``source`` field (if
+    present) is also dropped since it is not consumed by the client.
     """
     try:
         parsed = json.loads(mcq_json_str)
@@ -250,16 +252,14 @@ def _strip_stray_citations(mcq_json_str: str) -> str:
     if not isinstance(parsed, dict):
         return mcq_json_str
 
-    citation_re = re.compile(r"\[cite:[^\]]*\]|\[src:[^\]\n]{0,20}\]?")
-
     def _clean_question(q: dict) -> None:
         for opt in q.get("options", []):
             if "text" in opt:
-                opt["text"] = citation_re.sub("", opt["text"]).strip()
+                opt["text"] = strip_source_markers(opt["text"]).strip()
         if "question" in q:
-            q["question"] = citation_re.sub("", q["question"]).strip()
+            q["question"] = strip_source_markers(q["question"]).strip()
         if "explanation" in q:
-            q["explanation"] = citation_re.sub("", q["explanation"]).strip()
+            q["explanation"] = strip_source_markers(q["explanation"]).strip()
         q.pop("source", None)
 
     if parsed.get("type") == "mcq-set":
