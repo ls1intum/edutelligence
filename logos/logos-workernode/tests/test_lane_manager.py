@@ -4681,10 +4681,25 @@ async def test_restart_that_may_move_the_lane_holds_the_whole_lock(gpu_devices, 
     manager, started, release, calls = _restart_manager(gpu_devices)
     restart = asyncio.create_task(manager.reconfigure_lane("lane", updates, force_restart=True))
     await started.wait()
-    decrement = asyncio.create_task(manager.decrement_active_requests("other"))
-    await asyncio.sleep(0.05)
-    assert not decrement.done()
+    # Completions must release their count even while the whole lock is held.
+    await asyncio.wait_for(manager.decrement_active_requests("other"), timeout=1)
+    assert manager._active_requests["other"] == 0  # noqa: SLF001
+    increment = asyncio.create_task(manager.increment_active_requests("other"))
+    await asyncio.sleep(0)
+    assert not increment.done()
     release.set()
     await restart
-    await asyncio.wait_for(decrement, timeout=1)
+    await asyncio.wait_for(increment, timeout=1)
     assert calls == [False]
+
+
+@pytest.mark.asyncio
+async def test_request_release_does_not_wait_for_its_lane_lock() -> None:
+    manager, _, _, _ = _restart_manager("0")
+    revision = manager.count_revision
+    async with manager._lock.scoped(["other"]):  # noqa: SLF001
+        await asyncio.wait_for(manager.decrement_active_requests("other"), timeout=1)
+        assert manager._active_requests["other"] == 0  # noqa: SLF001
+        assert manager.count_revision == revision + 1
+        await manager.decrement_active_requests("other")
+        assert manager._active_requests["other"] == 0  # noqa: SLF001

@@ -215,6 +215,8 @@ class NightlyScheduler:
         pid, model = int(target["provider_id"]), str(target["model_name"])
         if not self.healthy(pid):
             raise RuntimeError("The selected worker must be online and healthy")
+        if self.planner.is_worker_locked(pid):
+            raise RuntimeError("The selected worker is locked")
         snapshot = self.registry.peek_runtime_snapshot(pid)
         if not (snapshot.get("runtime") or {}).get("supports_benchmark_restart"):
             raise RuntimeError("Update this worker before enabling nightly benchmarks")

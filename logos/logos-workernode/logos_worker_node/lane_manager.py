@@ -1872,14 +1872,16 @@ class LaneManager:
             return status
 
     async def decrement_active_requests(self, lane_id: str) -> None:
-        async with self._lock.scoped([lane_id], queue=False):
-            if lane_id not in self._handles:
-                return
-            current = self._active_requests.get(lane_id, 0)
-            self._active_requests[lane_id] = max(0, current - 1)
-            # See increment_active_requests: no dirty mark on the hot path.
-            self._count_revision += 1
-            self._status_event.set()
+        # Release cannot wait for a lifecycle operation holding the lane.
+        # There is no await below: the count update is atomic on this event
+        # loop, including with respect to increments and lane replacement.
+        if lane_id not in self._handles:
+            return
+        current = self._active_requests.get(lane_id, 0)
+        self._active_requests[lane_id] = max(0, current - 1)
+        # See increment_active_requests: no dirty mark on the hot path.
+        self._count_revision += 1
+        self._status_event.set()
 
     async def total_active_requests(self) -> int:
         """Total in-flight requests across all lanes.

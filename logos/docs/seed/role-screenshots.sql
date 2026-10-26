@@ -787,6 +787,40 @@ SELECT count(*) FROM variant;
 UPDATE model_provider_benchmarks SET configuration = configuration || jsonb_build_object('nightly',jsonb_build_object('baseline_id',id))
 WHERE configuration->'metadata'->>'purpose' = 'docs-role-screenshots' AND NOT configuration ? 'nightly';
 
+-- A fixed workload and three illustrative nights for the progress chart.
+UPDATE model_provider_benchmarks SET configuration = configuration || jsonb_build_object(
+  'metadata', configuration->'metadata' || '{"guidellm_version":"0.7.2"}'::jsonb,
+  'serving', configuration->'serving' || '{"tensor_parallel_size":1,"pipeline_parallel_size":1}'::jsonb,
+  'scenario', '{"spec":{"data":[{"load_kwargs":{"name":"main","split":"test"}}],"seed":{"value":42},"data_column_mapper":{"column_mappings":{"text_column":"question"}},"backend":{"stream":true,"request_format":"/v1/chat/completions","extras":{"body":{"max_tokens":512}}}}}'::jsonb,
+  'benchmark', '{"profile":{"kind":"concurrent"},"strategy":{"max_concurrency":4,"worker_count":4}}'::jsonb
+) WHERE configuration->'metadata'->>'purpose' = 'docs-role-screenshots';
+
+WITH history AS (
+  INSERT INTO model_provider_benchmarks(model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
+  SELECT b.model_provider_id, b.configuration || jsonb_build_object(
+    'measurement', jsonb_build_object('started_at', ((CURRENT_DATE - days) + time '05:00:00') AT TIME ZONE 'Europe/Berlin',
+      'ended_at', ((CURRENT_DATE - days) + time '05:04:00') AT TIME ZONE 'Europe/Berlin')),
+    b.dataset, b.sample_size, b.metrics, ((CURRENT_DATE - days) + time '05:04:00') AT TIME ZONE 'Europe/Berlin'
+  FROM model_provider_benchmarks b CROSS JOIN (VALUES (1), (2)) AS previous(days)
+  WHERE b.configuration->'metadata'->>'purpose' = 'docs-role-screenshots'
+    AND (b.configuration->'nightly'->>'baseline_id')::integer = b.id
+  RETURNING *
+)
+INSERT INTO model_provider_benchmarks(model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
+SELECT h.model_provider_id, v.configuration || jsonb_build_object(
+    'nightly', v.configuration->'nightly' || jsonb_build_object('baseline_id', h.id),
+    'measurement', jsonb_build_object('started_at', h.recorded_at + interval '2 minutes', 'ended_at', h.recorded_at + interval '6 minutes')),
+  h.dataset, h.sample_size,
+  jsonb_set(v.metrics, '{output_tokens_per_second,successful,mean}',
+    to_jsonb(CASE WHEN h.recorded_at::date = CURRENT_DATE - 1 THEN 46 ELSE 44 END)),
+  h.recorded_at + interval '6 minutes'
+FROM history h JOIN model_provider_benchmarks v ON v.model_provider_id = h.model_provider_id
+WHERE v.configuration->'metadata'->>'purpose' = 'docs-role-screenshots'
+  AND v.configuration->'nightly' ? 'parameters';
+
+UPDATE model_provider_benchmarks SET configuration = jsonb_set(configuration, '{nightly,baseline_id}', to_jsonb(id))
+WHERE configuration->'metadata'->>'purpose' = 'docs-role-screenshots' AND NOT configuration->'nightly' ? 'parameters';
+
 COMMIT;
 
 SELECT 'docs role-screenshots seed applied' AS status,

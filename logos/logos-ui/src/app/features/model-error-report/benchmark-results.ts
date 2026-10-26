@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, signal } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { ModelProviderBenchmark } from '../../shared/models/provider.model';
 import { benchmarkConfigurationItems, servingConfigurationItems } from './benchmark-configuration';
 import { comparisonValue } from './benchmark-comparison';
+import { benchmarkProgress } from './benchmark-progress';
 
 @Component({
   selector: 'app-benchmark-results',
@@ -14,6 +15,11 @@ import { comparisonValue } from './benchmark-comparison';
 })
 export class BenchmarkResults {
   readonly runs = input.required<readonly ModelProviderBenchmark[]>();
+  readonly progress = computed(() => benchmarkProgress(this.runs()));
+  readonly progressKey = signal('');
+  readonly activeProgress = computed(() => this.progress().find(group => group.key === this.progressKey()) ?? this.progress()[0]);
+  readonly showAll = signal(false);
+  readonly visibleRows = computed(() => this.showAll() ? this.rows() : this.rows().slice(0, 5));
   readonly topRuns = computed(() => {
     const best = new Map<number, ModelProviderBenchmark>();
     for (const run of this.runs()) {
@@ -32,7 +38,7 @@ export class BenchmarkResults {
       workload: benchmarkConfigurationItems(run), parameters: servingConfigurationItems(run),
     }));
   });
-  readonly rows = computed(() => [...this.runs()].sort((a, b) => b.id - a.id).map(run => {
+  readonly rows = computed(() => [...this.runs()].sort((a, b) => Date.parse(b.recorded_at) - Date.parse(a.recorded_at) || b.id - a.id).map(run => {
     const nightly = run.configuration['nightly'] as {
       baseline_id?: number; parameters?: Record<string, unknown>; original?: Record<string, unknown>;
     } | undefined;

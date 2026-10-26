@@ -209,7 +209,8 @@ Use the isolated screenshots stack for these images. After the seed, start
 `node logos/docs/seed/nightly-worker.mjs` with Node.js 22 or later.
 This example worker supplies telemetry for **Docs Local Worker** and
 the 3 example models. It uses sequence limit 16 and batch-token limit 4096.
-The seed adds illustrative baseline and variant measurements. These are not GPU measurements.
+The seed adds illustrative baseline and variant measurements for 3 nights.
+These are not GPU measurements.
 It rejects inference and control commands. Authentication, schedule changes,
 parameter plans and dataset previews use the local application services.
 

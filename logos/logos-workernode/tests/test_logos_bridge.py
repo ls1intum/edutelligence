@@ -3485,6 +3485,29 @@ async def test_repeated_cancellation_during_cleanup_waits_for_release(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_cancelled_stream_releases_count_and_upstream_while_lane_is_locked(monkeypatch):
+    from logos_worker_node.lane_manager import LaneManager
+    from logos_worker_node.models import WorkerConfig
+
+    upstream = _BlockingUpstream()
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15400, lane_port_end=15410)
+    manager._handles["lane-a"] = object()
+    manager._active_requests["lane-a"] = 1
+    lane_manager.decrement_active_requests = manager.decrement_active_requests
+    task = asyncio.create_task(
+        client._execute_stream_command(_CollectWS(), "cmd-1", {"lane_id": "lane-a", "payload": {}})
+    )
+    await upstream.first_chunk_sent.wait()
+    async with manager._lock.scoped(["lane-a"]):
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+        assert upstream.closed
+        assert manager._active_requests["lane-a"] == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status,chunks", [(200, [b"data: [DONE]\n\n"]), (200, []), (500, [b"error"])])
 async def test_stream_end_is_sent_only_after_cleanup(monkeypatch, status, chunks):
     upstream = _FakeUpstream(status, chunks)

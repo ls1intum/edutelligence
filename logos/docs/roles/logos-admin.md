@@ -185,6 +185,12 @@ Select **Measured configuration** to see the saved benchmark settings and servin
 Runs can use different workloads. This record does not prove an improvement under identical conditions.
 The application does not apply these parameters automatically.
 
+**Nightly progress** shows the best successful variant against its baseline for each completed test plan.
+The chart separates runs with different captured workloads or other serving settings.
+Select a point to read its run number, time and percentage change.
+The chart does not show automatic parameter adoption or statistical significance.
+The table shows the latest 5 runs. Select **Show all** to read older results.
+
 ![Best recorded benchmark and its saved parameters](../static/img/benchmarks/results-desktop.png)
 
 ### Nightly benchmarks
