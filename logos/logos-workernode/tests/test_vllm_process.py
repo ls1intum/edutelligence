@@ -3134,3 +3134,21 @@ def test_expand_model_path_errors_when_adapter_still_incomplete_after_download(m
 
     with pytest.raises(FileNotFoundError, match="adapter_model.safetensors or adapter_model.bin"):
         vllm_process.expand_model_path(cmd, "org/model", str(tmp_path))
+
+
+def test_resolve_model_snapshot_skips_redundant_original_weights(monkeypatch, tmp_path: Path) -> None:
+    import huggingface_hub
+
+    from logos_worker_node import vllm_process
+
+    calls = []
+
+    def snapshot_download(**kwargs):
+        calls.append(kwargs)
+        return str(tmp_path / "snapshot")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+
+    vllm_process.resolve_model_snapshot("meta-llama/Llama-3.1-8B-Instruct", str(tmp_path))
+
+    assert calls[0]["ignore_patterns"] == ["original/*"]

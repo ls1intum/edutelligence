@@ -14,12 +14,6 @@ repos:
         args: [ "-p", "athena" ]
         additional_dependencies: ['click<8.3.0']
         files: "^athena/.*"
-      - id: sub-pre-commit
-        alias: memiris
-        name: "pre-commit for memiris"
-        args: ["-p", "memiris"]
-        additional_dependencies: ['click<8.3.0']
-        files: "^memiris/.*"
 
   # Logos uses a `local` hook instead of sub-pre-commit because logos's own
   # .pre-commit-config.yaml scopes hooks with `files: '^logos/'`. The wrapper
@@ -36,7 +30,7 @@ repos:
         name: pre-commit for logos
         language: system
         files: "^logos/"
-        exclude: "^logos/(shared|logos-ui)/"
+        exclude: "^logos/logos-ui/"
         entry: pre-commit run --config logos/.pre-commit-config.yaml --files
         pass_filenames: true
         require_serial: true

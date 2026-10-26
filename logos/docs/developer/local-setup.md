@@ -26,9 +26,6 @@ The orchestrator is the main Python service. It is an installable package in
 
 ```bash
 cd logos/logos-orchestrator
-# The orchestrator depends on the repository-root `shared` package; CI links
-# it in before installing, so do the same:
-ln -s ../../shared shared
 uv venv .venv --python 3.13
 source .venv/bin/activate
 uv pip install .

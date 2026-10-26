@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import logos.main as _main
 from logos.auth import AuthContext
 from logos.batch_credential import issue_batch_credential
+from logos.benchmarks import nightly_store
 from logos.benchmarks.batch_runner import run_benchmark_batch
 from logos.benchmarks.configuration import BenchmarkRunSettings
 from logos.benchmarks.guidellm_runner import (
@@ -28,7 +29,19 @@ from logos.benchmarks.guidellm_runner import (
     run_benchmark_job,
 )
 from logos.benchmarks.huggingface_datasets import dataset_metadata, search_datasets
+from logos.benchmarks.nightly import (
+    NIGHTLY_CONTEXT,
+    PROGRESS,
+    NightlyStopped,
+    RunProgress,
+    can_start,
+    local_now,
+    supervise,
+)
+from logos.benchmarks.progress import observe_response
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
+from logos.capacity.capacity_planner import RestoreRecordError
 from logos.client_tags import cancel as cancel_client_tag
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
@@ -44,14 +57,17 @@ from logos.dbutils.dbrequest import (
     InternalDeleteLaneRequest,
     InternalDrainLaneRequest,
     InternalLaneLoadStatusRequest,
+    InternalReleaseCalibrationClaimRequest,
+    InternalReleaseRecoveryRequest,
     InternalSleepLaneRequest,
     InternalStopCalibrationRequest,
     InternalWakeLaneRequest,
+    LaneLockChangedRequest,
     RefreshPipelineRequest,
 )
 from logos.dbutils.types import Deployment
 from logos.hf_reachability import check_hf_reachability
-from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
+from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, MaintenanceBusyError
 from logos.logosnode_snapshot import _logosnode_snapshot_is_connected
 from logos.main import (
     _INTERNAL_SECRET,
@@ -173,6 +189,30 @@ async def internal_model_health(request: Request):
         status_code=200 if local_ok else 503,
         content={"models": [{"name": name, "status": model_status[name]} for name in sorted(model_status)]},
     )
+
+
+@router.post("/internal/lane_lock_changed", tags=["admin"])
+async def internal_lane_lock_changed(data: LaneLockChangedRequest, request: Request):
+    """Apply a committed lane lock change to the planner's in-memory locks.
+
+    The planner serves locks from memory and only re-reads ``lane_locks`` in
+    the background, so this push is what makes a lock take effect at once.
+    """
+    _require_internal_secret(request, disabled_detail="Internal lane lock endpoint disabled")
+    if _main._capacity_planner is None:
+        raise HTTPException(status_code=503, detail="Capacity planner not initialized")
+    if "restore_lanes_json" in data.model_fields_set:
+        record = json.loads(data.restore_lanes_json) if data.restore_lanes_json else None
+        _main._capacity_planner.apply_lane_lock(
+            data.provider_id,
+            data.lane_id,
+            data.locked,
+            data.revision,
+            record=record if isinstance(record, dict) else None,
+        )
+    else:
+        _main._capacity_planner.apply_lane_lock(data.provider_id, data.lane_id, data.locked, data.revision)
+    return {"status": "ok"}
 
 
 @router.post("/internal/refresh_pipeline", tags=["admin"])
@@ -580,11 +620,20 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
     # One orchestrator process owns benchmark execution. Serialize the short
     # check-and-create section in memory so simultaneous starts cannot both
     # admit a benchmark for the same provider.
+    if not NIGHTLY_CONTEXT.get() and (
+        (_main._calibration_orchestrator and _main._calibration_orchestrator.benchmarks_must_wait())
+        or any(_main._logosnode_registry.is_calibrating(pid) for pid in _main._logosnode_registry.active_provider_ids())
+    ):
+        raise HTTPException(status_code=409, detail="Calibration has priority over benchmarks")
     with _benchmark_admission_lock, DBManager() as db:
+        if NIGHTLY_CONTEXT.get() and not can_start(local_now()):
+            raise NightlyStopped("window_closed")
         target = db.get_model_provider_benchmark_target(data.model_provider_id)
         if target is None:
             raise HTTPException(status_code=404, detail="Provider-model pair not found")
         provider_id = int(target["provider_id"])
+        if not NIGHTLY_CONTEXT.get() and not nightly_store.manual_admission(db, provider_id):
+            raise HTTPException(status_code=409, detail="Maintenance capacity or the selected worker is reserved")
         provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
         if any(s.serving_overrides.model_dump(exclude_none=True) for s in configurations) and (
             provider_type != "logosnode" or _main._capacity_planner is None
@@ -592,6 +641,8 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             raise HTTPException(
                 status_code=400, detail="Serving overrides require a Logos worker with capacity planning"
             )
+        if provider_type == "logosnode" and _main._capacity_planner is None:
+            raise HTTPException(status_code=503, detail="Benchmark lane preparation is unavailable")
         endpoint = str(target.get("target") or "").strip()
         if provider_type != "logosnode" and not endpoint.startswith(("http://", "https://")):
             raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
@@ -602,6 +653,12 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
                 detail="Provider credentials require HTTPS (plain HTTP is allowed only on loopback)",
             )
 
+        owner = benchmark_reservations.provider_owner(provider_id)
+        owns_nightly_reservation = NIGHTLY_CONTEXT.get() and owner == -data.model_provider_id
+        if provider_type == "logosnode" and owner is not None and not owns_nightly_reservation:
+            raise HTTPException(
+                status_code=409, detail="A benchmark still owns this worker. Wait for cleanup to finish."
+            )
         active = db.find_active_model_benchmark_job(provider_id)
         if active is not None:
             return JSONResponse(
@@ -629,6 +686,7 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         serving_configuration = extract_serving_configuration(runtime_snapshot, model_name)
         job_payload = {
+            "nightly": NIGHTLY_CONTEXT.get(),
             "model_provider_id": data.model_provider_id,
             "provider_id": provider_id,
             "provider_name": target["provider_name"],
@@ -646,6 +704,9 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             user_id=None,
             environment="model-provider-benchmark",
         )
+
+        if not NIGHTLY_CONTEXT.get() and _main._maintenance_coordinator:
+            nightly_store.claim_benchmark(db, job_id, provider_id)
 
     is_internal_worker_benchmark = provider_type == "logosnode"
     benchmark_target = (
@@ -722,13 +783,41 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             **({"batch_progress": progress, "finalize": finalize} if progress else {}),
         )
 
-    task = asyncio.create_task(run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data))
+    if is_internal_worker_benchmark:
+        benchmark_reservations.reserve(provider_id, model_name, job_id)
+
+    async def nightly_run():
+        progress = RunProgress(data.samples)
+        PROGRESS[job_id] = progress
+        try:
+            return await supervise(
+                lambda: execute_run(data), progress, lambda: nightly_store.status(data.model_provider_id)["enabled"]
+            )
+        except NightlyStopped as exc:
+            with DBManager() as db:
+                db.update_job_status(job_id, "failed", error_message=exc.reason)
+            raise
+        finally:
+            PROGRESS.pop(job_id, None)
+
+    async def manual_run():
+        async def execute():
+            return await (run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data))
+
+        if _main._maintenance_coordinator:
+            return await _main._maintenance_coordinator.run_benchmark(job_id, execute)
+        return await execute()
+
+    task = asyncio.create_task(nightly_run() if NIGHTLY_CONTEXT.get() else manual_run())
     _background_tasks.add(task)
     _benchmark_tasks.add(task)
     _benchmark_tasks_by_job[job_id] = task
     if is_internal_worker_benchmark:
         _benchmark_sessions_by_job[job_id] = (provider_id, str(job_payload["provider_session_id"]))
     task.add_done_callback(lambda done, jid=job_id: _forget_benchmark_task(jid, done))
+    if not NIGHTLY_CONTEXT.get() and _main._maintenance_coordinator:
+        # Also release when cancellation happens before the coroutine starts.
+        task.add_done_callback(lambda done, jid=job_id: nightly_store.release_benchmark(jid))
     return JSONResponse(
         status_code=202,
         content={
@@ -819,6 +908,16 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         default_priority=1,
     )
     request_id = secrets.token_urlsafe(16)
+    try:
+        benchmark_reservations.register_request(
+            int(target["provider_id"]),
+            str(target["model_name"]),
+            job_id,
+            request_id,
+            guard=(lambda: nightly_store.benchmark_requests_allowed(job_id)) if payload.get("nightly") else None,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     with DBManager() as db:
         log_result, _ = db.log_usage(
             api_key_id=None,
@@ -830,7 +929,7 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
             request_id=request_id,
         )
     log_id = int(log_result["log-id"])
-    return await _execute_cancelling_on_disconnect(
+    response = await _execute_cancelling_on_disconnect(
         request,
         deployments=deployments,
         body=body,
@@ -841,12 +940,17 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         request_id=request_id,
         required_provider_id=required_provider_id,
     )
+    if headers.get("x-logos-benchmark-phase") == "measurement":
+        return observe_response(response, job_id)
+    return response
 
 
 @router.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
 async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateRequest, request: Request):
     """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
     _require_internal_secret(request)
+    if benchmark_reservations.owner(data.provider_id, "*") is not None:
+        raise HTTPException(status_code=409, detail="Worker is reserved for nightly benchmarks")
     snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
@@ -937,15 +1041,97 @@ async def internal_logosnode_stop_calibration(data: InternalStopCalibrationReque
     return JSONResponse(content=result, status_code=200)
 
 
+@router.get("/internal/maintenance/status", tags=["admin"])
+async def internal_maintenance_status(request: Request):
+    """What holds the cluster-wide maintenance slot: calibrations, benchmarks and nightly recoveries."""
+    _require_internal_secret(request)
+    if _main._maintenance_coordinator is None:
+        raise HTTPException(status_code=503, detail="Maintenance coordination is unavailable")
+    status = _main._maintenance_coordinator.slot_status()
+    for holder in status["calibrations"] + status["benchmarks"] + status["recoveries"]:
+        if not holder.get("provider_name") and holder.get("provider_id") is not None:
+            holder["provider_name"] = _resolve_provider_name(int(holder["provider_id"]))
+    return jsonable_encoder(status)
+
+
+@router.post("/internal/maintenance/calibration/release", tags=["admin"])
+async def internal_release_calibration_claim(data: InternalReleaseCalibrationClaimRequest, request: Request):
+    """Release one calibration claim after a normal stop, on an administrator's request."""
+    _require_internal_secret(request)
+    if _main._maintenance_coordinator is None:
+        raise HTTPException(status_code=503, detail="Maintenance coordination is unavailable")
+    try:
+        result = await _main._maintenance_coordinator.release_claim(data.provider_id, data.claim_token)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MaintenanceBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    pname = _resolve_provider_name(data.provider_id)
+    message = (
+        f"Calibration claim on {pname} released without confirmation from the worker"
+        if result["forced"]
+        else f"Calibration on {pname} stopped and its claim released"
+    )
+    return {**result, "provider_id": data.provider_id, "message": message}
+
+
+@router.post("/internal/maintenance/recovery/release", tags=["admin"])
+async def internal_release_recovery(data: InternalReleaseRecoveryRequest, request: Request):
+    """Release a nightly recovery journal, on an administrator's request."""
+    _require_internal_secret(request)
+    if _main._maintenance_coordinator is None:
+        raise HTTPException(status_code=503, detail="Maintenance coordination is unavailable")
+    try:
+        result = await _main._maintenance_coordinator.release_recovery(data.model_provider_id, data.force)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MaintenanceBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    message = (
+        "Nightly recovery released without confirming the original settings"
+        if result["forced"]
+        else "Nightly recovery released; the worker runs its original settings"
+    )
+    return {**result, "model_provider_id": data.model_provider_id, "message": message}
+
+
 @router.post("/internal/logosnode/lanes/delete", tags=["admin"])
 async def internal_logosnode_delete_lane(data: InternalDeleteLaneRequest, request: Request):
     """Unload a lane on a worker, called by Spring after JWT validation."""
     _require_internal_secret(request)
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="delete_lane",
-        params={"lane_id": data.lane_id},
-    )
+    attempt = None
+    if _main._capacity_planner is not None:
+        # An operator unloads on purpose: a locked lane must not come back.
+        try:
+            attempt = await _main._capacity_planner.forget_restored_lane(data.provider_id, data.lane_id)
+        except RestoreRecordError as exc:
+            return JSONResponse(status_code=503, content={"error": str(exc)})
+    dispatched = []
+    planner = _main._capacity_planner
+    try:
+        result = await _dispatch_logosnode_command(
+            provider_id=data.provider_id,
+            action="delete_lane",
+            params={"lane_id": data.lane_id},
+            on_dispatched=dispatched.append,
+        )
+    except BaseException:
+        # Cancelled before an answer: settle the attempt all the same, or the
+        # live lane would stay out of the restore records.
+        if planner is not None and attempt is not None:
+            await asyncio.shield(
+                planner.settle_unload_attempt(
+                    data.provider_id, data.lane_id, attempt, dispatched[0] if dispatched else None
+                )
+            )
+        raise
+    # Not unloaded, or not known yet: one never sent records the lane again,
+    # a sent one is decided by its answer, also a late one.
+    if planner is not None and attempt is not None and getattr(result, "status_code", 200) >= 400:
+        await planner.settle_unload_attempt(
+            data.provider_id, data.lane_id, attempt, dispatched[0] if dispatched else None
+        )
+    return result
 
 
 @router.post("/internal/logosnode/lanes/add", tags=["admin"])

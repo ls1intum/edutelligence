@@ -5,10 +5,11 @@ name: Logos - Gateway Concurrency Benchmark
 # not the local path per_request_overhead.yml covers: how many streaming
 # requests it holds open concurrently, added latency vs. a direct call to a
 # fake upstream, behaviour at the concurrency limit, and (2 replicas) whether
-# killing one is visible to clients under real load. Informational only —
-# posts a PR comment, does not gate the PR. No baseline exists yet to set a
-# blocking threshold against; see the PR description that introduced this
-# workflow.
+# killing one is visible to clients under real load, and admission latency
+# for a key with a budget and a month of history. Posts a PR comment. Only
+# the budget-admission leg is asserted (the time a request spends in Logos,
+# below); the other legs have no baseline yet to set a blocking threshold
+# against.
 on:
   pull_request:
     branches:
@@ -41,6 +42,15 @@ jobs:
     env:
       LOGOS_BENCH_GW_URL: http://localhost:18081
       LOGOS_BENCH_GW_OUTPUT: ${{ github.workspace }}/logos/benchmarks/gateway_concurrency/reports/ci
+      # Assertion on the time a request of the budget-admission load spends
+      # in Logos itself (whole request minus the provider window, read from
+      # log_entry), so the fake upstream's fixed delay cannot hide a
+      # regression. Measured under this load: median 2.6-2.7 ms, p99 13-21 ms
+      # (one run on a busy runner reached 151 ms). The limits leave room for
+      # runner noise and still fail a refresh stall (~0.7 s).
+      LOGOS_BENCH_GW_BUDGET_LOGOS_P50_MAX_MS: "5"
+      LOGOS_BENCH_GW_BUDGET_LOGOS_P99_MAX_MS: "50"
+      LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD: "1"
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -132,9 +142,14 @@ jobs:
         working-directory: logos
 
       - name: Seed benchmark data
+        # seed_budget.sql builds on seed.sql: an application key with a
+        # budget limit and a month of log_entry history, for the
+        # budget-admission leg (see the benchmark README).
         run: |
           docker exec -i logos-db psql -U postgres -d logosdb \
             < benchmarks/gateway_concurrency/seed.sql
+          docker exec -i logos-db psql -U postgres -d logosdb -v bench_budget_rows=200000 \
+            < benchmarks/gateway_concurrency/seed_budget.sql
         working-directory: logos
 
       - name: Set up Python

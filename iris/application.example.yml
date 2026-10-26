@@ -11,32 +11,6 @@ weaviate:
   # Optional: Weaviate API key (omit or leave empty for anonymous access).
   # api_key: "your-weaviate-api-key"
 
-memiris:
-  enabled: true
-  sleep_enabled: true
-  llm_configuration:
-    embeddings:
-      - mxbai-embed-large
-      - nomic-embed-text
-    learning_extractor:
-      local: qwen3.8-27b
-      cloud: gemma3
-    learning_deduplicator:
-      local: qwen3.8-27b
-      cloud: gemma3
-    memory_creator:
-      local: qwen3.8-27b
-      cloud: gpt-oss
-    sleep_tool_llm:
-      local: qwen3.8-27b
-      cloud: gpt-oss
-    sleep_json_llm:
-      local: qwen3.8-27b
-      cloud: gemma3
-  # Concurrent memory groups during sleep; each issues its own LLM requests.
-  # Keep it below the parallel capacity of the local model's serving lanes.
-  sleep_max_threads: 4
-
 local_llm_enabled: true # Set to false to disable local LLM support entirely
 
 langfuse:

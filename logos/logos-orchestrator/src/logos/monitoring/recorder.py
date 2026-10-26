@@ -428,6 +428,16 @@ class MonitoringRecorder:
             timestamp_provider_response=at if at is not None else datetime.datetime.now(datetime.timezone.utc),
         )
 
+    def record_reasoning_effort(self, request_id: str, effort: Optional[str]) -> None:
+        """Note the reasoning effort the upstream received, after Logos remapped it.
+
+        Buffered like the provider stamps: it only matters once the request is
+        finished, so it rides the completion UPDATE. A resend after an effort
+        rejection calls this again, and the last value wins.
+        """
+        if effort:
+            self._buffer(request_id, reasoning_effort=effort)
+
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist whether this key's rate limiter admitted the request.
 

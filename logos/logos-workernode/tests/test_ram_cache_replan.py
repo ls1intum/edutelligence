@@ -42,6 +42,7 @@ from logos_worker_node.models import (
     LaneConfig,
     LogosConfig,
     ProcessState,
+    ProcessStatus,
     VllmConfig,
     WorkerConfig,
 )
@@ -865,7 +866,7 @@ def test_replan_triggered_on_lane_add_establishes_reserve_before_first_sleep(mon
 
     # Stub the spawn + status I/O so add_lane registers a handle without a
     # real vLLM process.
-    async def _fake_add(lid: str, lane_config: LaneConfig) -> None:
+    async def _fake_add(lid: str, lane_config: LaneConfig, claim=None) -> None:
         manager._handles[lid] = handle  # noqa: SLF001
 
     monkeypatch.setattr(manager, "_add_lane_unlocked", _fake_add)
@@ -1034,8 +1035,8 @@ def _restart_env(
         async def init(self) -> None:
             pass
 
-        async def spawn(self, _cfg: LaneConfig) -> None:
-            pass
+        async def spawn(self, _cfg: LaneConfig) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.RUNNING, pid=12345)
 
     old_handle = _Handle(
         LaneConfig(model=model_old, vllm=True, lane_id=lane_id, vllm_config=VllmConfig(enable_sleep_mode=True))

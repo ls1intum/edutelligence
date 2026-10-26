@@ -84,6 +84,7 @@ class PriorityQueueManager:
         raw_priority: int | None = None,
         role_rank: int = 0,
         api_key_id: int | None = None,
+        request_id: str | None = None,
     ) -> str:
         """Add a task to the priority queue for ``model_id``.
 
@@ -117,6 +118,7 @@ class PriorityQueueManager:
                 is_cold_at_queue=is_cold_at_queue,
                 provider_affinity=provider_affinity,
                 api_key_id=api_key_id,
+                request_id=request_id,
             )
 
             heap_entry = (
@@ -161,13 +163,14 @@ class PriorityQueueManager:
         model_id: int,
         provider_id: int = None,  # Ignored — kept for back-compat.
         priority: Optional[Priority] = None,
+        required_api_key_id: int | None = None,
     ) -> Tuple[Optional[any], Optional[QueueEntry]]:
         """Dequeue and return both the task and its QueueEntry metadata."""
         with self._lock:
             if priority is not None:
-                return self._dequeue_from_priority(model_id, priority, provider_id)
+                return self._dequeue_from_priority(model_id, priority, provider_id, required_api_key_id)
             for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
-                task, entry = self._dequeue_from_priority(model_id, p, provider_id)
+                task, entry = self._dequeue_from_priority(model_id, p, provider_id, required_api_key_id)
                 if task is not None:
                     return task, entry
             return None, None
@@ -177,6 +180,7 @@ class PriorityQueueManager:
         model_id: int,
         priority: Priority,
         provider_id: int | None = None,
+        required_api_key_id: int | None = None,
     ) -> Tuple[Optional[any], Optional[QueueEntry]]:
         """Dequeue from a specific priority heap. Caller must hold ``_lock``."""
         queue = self._queues[model_id][priority]
@@ -192,7 +196,8 @@ class PriorityQueueManager:
                     enumerate(queue),
                     key=lambda item: item[1][:4],
                 )
-                if provider_id is None or candidate.provider_affinity in (None, provider_id)
+                if (provider_id is None or candidate.provider_affinity in (None, provider_id))
+                and (required_api_key_id is None or candidate.api_key_id == required_api_key_id)
             ),
             None,
         )

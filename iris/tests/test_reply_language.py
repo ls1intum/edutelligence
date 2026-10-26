@@ -199,7 +199,6 @@ def test_quiz_json_does_not_change_the_language_of_title_and_suggestions():
         start_time=time.perf_counter(),
         callback=MagicMock(),
         tokens=[],
-        accessed_memory_storage=[],
         pending_context_switch=None,
         activity_tracker=MagicMock(
             authoritative_snapshot=MagicMock(return_value=([], 0))

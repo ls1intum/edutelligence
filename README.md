@@ -38,7 +38,6 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 - **Athena:** [Module request lifecycle](https://ls1intum.github.io/edutelligence/athena/docs/dev/module/request-lifecycle)
 - **Atlas:** [AtlasML ML pipelines](https://ls1intum.github.io/edutelligence/atlas/dev/code-reference/ml-pipelines)
 - **Logos:** [Request pipeline source reference](./logos/logos-orchestrator/src/logos/pipeline/README.md)
-- **Memiris:** [Library source reference](./memiris/README.md)
 
 ## 🚀 Sub-Services Overview
 
@@ -99,7 +98,7 @@ A comprehensive LLM Engineering Platform that provides centralized management an
 
 ### Prerequisites
 
-- **Python 3.13** for Iris, Memiris, Atlas and Logos; **Python 3.11** for Athena
+- **Python 3.13** for Iris, Atlas and Logos; **Python 3.11** for Athena
 - **Poetry** for dependency management
 - **Docker & Docker Compose** for containerization
 - **Git** for version control

@@ -34,7 +34,17 @@ def worker_limits(snapshot: dict | None, model: str) -> dict:
                 restrictions[backend] = (
                     f"{backend} requires Ampere or newer (SM 8.0+); " f"{gpus[-1]['name']} reports SM {capability}."
                 )
+    metal = (
+        summary.get("mode") == "metal"
+        and summary.get("telemetry_available") is True
+        and not summary.get("degraded_reason")
+        and any(
+            d.get("kind") == "metal" and float(d.get("memory_total_mb") or 0) > 0 for d in summary.get("devices", [])
+        )
+        and runtime.get("gpu_devices", "all") != "none"
+    )
     return {
+        "metal_batching": metal,
         "gpus": gpus,
         "attention_backend_restrictions": restrictions,
         "gpu_count": len(devices) if known else None,
@@ -49,6 +59,14 @@ def validate_worker_overrides(overrides: ServingOverrides, limits: dict) -> None
         restriction = limits.get("attention_backend_restrictions", {}).get(limits["current"].get("attention_backend"))
         if restriction:
             raise ValueError(restriction)
+        return
+    seqs = requested.get("max_num_seqs", limits["current"].get("max_num_seqs")) or 0
+    tokens = requested.get("max_num_batched_tokens", limits["current"].get("max_num_batched_tokens")) or 0
+    if tokens and seqs and tokens < seqs:
+        raise ValueError("Max batched tokens must be at least max sequences.")
+    if limits.get("metal_batching"):
+        if set(requested) - {"max_num_seqs", "max_num_batched_tokens"}:
+            raise ValueError("Metal workers support batching overrides only.")
         return
     count = limits["gpu_count"]
     if count is None:
@@ -77,10 +95,6 @@ def validate_worker_overrides(overrides: ServingOverrides, limits: dict) -> None
             f"Tensor parallel size ({tp}) × pipeline parallel size ({pp}) requires {tp * pp} GPUs, "
             f"but this worker has only {count} available for this model."
         )
-    seqs = effective.get("max_num_seqs") or 0
-    tokens = effective.get("max_num_batched_tokens") or 0
-    if tokens and seqs and tokens < seqs:
-        raise ValueError("Max batched tokens must be at least max sequences.")
     raw_cache = requested.get("kv_cache_memory_bytes")
     if raw_cache:
         value = raw_cache.upper()

@@ -47,7 +47,7 @@ See [The Iris Chat](./chat) for the chat itself and [Chat Context](./chat-contex
 
 1. **Open a chat** — navigate to a course and click on the Iris icon or open the course chat from the sidebar.
 2. **Type your question** — be as specific as you can. For example, "Can you explain the difference between a stack and a queue?" works better than just "Help me."
-3. **Read the response** — Iris may include numbered citation markers that link back to lecture slides or other course materials. Hover over them to see the source.
+3. **Read the response** — Iris places citation markers inline, beside the sentences they support, linking back to lecture slides or other course materials. Hover over one to see the source.
 4. **Follow up** — use the follow-up suggestion buttons below the response, or type a new question to continue the conversation.
 
 :::tip
@@ -69,10 +69,6 @@ When you first open a course with Iris enabled, you will be prompted to choose y
     Iris in the Artemis iOS App on TUM-Live.
   </iframe>
 </div>
-
-## Enabling Memory
-
-During the AI experience selection, you can also enable **Iris Memory**. When active, Iris remembers your learning preferences and past interactions across conversations to provide more personalized support over time. Learn more on the [Memory](./memory) page.
 
 ## Next Steps
 

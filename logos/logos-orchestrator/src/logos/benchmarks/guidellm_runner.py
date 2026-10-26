@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from logos.benchmarks.configuration import BenchmarkSettings, ServingOverrides
+from logos.benchmarks.nightly import PROGRESS
+from logos.benchmarks.nightly_store import write_progress
 
 DATASET = "openai/gsm8k"
 _SECRET_KEYS = {"api_key", "apikey", "authorization", "password", "secret", "token"}
@@ -299,17 +301,24 @@ def extract_serving_configuration(snapshot: dict[str, Any] | None, model: str) -
         result = {key: vllm_config[key] for key in _SERVING_KEYS if key in vllm_config}
         extra_args = list(vllm_config.get("extra_args") or [])
         for key, flag in _EXTRA_SERVING_FLAGS.items():
+            aliases = (flag, "-pp") if key == "pipeline_parallel_size" else (flag,)
             for index, arg in enumerate(extra_args):
-                raw = (
-                    extra_args[index + 1]
-                    if arg == flag and index + 1 < len(extra_args)
-                    else str(arg).split("=", 1)[1] if str(arg).startswith(flag + "=") else None
-                )
+                name, has_value, inline_value = str(arg).partition("=")
+                if name not in aliases:
+                    continue
+                raw = inline_value if has_value else extra_args[index + 1] if index + 1 < len(extra_args) else None
                 if raw is not None:
                     try:
                         result[key] = json.loads(raw)
                     except (ValueError, TypeError):
                         result[key] = raw
+        # The worker includes global flags, aliases and lane override precedence.
+        # Older workers without this field cannot establish an implicit default.
+        backend_metrics = lane.get("backend_metrics")
+        if isinstance(backend_metrics, dict):
+            pipeline_size = backend_metrics.get("pipeline_parallel_size")
+            if type(pipeline_size) is int and pipeline_size > 0:
+                result["pipeline_parallel_size"] = pipeline_size
         if "kv_cache_memory_bytes" in result:
             result["kv_cache_memory"] = result.pop("kv_cache_memory_bytes")
         if lane_config.get("gpu_devices"):
@@ -403,6 +412,8 @@ async def run_benchmark_job(
             try:
                 with DBManager() as db:
                     active = db.touch_model_benchmark_job(job_id)
+                if job_id in PROGRESS and PROGRESS[job_id].measuring:
+                    write_progress(job_id, PROGRESS[job_id].completed, PROGRESS[job_id].total)
             except Exception:
                 active = False
             session_current = worker_session_is_current is None or worker_session_is_current()
@@ -441,6 +452,9 @@ async def run_benchmark_job(
                 JobStatus.RUNNING.value,
                 result_payload={**progress, "stage": "benchmarking", "started_samples": 0, "total_samples": samples},
             )
+
+        if job_id in PROGRESS:
+            PROGRESS[job_id].start_measurement()
 
         with tempfile.TemporaryDirectory(prefix="logos-guidellm-") as directory:
             workdir = Path(directory)

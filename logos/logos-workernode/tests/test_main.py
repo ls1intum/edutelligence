@@ -39,10 +39,16 @@ class _FakeGpuCollector:
         )
 
 
-def test_estimate_model_download_bytes_sums_the_full_hf_snapshot(monkeypatch) -> None:
+def test_estimate_model_download_bytes_sums_the_downloaded_hf_files(monkeypatch) -> None:
     monkeypatch.delenv("HF_TOKEN", raising=False)
     fake_api = MagicMock()
-    fake_api.model_info.return_value = SimpleNamespace(siblings=[SimpleNamespace(size=7), SimpleNamespace(size=5)])
+    fake_api.model_info.return_value = SimpleNamespace(
+        siblings=[
+            SimpleNamespace(rfilename="model.safetensors", size=7),
+            SimpleNamespace(rfilename="config.json", size=5),
+            SimpleNamespace(rfilename="original/consolidated.00.pth", size=1000),
+        ]
+    )
     with patch("huggingface_hub.HfApi", return_value=fake_api):
         size_bytes = worker_main._estimate_model_download_bytes("org/model")
 
@@ -315,7 +321,7 @@ class _FakeBridge:
         self.profiles = profiles
         self.calls: list = []
 
-    async def fetch_model_profiles(self, key_hashes, legacy_import):
+    async def fetch_model_profiles(self, key_hashes, slice_gpu_counts, legacy_import):
         self.calls.append((key_hashes, legacy_import))
         if len(self.calls) <= self.failures:
             raise RuntimeError("Logos unreachable")

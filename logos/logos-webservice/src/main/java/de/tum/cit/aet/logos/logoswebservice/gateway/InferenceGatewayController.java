@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.gateway;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -12,9 +13,11 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -73,6 +76,10 @@ public class InferenceGatewayController {
 
     @RequestMapping({"/v1", "/v1/**", "/openai", "/openai/**", "/jobs", "/jobs/**"})
     public ResponseEntity<StreamingResponseBody> handle(HttpServletRequest request) throws IOException {
+        // Taken before the key lookup: waiting for a database connection or a
+        // budget refresh is part of what the caller waited for, and the log
+        // row should show it.
+        Instant arrivedAt = Instant.now();
         String apiKeyValue = GatewayApiKeyExtractor.extract(request);
         String path = pathWithinApp(request);
 
@@ -102,7 +109,8 @@ public class InferenceGatewayController {
         // Named-model path: key-only auth first, then body, then deployments.
         GatewayKey key = authService.requireActiveKey(apiKeyValue);
         byte[] body = GatewayBodyReader.read(request.getInputStream());
-        String modelName = extractModelName(body, contentType);
+        JsonNode root = parseJsonBody(body, contentType);
+        String modelName = extractModelName(root);
 
         if (modelName != null
                 && GatewayRouteResolver.isDirectCloudEligible(path, request.getMethod())
@@ -114,10 +122,26 @@ public class InferenceGatewayController {
                 ctx.deploymentsForModel(), request, modelName);
             GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(privacyFiltered);
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
-                cloudRateLimiter.enforce(ctx.key(), body);
                 String logLevel = GatewayLoggingLevel.resolve(request, ctx.key().logLevel());
-                Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(), decision.deployment(), body, logLevel);
+                // Every request turned away between here and the forward is
+                // recorded, whatever the reason — a request that fails must
+                // never be missing from the request log.
+                final Integer logId;
+                try {
+                    cloudRateLimiter.enforce(ctx.key(), body);
+                    logId = cloudAccounting.admitAndReserve(
+                        ctx.key(), decision.deployment(), body, logLevel, arrivedAt,
+                        GatewayReasoningEffort.from(root));
+                } catch (ResponseStatusException e) {
+                    cloudAccounting.recordRejected(ctx.key(), decision.deployment(), logLevel,
+                        "HTTP " + e.getStatusCode().value() + ": " + e.getReason(),
+                        e.getStatusCode().value() == HttpStatus.TOO_MANY_REQUESTS.value());
+                    throw e;
+                } catch (RuntimeException e) {
+                    cloudAccounting.recordRejected(ctx.key(), decision.deployment(), logLevel,
+                        "Gateway error: " + e.getClass().getSimpleName(), false);
+                    throw e;
+                }
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());
@@ -130,8 +154,8 @@ public class InferenceGatewayController {
                     copyHeaders(request),
                     GatewayLoggingLevel.storesPayloads(logLevel),
                     result -> cloudAccounting.settleSuccess(
-                        logId, result.usage(), result.responseBody(), result.serviceTier()),
-                    err -> cloudAccounting.settleFailure(logId, err));
+                        logId, result.usage(), result.responseBody(), result.serviceTier(), result.timings()),
+                    (err, timings) -> cloudAccounting.settleFailure(logId, err, timings));
             }
             log.debug("Orchestrator proxy {} {} reason={}",
                 request.getMethod(), path, decision.reason());
@@ -184,7 +208,8 @@ public class InferenceGatewayController {
                 before, modelName, threshold);
     }
 
-    private String extractModelName(byte[] body, String contentType) {
+    /** The JSON body, parsed once for the model name and the reasoning effort; null when it is none. */
+    private JsonNode parseJsonBody(byte[] body, String contentType) {
         if (body == null || body.length == 0) {
             return null;
         }
@@ -192,16 +217,22 @@ public class InferenceGatewayController {
             return null;
         }
         try {
-            JsonNode root = objectMapper.readTree(body);
-            JsonNode model = root.get("model");
-            if (model == null || model.isNull()) {
-                return null;
-            }
-            String value = model.asText(null);
-            return value == null || value.isBlank() ? null : value.strip();
+            return objectMapper.readTree(body);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static String extractModelName(JsonNode root) {
+        if (root == null) {
+            return null;
+        }
+        JsonNode model = root.get("model");
+        if (model == null || model.isNull()) {
+            return null;
+        }
+        String value = model.asText(null);
+        return value == null || value.isBlank() ? null : value.strip();
     }
 
     private static String pathWithinApp(HttpServletRequest request) {

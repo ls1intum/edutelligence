@@ -43,7 +43,7 @@ The older Process/Profile hierarchy (`process`, `profiles`, `profile_model_permi
 
 ### Git workflow (MANDATORY, CI-enforced)
 
-- **PR title** must match: `` ^`(Development|General|Athena|Atlas|AtlasML|Iris|Logos|Memiris)`:\s[A-Z].*$ `` — e.g. `` `Logos`: Add team management endpoints ``.
+- **PR title** must match: `` ^`(Development|General|Athena|Atlas|AtlasML|Iris|Logos)`:\s[A-Z].*$ `` — e.g. `` `Logos`: Add team management endpoints ``.
 - **Commit messages**: `Logos: Description starting with capital letter (#issue_number)`.
 - **Branch names**: `feature/logos/description` or `logos/description`.
 - Never merge to `main` without a PR. After opening a PR, check `gh pr checks` and fix failures immediately.
@@ -76,10 +76,6 @@ This section is a behavioral rule, not a technical control — the repository ca
 - **Pin exact versions.** Never use range operators (`^`, `~`, `>=`, `*`) in a manifest or an `overrides` entry; write the specific version (`==1.2.3` in Python, `1.2.3` in `package.json`). Upgrades are explicit edits that re-lock.
 - **Keep lock files current.** Re-lock to the latest versions that satisfy the manifest (`uv lock --upgrade`, `npm update`) instead of only editing the manifest, and commit the lock file with it.
 - **Watch security alerts.** Check `gh api repos/ls1intum/edutelligence/dependabot/alerts?state=open` for the packages you touch, fix them in the same change (upgrade, or an `overrides` entry when a transitive parent caps the version), and say in the PR which alerts remain because no patched release exists.
-
-### Shared sibling
-
-The `shared/` directory at the repo root (sibling of `logos/`) is symlinked into the orchestrator for local dev/CI: `ln -s ../../shared logos/logos-orchestrator/shared` (note the extra `../`).
 
 ### Running the full stack
 

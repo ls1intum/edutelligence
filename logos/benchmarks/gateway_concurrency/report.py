@@ -2,6 +2,7 @@
 
 Informational only — no PASS/FAIL gate. There is no baseline yet to set a
 threshold against; see the PR description for why blocking was deferred.
+The budget-admission section only flags an optional p99 threshold.
 """
 
 from __future__ import annotations
@@ -14,6 +15,111 @@ from typing import Any, Dict, List
 
 def _ms(v: float) -> str:
     return f"{v:,.1f}"
+
+
+def _db_cell(snap: Dict[str, Any]) -> str:
+    if not snap or snap.get("query_ms") is None:
+        return "n/a"
+    backlog = snap.get("unfinalized_rows")
+    backlog_str = f", {backlog:,} unpriced rows" if backlog is not None else ""
+    return f"{_ms(snap['query_ms'])} ms{backlog_str}"
+
+
+def _budget_section(bud: Dict[str, Any]) -> List[str]:
+    lines: List[str] = ["## Budget admission", ""]
+    if bud.get("skipped"):
+        lines.append(f"_Skipped — {bud.get('reason', 'n/a')}_")
+        lines.append("")
+        return lines
+    load = bud.get("load", {})
+    base = bud.get("baseline", {})
+    thr = bud.get("threshold", {})
+    in_logos = bud.get("in_logos", {})
+    logos = in_logos.get("logos", {})
+
+    def _flag(label: str, key: str) -> str:
+        limit = thr.get(f"{key}_max_ms")
+        if limit is None:
+            return ""
+        if not logos or thr.get(f"{key}_exceeded"):
+            return f" ❌ {label} above the {_ms(limit)} ms threshold" if logos else " ❌ not measured"
+        return f" ✅ {label} within the {_ms(limit)} ms threshold"
+
+    logos_str = (
+        f"Time in Logos median = **{_ms(logos['p50_ms'])} ms**{_flag('median', 'p50')}, "
+        f"p99 = **{_ms(logos['p99_ms'])} ms**{_flag('p99', 'p99')}."
+        if logos
+        else f"Time in Logos: not measured ({in_logos.get('error', 'no rows')}){_flag('', 'p99')}."
+    )
+    lines.append(
+        f"Application key **with** a budget limit and a month of history (`seed_budget.sql`), "
+        f"{bud['concurrency']} concurrent workers for {bud['duration_s']} s "
+        f"(budget cache TTL {bud['cache_ttl_s']} s, so the load spans at least one refresh). "
+        f"{bud['requests']} requests, {bud['failed']} failed, **{bud['n_5xx']} HTTP 5xx**. "
+        f"{logos_str}"
+    )
+    lines.append("")
+    lines.append("| Phase | n | p50 | p95 | p99 | max |")
+    lines.append("|---|---:|---:|---:|---:|---:|")
+    for label, s in (("Idle baseline (sequential)", base), ("Under load", load)):
+        if s.get("n", 0):
+            lines.append(
+                f"| {label} | {s['n']} | {_ms(s['p50_ms'])} ms | {_ms(s['p95_ms'])} ms | "
+                f"{_ms(s['p99_ms'])} ms | {_ms(s['max_ms'])} ms |"
+            )
+    if logos:
+        lines.append(
+            f"| Time in Logos, per request of the load | {in_logos['n']} | {_ms(logos['p50_ms'])} ms | "
+            f"{_ms(logos['p95_ms'])} ms | {_ms(logos['p99_ms'])} ms | {_ms(logos['max_ms'])} ms |"
+        )
+        for key, label in (
+            ("admission", "… admission (auth, rate limit, budget, reservation)"),
+            ("call", "… call (admission end to the provider call)"),
+            ("tail", "… tail (provider response to end of the response: delivery, settle)"),
+        ):
+            part = in_logos.get(key, {})
+            if part:
+                lines.append(
+                    f"| {label} | {in_logos['n']} | {_ms(part['p50_ms'])} ms | {_ms(part['p95_ms'])} ms | "
+                    f"{_ms(part['p99_ms'])} ms | {_ms(part['max_ms'])} ms |"
+                )
+    lines.append("")
+    lines.append(
+        "_Time in Logos_ is read back from each request's `log_entry` row: arrival at the controller to the "
+        "end of the response, minus the provider window. It is the gateway's own cost without the fake "
+        "upstream's fixed delay and without the hop through Traefik; the two phase rows above it include both."
+    )
+    lines.append("")
+    lines.append(
+        f"Budget refresh query in the database (`apiKeyBudgetUsage`): before the load "
+        f"{_db_cell(bud.get('db_before', {}))}; after {_db_cell(bud.get('db_after', {}))}."
+    )
+    lines.append("")
+    windows = bud.get("windows", [])
+    if windows:
+        lines.append(f"Latency by send time ({bud.get('window_s', 5)} s windows):")
+        lines.append("")
+        lines.append("| From | Requests | Failed | p50 | p95 | max |")
+        lines.append("|---:|---:|---:|---:|---:|---:|")
+        for w in windows:
+            lines.append(
+                f"| {w['start_s']} s | {w['requests']} | {w['failed']} | {_ms(w['p50_ms'])} ms | "
+                f"{_ms(w['p95_ms'])} ms | {_ms(w['max_ms'])} ms |"
+            )
+        lines.append("")
+    lines.append(
+        "A refresh that re-prices the key's month blocks every request of the key that misses the "
+        "cache, so a slow refresh shows up as a window whose requests all finish late together, and "
+        "as 5xx once the long queries hold the connections that authentication needs."
+    )
+    if bud.get("status_counts"):
+        lines.append("")
+        lines.append(f"Status counts: `{json.dumps(bud['status_counts'], sort_keys=True)}`")
+    if bud.get("failure_samples"):
+        lines.append("")
+        lines.append(f"Sample errors: `{bud['failure_samples'][:3]}`")
+    lines.append("")
+    return lines
 
 
 def build_markdown(result: Dict[str, Any]) -> str:
@@ -118,6 +224,11 @@ def build_markdown(result: Dict[str, Any]) -> str:
             lines.append(f"Sample errors: `{fo['connectivity_failure_samples']}`")
         lines.append("")
 
+    # -- budget admission ------------------------------------------------
+    bud = result.get("budget")
+    if bud is not None:
+        lines.extend(_budget_section(bud))
+
     lines.append("## Method")
     lines.append("")
     lines.append(
@@ -125,8 +236,10 @@ def build_markdown(result: Dict[str, Any]) -> str:
         "so the numbers above are the gateway's own overhead/limits, not a real cloud provider's throttling."
     )
     lines.append(
-        "- No PASS/FAIL gate: this is the first version of this benchmark, so there is no baseline yet "
-        "to set a threshold against. See the PR description."
+        "- The concurrency, latency and failover legs have no PASS/FAIL gate yet. The budget-admission leg "
+        "checks the median and p99 time in Logos against `LOGOS_BENCH_GW_BUDGET_LOGOS_P50_MAX_MS` and "
+        "`LOGOS_BENCH_GW_BUDGET_LOGOS_P99_MAX_MS`; with `LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD=1` "
+        "a breach fails the run."
     )
     lines.append(f"- Env: `{json.dumps(result.get('env', {}), sort_keys=True)}`")
     lines.append("")

@@ -28,6 +28,18 @@ from dataclasses import dataclass
 from typing import Any
 
 # -----------------------------------------------------------------------------
+# Process markers
+# -----------------------------------------------------------------------------
+
+# Environment markers of the worker's own vLLM processes. Child processes
+# inherit them, so they still identify a process after its parent died.
+# LANE_ENV_MARKER holds the lane id of a serving lane; PROBE_ENV_MARKER marks a
+# calibration probe. Calibration cleanup kills probe processes only.
+LANE_ENV_MARKER = "LOGOS_LANE_ID"
+PROBE_ENV_MARKER = "LOGOS_CALIBRATION_PROBE"
+
+
+# -----------------------------------------------------------------------------
 # Model-name to vLLM CLI flag mapping tables
 # -----------------------------------------------------------------------------
 

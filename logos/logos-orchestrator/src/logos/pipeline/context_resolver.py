@@ -103,6 +103,23 @@ class ContextResolver:
         self._logosnode_registry = logosnode_registry
         self._lane_preparer = lane_preparer
 
+    def clear_lane_waiter(self, request_id: Optional[str]) -> None:
+        """Tell the capacity planner that ``request_id`` no longer waits for a lane."""
+        clear = getattr(self._lane_preparer, "clear_lane_waiter", None)
+        if request_id and callable(clear):
+            try:
+                clear(request_id)
+            except Exception:  # noqa: BLE001
+                logger.debug("Clearing lane waiter %s failed", request_id, exc_info=True)
+
+    def _register_lane_waiter(self, request_id: Optional[str], provider_id: int, model_name: str) -> None:
+        register = getattr(self._lane_preparer, "register_lane_waiter", None)
+        if request_id and callable(register):
+            try:
+                register(request_id, provider_id, model_name)
+            except Exception:  # noqa: BLE001
+                logger.debug("Registering lane waiter %s failed", request_id, exc_info=True)
+
     async def resolve_context(
         self,
         model_id: int,
@@ -110,6 +127,7 @@ class ContextResolver:
         request_path: Optional[str] = None,
         request_id: Optional[str] = None,
         deployment_info: Optional[Dict[str, Any]] = None,
+        wait_for_lane: bool = True,
     ) -> Optional[ExecutionContext]:
         """
         Resolve all DB information needed to execute a request with authorization verification.
@@ -132,6 +150,11 @@ class ContextResolver:
                 endpoint/base URL/auth stay unused on that branch — so the
                 database roundtrip is skipped outright . Callers without
                 a deployment list (async jobs) omit it and take the DB path.
+            wait_for_lane: When no logosnode lane is ready, keep polling for
+                one for up to ~120 s. A caller that runs its own wait loop
+                (and can move the request elsewhere between polls) passes
+                ``False``: the lookup then returns at once and the request is
+                registered with the capacity planner as waiting for a lane.
 
         Returns:
             `ExecutionContext` with all details, or `None` if resolution fails (e.g. missing key, unauthorized).
@@ -233,10 +256,12 @@ class ContextResolver:
                 with perf_trace.phase(request_id, "context.select_lane"):
                     lane = prepared_lane
                     if lane is None:
-                        lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                        lane = await self._logosnode_registry.select_lane_for_model(
+                            provider_id, model_name, request_id=request_id
+                        )
                     # Retry loop: lane may be transitioning (loading/waking)
                     # after reevaluate_model_queues dispatched us.
-                    if lane is None:
+                    if lane is None and wait_for_lane:
                         # Retry up to ~120s — must survive worst-case
                         # multi-lane drain (busy vLLM lanes with continuous
                         # batching can have 10-20 active requests that must
@@ -245,7 +270,9 @@ class ContextResolver:
                         # retries back off to 2s.
                         for attempt in range(65):
                             await asyncio.sleep(1.0 if attempt < 10 else 2.0)
-                            lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                            lane = await self._logosnode_registry.select_lane_for_model(
+                                provider_id, model_name, request_id=request_id
+                            )
                             if lane is not None:
                                 logger.info(
                                     "Lane became available after %ds for provider=%s model=%s",
@@ -264,6 +291,12 @@ class ContextResolver:
                             provider_name,
                         )
                         return None
+                elif not wait_for_lane:
+                    # The request holds a reservation but is not in the
+                    # scheduler queue, so the planner would not count it as
+                    # demand. Register it so the lane is woken for it.
+                    self._register_lane_waiter(request_id, provider_id, model_name)
+                    return None
                 else:
                     logger.warning(
                         "No logosnode lane available for provider=%s model=%s after retries",

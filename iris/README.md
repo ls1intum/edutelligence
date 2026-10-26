@@ -135,7 +135,7 @@ most the configured number of selected-anchor reads, with query counts and time 
    If you use an IDE like PyCharm, you'll want to setup your interpreter to use the Poetry environment.
    For PyCharm you can do this by following these steps:
    1. Open the `iris` folder as a new PyCharm project
-   2. Go to `File > Settings > Project: MemIris > Python Interpreter`
+   2. Go to `File > Settings > Project: iris > Python Interpreter`
    3. Click the gear icon and select `Add...`
    4. Select `Poetry Environment` and choose the `poetry` executable
    5. Click `OK` and `Apply`

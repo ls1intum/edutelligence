@@ -57,3 +57,8 @@
     button { width: 100%; }
   }
 }
+
+.confirm-icon-wrap--primary {
+  background: rgb(var(--color-primary-500) / var(--opacity-soft));
+  color: rgb(var(--color-primary-500));
+}

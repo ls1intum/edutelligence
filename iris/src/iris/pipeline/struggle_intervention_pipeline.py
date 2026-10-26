@@ -420,20 +420,6 @@ class StruggleInterventionPipeline(
             proactivity_mode=state.dto.proactivity_mode,
         )
 
-    def is_memiris_memory_creation_enabled(
-        self,
-        state: AgentPipelineExecutionState[
-            StruggleInterventionPipelineExecutionDTO, Variant
-        ],
-    ) -> bool:
-        return False
-
-    def get_memiris_tenant(self, dto) -> str:
-        return ""
-
-    def get_memiris_reference(self, dto) -> str:
-        return "unknown"
-
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[

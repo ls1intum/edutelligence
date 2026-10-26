@@ -50,7 +50,7 @@ class _RecordingDBManager:
 
 
 class _FakeRegistry:
-    async def select_lane_for_model(self, provider_id, model_name):  # noqa: ARG002
+    async def select_lane_for_model(self, provider_id, model_name, *, request_id=None):  # noqa: ARG002
         return {"lane_id": f"lane-{model_name}"}
 
 

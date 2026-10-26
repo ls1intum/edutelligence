@@ -10,6 +10,7 @@ import {
   laneDisplayState,
   laneSleepAction,
   messageIn,
+  WORKER_LOCK_LANE_ID,
 } from './lane-health-panel';
 import { LaneSignalData } from '../../statistics.models';
 import { ProviderModel, StatisticsService } from '../../services/statistics.service';
@@ -835,10 +836,10 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
 
   it('clears the spinner of a call that is still in flight at the switch', async () => {
     panel.handleUnload('planner-foo');
-    expect(panel.unloadingLaneId()).toBe('planner-foo');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
 
     switchTo('gpu-02');
-    expect(panel.unloadingLaneId()).toBeNull();
+    expect(panel.unloadingLaneIds().size).toBe(0);
   });
 
   it('does not show a stale unload error under the switched-to worker', async () => {
@@ -860,7 +861,7 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
     // …the operator switches, and fires gpu-02's own unload.
     switchTo('gpu-02');
     const pendingB = panel.handleUnload('planner-bar');
-    expect(panel.unloadingLaneId()).toBe('planner-bar');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-bar']));
 
     // gpu-01's delayed answer must not release the signal: it belongs to
     // gpu-02's attempt now, and clearing it while that call is still running
@@ -869,13 +870,13 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
     unloadSettlers[0]();
     await pendingA;
 
-    expect(panel.unloadingLaneId()).toBe('planner-bar');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-bar']));
     expect(panel.unloadError()).toBeNull();
 
     // …and the signal stays fully functional for the attempt that owns it.
     settleUnload?.();
     await pendingB;
-    expect(panel.unloadingLaneId()).toBeNull();
+    expect(panel.unloadingLaneIds().size).toBe(0);
   });
 
   it('does not let an A → B → A attempt settle the newer attempt on the same lane', async () => {
@@ -888,11 +889,11 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
     const onOther = panel.handleUnload('planner-foo');
     unloadSettlers[1]();
     await onOther;
-    expect(panel.unloadingLaneId()).toBeNull();
+    expect(panel.unloadingLaneIds().size).toBe(0);
 
     switchTo('gpu-01');
     const second = panel.handleUnload('planner-foo');
-    expect(panel.unloadingLaneId()).toBe('planner-foo');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
 
     // The first attempt settles last — on the worker it started on, with the
     // same lane name the newer attempt now holds.
@@ -901,12 +902,116 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
 
     // It must not have cleared the newer attempt's signal or written into
     // its error.
-    expect(panel.unloadingLaneId()).toBe('planner-foo');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
     expect(panel.unloadError()).toBeNull();
 
     unloadSettlers[2]();
     await second;
-    expect(panel.unloadingLaneId()).toBeNull();
+    expect(panel.unloadingLaneIds().size).toBe(0);
+  });
+});
+
+describe('LaneHealthPanel parallel unloads', () => {
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let settlers: Map<string, (error?: unknown) => void>;
+  let unloadLane: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    settlers = new Map();
+    unloadLane = vi.fn(
+      (pid: number, laneId: string) =>
+        new Promise((resolve, reject) => {
+          settlers.set(`${pid}/${laneId}`, (error?: unknown) => (error ? reject(error) : resolve({})));
+        }),
+    );
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [
+        {
+          provide: StatisticsService,
+          useValue: {
+            listLaneLocks: () => Promise.resolve([]),
+            unloadLane,
+            getLaneLoadStatus: () => Promise.resolve({ status: 'running' }),
+          },
+        },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': {
+        'planner-foo': lane({ model: 'foo', runtime_state: 'running' }),
+        'planner-bar': lane({ model: 'bar', runtime_state: 'running' }),
+      },
+      'gpu-02': { 'planner-foo': lane({ model: 'foo', runtime_state: 'running' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', {
+      'gpu-01': { provider_id: 1 },
+      'gpu-02': { provider_id: 2 },
+    });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    fixture.detectChanges();
+  });
+
+  function unloadButtons(): HTMLButtonElement[] {
+    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.btn-unload'));
+  }
+
+  it('unloads a second lane while the first unload is still running', async () => {
+    const first = panel.handleUnload('planner-foo');
+    const second = panel.handleUnload('planner-bar');
+    expect(unloadLane).toHaveBeenCalledTimes(2);
+    expect(unloadLane).toHaveBeenLastCalledWith(1, 'planner-bar');
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo', 'planner-bar']));
+    fixture.detectChanges();
+    const buttons = unloadButtons();
+    expect(buttons.length).toBe(2);
+    expect(buttons.every((b) => b.disabled && b.textContent!.trim() === 'Unloading…')).toBe(true);
+
+    settlers.get('1/planner-bar')!();
+    await second;
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
+
+    settlers.get('1/planner-foo')!({ status: 500, error: 'busy' });
+    await first;
+    expect(panel.unloadingLaneIds().size).toBe(0);
+    expect(panel.unloadError()).toBe('Unload of planner-foo failed: busy');
+  });
+
+  it('ignores a second click on the lane that is already unloading', async () => {
+    const first = panel.handleUnload('planner-foo');
+    await panel.handleUnload('planner-foo');
+    expect(unloadLane).toHaveBeenCalledTimes(1);
+    settlers.get('1/planner-foo')!();
+    await first;
+  });
+
+  it('abandons every unload in flight when the provider changes', async () => {
+    const foo = panel.handleUnload('planner-foo');
+    const bar = panel.handleUnload('planner-bar');
+    panel.selectedProvider = 'gpu-02';
+    panel.ngOnChanges({ selectedProvider: new SimpleChange('gpu-01', 'gpu-02', false) });
+    expect(panel.unloadingLaneIds().size).toBe(0);
+
+    const other = panel.handleUnload('planner-foo');
+    expect(unloadLane).toHaveBeenLastCalledWith(2, 'planner-foo');
+    settlers.get('1/planner-bar')!({ status: 500, error: 'from gpu-01' });
+    await bar;
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
+    expect(panel.unloadError()).toBeNull();
+
+    // Both lanes share the id planner-foo; the gpu-01 answer arrives after the
+    // gpu-02 attempt started and must not settle it.
+    settlers.get('1/planner-foo')!({ status: 500, error: 'from gpu-01' });
+    await foo;
+    expect(panel.unloadingLaneIds()).toEqual(new Set(['planner-foo']));
+    expect(panel.unloadError()).toBeNull();
+
+    settlers.get('2/planner-foo')!();
+    await other;
+    expect(panel.unloadingLaneIds().size).toBe(0);
   });
 });
 
@@ -981,5 +1086,208 @@ describe('LaneHealthPanel single-action gate', () => {
     const sleeping = panel.handleSleep('planner-foo');
     expect(sleepLane).toHaveBeenCalledTimes(1);
     void sleeping;
+  });
+});
+
+/**
+ * The lock toggle beside each lane.
+ *
+ * A lock is a standing instruction to the capacity planner, keyed by provider
+ * and lane id — the same lane id on another worker is a different lane. The
+ * panel reads the locks once and after every toggle, and a failed toggle
+ * reports itself without losing the known locks.
+ */
+describe('LaneHealthPanel lane locks', () => {
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let locks: { provider_id: number; lane_id: string; model_name: string | null; locked_by: string | null; locked_at: string }[];
+  let lockLane: ReturnType<typeof vi.fn>;
+  let unlockLane: ReturnType<typeof vi.fn>;
+  let getLaneLocks: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    locks = [];
+    getLaneLocks = vi.fn(() => Promise.resolve([...locks]));
+    lockLane = vi.fn((pid: number, laneId: string, model: string | null) => {
+      locks.push({ provider_id: pid, lane_id: laneId, model_name: model, locked_by: 'admin', locked_at: 'now' });
+      return Promise.resolve(locks[locks.length - 1]);
+    });
+    unlockLane = vi.fn((pid: number, laneId: string) => {
+      locks = locks.filter((l) => !(l.provider_id === pid && l.lane_id === laneId));
+      return Promise.resolve({ unlocked: true });
+    });
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [{ provide: StatisticsService, useValue: { getLaneLocks, lockLane, unlockLane } }],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-embed': lane({ model: 'org/embed', runtime_state: 'loaded' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1 } });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    fixture.detectChanges();
+    await fixture.whenStable();
+  });
+
+  function row() {
+    return panel.lanes[0];
+  }
+
+  it('reads the locks once when the panel first renders', () => {
+    expect(getLaneLocks).toHaveBeenCalledTimes(1);
+    expect(panel.isLocked('planner-embed')).toBe(false);
+  });
+
+  it('locks a lane with its model, then unlocks it', async () => {
+    await panel.handleToggleLock(row());
+    expect(lockLane).toHaveBeenCalledWith(1, 'planner-embed', 'org/embed');
+    expect(panel.isLocked('planner-embed')).toBe(true);
+
+    await panel.handleToggleLock(row());
+    expect(unlockLane).toHaveBeenCalledWith(1, 'planner-embed');
+    expect(panel.isLocked('planner-embed')).toBe(false);
+    expect(panel.lockingLaneId()).toBeNull();
+  });
+
+  it('does not treat the same lane id on another provider as locked', async () => {
+    locks.push({ provider_id: 2, lane_id: 'planner-embed', model_name: 'org/embed', locked_by: null, locked_at: 'now' });
+    await panel.refreshLocks();
+    expect(panel.isLocked('planner-embed')).toBe(false);
+  });
+
+  it('renders a pressed lock button for a locked lane', async () => {
+    locks.push({ provider_id: 1, lane_id: 'planner-embed', model_name: 'org/embed', locked_by: null, locked_at: 'now' });
+    await panel.refreshLocks();
+    fixture.detectChanges();
+    const button: HTMLButtonElement = fixture.nativeElement.querySelector('.btn-lane-lock');
+    expect(button.classList).toContain('btn-lane-lock--locked');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.title).toContain('stays warm');
+  });
+
+  it('reports a failed toggle and keeps the known locks', async () => {
+    locks.push({ provider_id: 1, lane_id: 'planner-embed', model_name: 'org/embed', locked_by: null, locked_at: 'now' });
+    await panel.refreshLocks();
+    unlockLane.mockImplementationOnce(() => Promise.reject({ status: 500, error: { error: 'boom' } }));
+
+    await panel.handleToggleLock(row());
+    expect(panel.lockError()).toContain('Unlock of planner-embed failed');
+    expect(panel.isLocked('planner-embed')).toBe(true);
+    expect(panel.lockingLaneId()).toBeNull();
+  });
+
+  it('ignores a lock read that finishes after a newer one', async () => {
+    // The first read is still in flight when a toggle re-reads; its older
+    // answer must not flip the button back.
+    let releaseStale!: (value: unknown) => void;
+    getLaneLocks.mockImplementationOnce(() => new Promise((resolve) => (releaseStale = resolve)));
+    const stale = panel.refreshLocks();
+
+    await panel.handleToggleLock(row());
+    expect(panel.isLocked('planner-embed')).toBe(true);
+
+    releaseStale([]);
+    await stale;
+    expect(panel.isLocked('planner-embed')).toBe(true);
+  });
+});
+
+/**
+ * A worker lock is a lock with lane id `*`: the capacity planner then leaves
+ * the whole worker as it is. It lives next to the lane locks and never makes a
+ * lane look locked.
+ */
+describe('LaneHealthPanel worker lock', () => {
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let locks: { provider_id: number; lane_id: string; model_name: string | null; locked_by: string | null; locked_at: string }[];
+  let lockLane: ReturnType<typeof vi.fn>;
+  let unlockLane: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    locks = [];
+    lockLane = vi.fn((pid: number, laneId: string, model: string | null) => {
+      locks.push({ provider_id: pid, lane_id: laneId, model_name: model, locked_by: 'admin', locked_at: 'now' });
+      return Promise.resolve(locks[locks.length - 1]);
+    });
+    unlockLane = vi.fn((pid: number, laneId: string) => {
+      locks = locks.filter((l) => !(l.provider_id === pid && l.lane_id === laneId));
+      return Promise.resolve({ unlocked: true });
+    });
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [
+        { provide: StatisticsService, useValue: { getLaneLocks: vi.fn(() => Promise.resolve([...locks])), lockLane, unlockLane } },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-embed': lane({ model: 'org/embed', runtime_state: 'loaded' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1 } });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    fixture.detectChanges();
+    await fixture.whenStable();
+  });
+
+  it('locks and unlocks the worker under lane id *', async () => {
+    await panel.handleToggleWorkerLock();
+    expect(lockLane).toHaveBeenCalledWith(1, WORKER_LOCK_LANE_ID, null);
+    expect(panel.isWorkerLocked()).toBe(true);
+    expect(panel.isLocked('planner-embed')).toBe(false);
+
+    await panel.handleToggleWorkerLock();
+    expect(unlockLane).toHaveBeenCalledWith(1, WORKER_LOCK_LANE_ID);
+    expect(panel.isWorkerLocked()).toBe(false);
+    expect(panel.lockingLaneId()).toBeNull();
+  });
+
+  it('shows what a locked worker means', async () => {
+    await panel.handleToggleWorkerLock();
+    fixture.detectChanges();
+    const bar: HTMLElement = fixture.nativeElement.querySelector('.worker-lock');
+    const button: HTMLButtonElement = bar.querySelector('.btn-worker-lock')!;
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.textContent).toContain('Worker locked');
+    expect(bar.textContent).toContain('on the same GPUs');
+  });
+
+  it('can lock an offline worker that reports no lanes', async () => {
+    fixture.componentRef.setInput('lanesByProvider', { 'gpu-01': {} });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1, connection_state: 'offline' } });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('app-stats-empty-state')).not.toBeNull();
+    const button: HTMLButtonElement = fixture.nativeElement.querySelector('.btn-worker-lock');
+    expect(button).not.toBeNull();
+    button.click();
+    await fixture.whenStable();
+    expect(lockLane).toHaveBeenCalledWith(1, WORKER_LOCK_LANE_ID, null);
+  });
+
+  it('drops a worker lock request when the operator switches workers', async () => {
+    let reject!: (reason: unknown) => void;
+    lockLane.mockImplementationOnce(() => new Promise((_, r) => (reject = r)));
+    const pending = panel.handleToggleWorkerLock();
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-embed': lane({ model: 'org/embed', runtime_state: 'loaded' }) },
+      'gpu-02': {},
+    });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1 }, 'gpu-02': { provider_id: 2 } });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-02');
+    fixture.detectChanges();
+    expect(panel.lockingLaneId()).toBeNull();
+    reject({ status: 500, error: { error: 'boom' } });
+    await pending;
+    expect(panel.lockError()).toBeNull();
+  });
+
+  it('reports a failed worker lock', async () => {
+    lockLane.mockImplementationOnce(() => Promise.reject({ status: 500, error: { error: 'boom' } }));
+    await panel.handleToggleWorkerLock();
+    expect(panel.lockError()).toContain('Lock of the worker failed');
+    expect(panel.isWorkerLocked()).toBe(false);
   });
 });
