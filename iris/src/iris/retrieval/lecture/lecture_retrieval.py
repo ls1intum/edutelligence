@@ -58,7 +58,7 @@ class LectureRetrieval(SubPipeline):
     It combines various sources of lecture-related data and formats them into a single DTO for further processing.
     """
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         pipeline_id = "lecture_retrieval_pipeline"
         embedding_model = resolve_model(
@@ -78,11 +78,19 @@ class LectureRetrieval(SubPipeline):
         self._transcription_presence_cache: dict = {}
         self._release_cache: dict[tuple[int, int, Optional[str]], bool] = {}
 
-        self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(client)
-        self.lecture_transcription_pipeline = LectureTranscriptionRetrieval(client)
-        self.lecture_unit_page_chunk_pipeline = LecturePageChunkRetrieval(client)
+        # `local` selects only the reranker: retrieval makes no chat model call, and
+        # the query embedding must match the ingested vectors in either mode.
+        self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(
+            client, local=local
+        )
+        self.lecture_transcription_pipeline = LectureTranscriptionRetrieval(
+            client, local=local
+        )
+        self.lecture_unit_page_chunk_pipeline = LecturePageChunkRetrieval(
+            client, local=local
+        )
 
-        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
+        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=local)
         self.cohere_client = RerankRequestHandler(reranker_id)
 
         # The shared-embedding optimization only holds if every sub-pipeline

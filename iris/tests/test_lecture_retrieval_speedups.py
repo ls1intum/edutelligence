@@ -197,7 +197,8 @@ def test_the_agent_query_is_searched_in_every_domain_without_rewrites():
 
 
 def test_lecture_and_faq_retrieval_resolve_no_chat_model(monkeypatch):
-    """The agent writes the search query, so retrieval needs no chat model."""
+    """The agent writes the search query, so retrieval needs no chat model; the
+    reranker follows local mode."""
     from iris.retrieval import basic_retrieval, faq_retrieval
     from iris.retrieval.lecture import (
         lecture_page_chunk_retrieval,
@@ -209,7 +210,7 @@ def test_lecture_and_faq_retrieval_resolve_no_chat_model(monkeypatch):
     roles = []
 
     def resolve(pipeline_id, _variant, role, local):
-        roles.append((pipeline_id, role))
+        roles.append((pipeline_id, role, local))
         return "shared-model"
 
     for module in (
@@ -232,11 +233,16 @@ def test_lecture_and_faq_retrieval_resolve_no_chat_model(monkeypatch):
                 monkeypatch.setattr(module, name, MagicMock())
     monkeypatch.setattr(faq_retrieval, "init_faq_schema", MagicMock())
 
-    lecture_retrieval.LectureRetrieval(MagicMock())
+    lecture_retrieval.LectureRetrieval(MagicMock(), local=True)
     faq_retrieval.FaqRetrieval(MagicMock())
 
     assert roles
-    assert all(role in {"embedding", "reranker"} for _pipeline, role in roles)
+    assert all(role in {"embedding", "reranker"} for _pipeline, role, _local in roles)
+    # Only the reranker follows the course's local mode; the query embedding has
+    # to match the ingested vectors either way.
+    assert {local for _pipeline, role, local in roles if role == "reranker"} == {True}
+    assert {local for _pipeline, role, local in roles if role == "embedding"} == {False}
+    assert len([1 for _pipeline, role, _local in roles if role == "reranker"]) == 4
 
 
 def test_final_reranks_run_concurrently_and_preserve_results():

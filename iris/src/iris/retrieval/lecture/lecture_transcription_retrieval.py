@@ -37,7 +37,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
     """LectureTranscriptionRetrieval retrieves lecture transcription data from the database by applying search filters
     and processing the transcription segments."""
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_transcriptions_retrieval_pipeline")
         pipeline_id = "lecture_transcriptions_retrieval_pipeline"
         embedding_model = resolve_model(
@@ -49,7 +49,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
         self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
             client
         )
-        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
+        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=local)
         self.cohere_client = RerankRequestHandler(reranker_id)
         self.tokens = []
         # Per-request cache of lecture unit metadata, keyed by

@@ -45,7 +45,7 @@ class LectureUnitSegmentRetrieval(SubPipeline):
     """LectureUnitSegmentRetrieval retrieves lecture unit segments based on search queries and returns the matching
     results."""
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_unit_segment_retrieval_pipeline")
         pipeline_id = "lecture_unit_segment_retrieval_pipeline"
         embedding_model = resolve_model(
@@ -54,7 +54,7 @@ class LectureUnitSegmentRetrieval(SubPipeline):
         self.llm_embedding = LlmRequestHandler(embedding_model)
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
-        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
+        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=local)
         self.cohere_client = RerankRequestHandler(reranker_id)
         self.tokens = []
         # Per-request cache of lecture unit metadata, keyed by

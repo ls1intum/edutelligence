@@ -170,17 +170,23 @@ llm_configuration:
   lecture_retrieval_pipeline:
     default:
       embedding: oai-embedding-small
-      reranker: cohere
+      reranker:
+        local: qwen3-reranker-8b
+        cloud: cohere
 
   lecture_unit_segment_retrieval_pipeline:
     default:
       embedding: oai-embedding-small
-      reranker: cohere
+      reranker:
+        local: qwen3-reranker-8b
+        cloud: cohere
 
   lecture_transcriptions_retrieval_pipeline:
     default:
       embedding: oai-embedding-small
-      reranker: cohere
+      reranker:
+        local: qwen3-reranker-8b
+        cloud: cohere
 
   faq_retrieval_pipeline:
     default:

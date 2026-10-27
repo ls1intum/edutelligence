@@ -40,14 +40,14 @@ class LecturePageChunkRetrieval(SubPipeline):
 
     tokens: List[TokenUsageDTO]
 
-    def __init__(self, client: WeaviateClient):
+    def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         pipeline_id = "lecture_retrieval_pipeline"
         embedding_model = resolve_model(
             pipeline_id, "default", "embedding", local=False
         )
         self.llm_embedding = LlmRequestHandler(embedding_model)
-        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
+        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=local)
         self.cohere_client = RerankRequestHandler(reranker_id)
         self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
             client

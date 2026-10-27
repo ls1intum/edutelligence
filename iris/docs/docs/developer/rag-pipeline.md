@@ -106,7 +106,7 @@ The parallel sources have different roles:
 | `LectureTranscriptionRetrieval` | `LectureTranscriptions` | Matching transcription content. |
 | `LectureUnitSegmentRetrieval`   | `LectureUnitSegments`   | Combined segment material.      |
 
-Retrieval requests carry course, lecture, lecture-unit, and Artemis-instance scope. On the current default branch, individual retrievers apply a subset of that scope rather than consistently composing every supplied identifier; callers must not treat lecture-unit isolation as guaranteed until the corresponding retrieval-filter change is merged. Reranking is an Iris stage over the applicable retrieved results; its configured provider and model must not be inferred from this page.
+Retrieval requests carry course, lecture, lecture-unit, and Artemis-instance scope. On the current default branch, individual retrievers apply a subset of that scope rather than consistently composing every supplied identifier; callers must not treat lecture-unit isolation as guaranteed until the corresponding retrieval-filter change is merged. Reranking is an Iris stage over the applicable retrieved results. The reranker follows the course's local mode: the `reranker` role of the three lecture retrieval pipelines can name a `local` and a `cloud` model (the example configuration uses `qwen3-reranker-8b` on Logos and `cohere`), so a course in local mode sends neither its question nor slide text to a cloud reranker. A single model name applies to both modes. The query embedding always uses the one configured embedding model, because it must match the ingested vectors.
 
 ## FAQ retrieval and citations
 

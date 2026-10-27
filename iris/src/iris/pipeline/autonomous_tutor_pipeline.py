@@ -130,7 +130,10 @@ class AutonomousTutorPipeline(
             )
 
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(state.db.client)
+            self.lecture_retriever = LectureRetrieval(
+                state.db.client,
+                local=state.dto.settings is not None and state.dto.settings.is_local(),
+            )
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
