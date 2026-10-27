@@ -11,4 +11,6 @@ export interface MenuItem {
   roles: UserRole[];
   /** Only shown when the agent runner is actually running on this deployment. */
   requiresAgent?: boolean;
+  /** Only shown to the caller's own team members; logos_admin is exempt. */
+  requiresTeam?: boolean;
 }
