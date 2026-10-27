@@ -69,12 +69,23 @@ describe('ModelRequests', () => {
     expect(vote).not.toHaveBeenCalled();
   });
 
-  it('surfaces the backend error and keeps the typed name', async () => {
+  it('surfaces the backend error in the failure modal and keeps the typed name', async () => {
     vote.mockRejectedValueOnce({ error: { error: 'This model is already available in Logos.' } });
     page.name.set('gpt-4');
     await page.submit();
-    expect(page.error()).toBe('This model is already available in Logos.');
-    // The field is kept so the user can correct the name instead of retyping.
+    // Vote failures go to the modal, not the inline load-error line ...
+    expect(page.voteError()).toBe('This model is already available in Logos.');
+    expect(page.error()).toBeNull();
+    // ... and the field is kept so the user can correct the name instead of retyping.
     expect(page.name()).toBe('gpt-4');
+  });
+
+  it('clears the failure modal when closed', async () => {
+    vote.mockRejectedValueOnce({ error: { error: 'This model is already available in Logos.' } });
+    page.name.set('gpt-4');
+    await page.submit();
+    expect(page.voteError()).not.toBeNull();
+    page.closeVoteError();
+    expect(page.voteError()).toBeNull();
   });
 });

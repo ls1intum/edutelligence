@@ -62,7 +62,48 @@
     code {
       overflow-wrap: anywhere;
     }
+
+    .hf-link {
+      color: rgb(var(--color-primary-500));
+      text-decoration: underline;
+    }
+
+    .help-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      margin-left: 6px;
+      border: none;
+      border-radius: 50%;
+      background: transparent;
+      color: rgb(var(--color-outline-200));
+      cursor: pointer;
+      font-size: 0.95rem;
+      vertical-align: text-bottom;
+      transition: color 120ms ease, background-color 120ms ease;
+
+      &:hover,
+      &:focus-visible {
+        color: rgb(var(--color-primary-500));
+        background: rgb(var(--color-primary-500) / var(--opacity-soft));
+      }
+
+      &[aria-expanded='true'] {
+        color: rgb(var(--color-primary-500));
+      }
+    }
   }
+}
+
+.help-image {
+  display: block;
+  margin-top: 10px;
+  width: 100%;
+  max-width: 300px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-subtle));
 }
 
 button.primary {

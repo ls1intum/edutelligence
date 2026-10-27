@@ -42,13 +42,14 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorHfReachabil
  * plain name.
  *
  * A submission is only recorded when the name passes the Hugging Face
- * precheck (via the orchestrator): the repository must be visible to the
- * central HF_TOKEN, otherwise the demand signal would point at a model that
- * cannot be pulled. The reachable answer gates the submission only and is not
- * stored; the row instead carries the gating verdict in {@code is_gated}
- * (true when the Hub rejects the repository as gated). Rows that predate the
- * precheck are backfilled by {@link RequestedModelHfStatusSweeper} at
- * application start.
+ * precheck (via the orchestrator): the repository must be reachable for the
+ * central HF_TOKEN, or gated — a gated repository can be pulled once an admin
+ * accepts its license, so it is a legitimate request, flagged with
+ * {@code is_gated = true}. The row carries the gating verdict in
+ * {@code is_gated} (true when the Hub rejects the repository as gated, false
+ * when it is reachable); a repository the Hub does not know at all is
+ * refused. Rows that predate the precheck are backfilled by
+ * {@link RequestedModelHfStatusSweeper} at application start.
  */
 @Service
 public class RequestedModelService {
@@ -155,18 +156,20 @@ public class RequestedModelService {
      * a model or alias added while the precheck was in flight is refused, too.
      * Only then is the name
      * checked against Hugging Face through the orchestrator: the vote is
-     * recorded when the repository is visible to the central HF_TOKEN,
-     * refused when the Hub does not know it, and retriable when the Hub could
-     * not be asked. Otherwise the model's registry row is created if needed
-     * and the user's vote recorded. The unique (model, user) index means a
-     * second vote by the same user is a no-op — everyone still gets exactly
-     * one vote.
+     * recorded when the repository is visible to the central HF_TOKEN or
+     * gated (the row is then flagged with {@code is_gated = true}), refused
+     * when the Hub does not know it, and retriable when the Hub could not be
+     * asked. Otherwise the model's registry row is created if needed and the
+     * user's vote recorded. The unique (model, user) index means a second
+     * vote by the same user is a no-op — everyone still gets exactly one
+     * vote.
      *
      * @throws IllegalArgumentException when no name is given, the name is not
      *     in {@code provider/model} form, or it exceeds the maximum length
      * @throws ModelAlreadyAvailableException when the name is already in Logos
      * @throws ModelNotOnHuggingFaceException when the Hub does not know the
-     *     repository (or the central HF_TOKEN may not see it)
+     *     repository (or the central HF_TOKEN may not see it, for a reason
+     *     other than gating)
      * @throws HfReachabilityUnavailableException when the precheck timed out
      *     or the orchestrator could not be reached
      */
@@ -191,7 +194,7 @@ public class RequestedModelService {
         if (isAlreadyAvailable(normalized)) {
             throw new ModelAlreadyAvailableException("This model is already available in Logos.");
         }
-        requireModelOnHuggingFace(normalized);
+        boolean gated = requireModelOnHuggingFace(normalized);
 
         // Only the registry/vote persistence is transactional, so the advisory
         // locks are bound to the same transaction they protect.
@@ -212,9 +215,9 @@ public class RequestedModelService {
                 created.setName(normalized);
                 return created;
             });
-            // The precheck just answered reachable: the repository is not
-            // gated, so record that verdict with the row.
-            model.setIsGated(false);
+            // The precheck just answered: record its gating verdict with the
+            // row.
+            model.setIsGated(gated);
             model = requestedModelRepository.save(model);
 
             if (!voteRepository.existsByRequestedModelIdAndUserId(model.getId(), userId)) {
@@ -263,17 +266,26 @@ public class RequestedModelService {
 
     /**
      * The Hugging Face precheck gate for a submission. The normalized name is
-     * the repository id; only {@code reachable} lets the vote through.
-     * {@code rejected} is a verdict from the Hub, {@code unknown} (Hub
-     * timeout, orchestrator unreachable) is not a verdict — both refuse the
-     * vote, with a message that tells the user which case they hit.
+     * the repository id; {@code reachable} and a decisive {@code model-gated}
+     * rejection let the vote through — a gated repository can be pulled once
+     * an admin accepts its license, so it is a legitimate request to flag.
+     * {@code rejected} for any other reason is a verdict from the Hub,
+     * {@code unknown} (Hub timeout, orchestrator unreachable) is not a
+     * verdict — both refuse the vote, with a message that tells the user
+     * which case they hit.
+     *
+     * @return true when the Hub found the repository gated, false when it is
+     *     reachable
      */
-    private void requireModelOnHuggingFace(String normalized) {
+    private boolean requireModelOnHuggingFace(String normalized) {
         HfReachabilityResult reachability = hfReachabilityClient.check(normalized);
         if (HfReachabilityResult.STATUS_REACHABLE.equals(reachability.status())) {
-            return;
+            return false;
         }
         if (HfReachabilityResult.STATUS_REJECTED.equals(reachability.status())) {
+            if (HfReachabilityResult.REASON_MODEL_GATED.equals(reachability.reasonCode())) {
+                return true;
+            }
             throw new ModelNotOnHuggingFaceException(
                 "Model not found on HuggingFace. Maybe it is a cloud model (unsupported)?");
         }

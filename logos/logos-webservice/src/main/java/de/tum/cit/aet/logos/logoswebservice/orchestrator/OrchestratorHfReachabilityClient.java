@@ -50,6 +50,8 @@ public class OrchestratorHfReachabilityClient {
         public static final String STATUS_REACHABLE = "reachable";
         public static final String STATUS_REJECTED = "rejected";
         public static final String STATUS_UNKNOWN = "unknown";
+        /** Reason code the orchestrator answers with when the repository is gated. */
+        public static final String REASON_MODEL_GATED = "model-gated";
 
         public static HfReachabilityResult unknown(String detail) {
             return new HfReachabilityResult(STATUS_UNKNOWN, null, detail);

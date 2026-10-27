@@ -83,6 +83,32 @@ class ModelRequestControllerTest {
     }
 
     @Test
+    void vote_acceptsAGatedModelAndFlagsIt() throws Exception {
+        // A gated repository is a legitimate request: it only needs a license
+        // acceptance before it can be pulled, so the vote goes through and the
+        // row is flagged as gated.
+        Mockito.when(hfReachabilityClient.check("meta-llama/llama-3.1-8b-instruct"))
+            .thenReturn(new HfReachabilityResult(
+                HfReachabilityResult.STATUS_REJECTED, HfReachabilityResult.REASON_MODEL_GATED,
+                "Repository access requires an authorized HF_TOKEN."));
+
+        mvc.perform(post("/logosdb/add_model_request")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"name\": \"meta-llama/llama-3.1-8b-instruct\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.name").value("meta-llama/llama-3.1-8b-instruct"))
+           .andExpect(jsonPath("$.request_count").value(1))
+           .andExpect(jsonPath("$.has_voted").value(true))
+           .andExpect(jsonPath("$.is_gated").value(true));
+
+        // The gating verdict is stored on the registry row.
+        assertThat(jdbc.queryForObject(
+            "SELECT is_gated FROM requested_models WHERE name = 'meta-llama/llama-3.1-8b-instruct'",
+            Boolean.class)).isTrue();
+    }
+
+    @Test
     void vote_isOnePerUserPerModel() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
@@ -338,7 +364,7 @@ class ModelRequestControllerTest {
         Mockito.when(hfReachabilityClient.check("acme/legacy-a"))
             .thenReturn(new HfReachabilityResult(HfReachabilityResult.STATUS_REACHABLE, null, null));
         Mockito.when(hfReachabilityClient.check("acme/legacy-b"))
-            .thenReturn(new HfReachabilityResult(HfReachabilityResult.STATUS_REJECTED, "model-gated", null));
+            .thenReturn(new HfReachabilityResult(HfReachabilityResult.STATUS_REJECTED, HfReachabilityResult.REASON_MODEL_GATED, null));
         Mockito.when(hfReachabilityClient.check("acme/legacy-c"))
             .thenReturn(new HfReachabilityResult(HfReachabilityResult.STATUS_REJECTED, "model-not-found-or-unauthorized", null));
         // A timeout is no verdict: the row must stay empty.

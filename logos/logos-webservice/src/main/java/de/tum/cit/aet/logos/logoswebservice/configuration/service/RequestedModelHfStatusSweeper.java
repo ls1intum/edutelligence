@@ -28,12 +28,6 @@ public class RequestedModelHfStatusSweeper implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(RequestedModelHfStatusSweeper.class);
 
-    /**
-     * The orchestrator's reason code ({@code REASON_MODEL_GATED}) for a
-     * repository that is gated: access requires an authorized HF_TOKEN.
-     */
-    private static final String REASON_MODEL_GATED = "model-gated";
-
     private final RequestedModelRepository requestedModelRepository;
     private final OrchestratorHfReachabilityClient hfReachabilityClient;
     private final RequestedModelService requestedModelService;
@@ -87,6 +81,6 @@ public class RequestedModelHfStatusSweeper implements ApplicationRunner {
      */
     private Boolean isGated(HfReachabilityResult result) {
         return !HfReachabilityResult.STATUS_REACHABLE.equals(result.status())
-            && REASON_MODEL_GATED.equals(result.reasonCode());
+            && HfReachabilityResult.REASON_MODEL_GATED.equals(result.reasonCode());
     }
 }

@@ -24,22 +24,23 @@
         autocomplete="off"
       />
       <small>
-        Please enter the <a href="https://huggingface.co" target="_blank" rel="noopener noreferrer" style="color: #0066cc; text-decoration: underline;">HuggingFace</a> model name or Hugging Face URL.
-        <button 
-          type="button" 
-          class="btn btn-link p-0 ms-1 align-baseline" 
-          (click)="showHelpImage.set(!showHelpImage())" 
-          aria-label="Help">
-          (?)
+        Please enter the
+        <a href="https://huggingface.co" target="_blank" rel="noopener noreferrer" class="hf-link">HuggingFace</a>
+        model name or Hugging Face URL.
+        <button
+          type="button"
+          class="help-toggle"
+          (click)="showHelpImage.set(!showHelpImage())"
+          [attr.aria-expanded]="showHelpImage()"
+          [attr.aria-label]="showHelpImage() ? 'Hide copy instructions' : 'Show copy instructions'"
+        >
+          <i class="pi pi-question-circle" aria-hidden="true"></i>
         </button>
-
       </small>
 
       @if (showHelpImage()) {
-        <div class="mt-2">
-          <img src="/huggingface-copy-icon.png" alt="Help instructions" class="img-fluid" style="max-width: 300px;"/>
-        </div>
-}
+        <img src="/huggingface-copy-icon.png" alt="How to copy a model name from Hugging Face" class="help-image" />
+      }
     </label>
 
     <button class="primary" [disabled]="!name().trim() || submitting()" (click)="submit()">
@@ -100,4 +101,17 @@
       </table>
     }
   </section>
+
+  <!-- ── Failed Vote Dialog ───────────────────────────────────────────────── -->
+  <app-modal-confirm
+    [visible]="voteError() !== null"
+    (visibleChange)="$event || closeVoteError()"
+    (confirmed)="closeVoteError()"
+    title="Model request failed"
+    [message]="voteError() ?? ''"
+    icon="pi-exclamation-triangle"
+    confirmLabel="OK"
+    [confirmOnly]="true"
+    [danger]="false"
+  ></app-modal-confirm>
 </section>
