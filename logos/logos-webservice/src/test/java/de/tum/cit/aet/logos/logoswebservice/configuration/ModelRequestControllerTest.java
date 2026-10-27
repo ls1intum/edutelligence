@@ -133,6 +133,31 @@ class ModelRequestControllerTest {
     }
 
     @Test
+    void vote_rejectsAModelServedDuringThePrecheck() throws Exception {
+        // An admin adds the model while the precheck is in flight: the outer
+        // availability check already answered "not served", so only the
+        // re-check under the shared model-name/alias namespace lock can catch
+        // it and refuse the vote.
+        Mockito.when(hfReachabilityClient.check("openai/raced"))
+            .thenAnswer(invocation -> {
+                jdbc.update("INSERT INTO models (id, name) VALUES (5100, 'openai/raced')");
+                return new HfReachabilityResult(HfReachabilityResult.STATUS_REACHABLE, null, null);
+            });
+        try {
+            mvc.perform(post("/logosdb/add_model_request")
+                    .with(TestJwt.testUser())
+                    .contentType("application/json")
+                    .content("{\"name\": \"openai/raced\"}"))
+               .andExpect(status().isConflict())
+               .andExpect(jsonPath("$.error").value("This model is already available in Logos."));
+            assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM requested_models WHERE name = 'openai/raced'", Integer.class)).isZero();
+        } finally {
+            jdbc.update("DELETE FROM models WHERE id = 5100");
+        }
+    }
+
+    @Test
     void vote_rejectedByTheHfPrecheckIsBadRequest() throws Exception {
         Mockito.when(hfReachabilityClient.check("openai/does-not-exist"))
             .thenReturn(new HfReachabilityResult(

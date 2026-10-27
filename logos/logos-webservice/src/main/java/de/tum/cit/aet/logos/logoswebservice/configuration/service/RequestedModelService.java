@@ -11,6 +11,7 @@ import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.RequestedModelResponse;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.RequestedModel;
@@ -112,17 +113,20 @@ public class RequestedModelService {
     private final ModelRepository modelRepository;
     private final ModelAliasRepository modelAliasRepository;
     private final OrchestratorHfReachabilityClient hfReachabilityClient;
+    private final TransactionTemplate transactionTemplate;
 
     public RequestedModelService(RequestedModelRepository requestedModelRepository,
                                  RequestedModelVoteRepository voteRepository,
                                  ModelRepository modelRepository,
                                  ModelAliasRepository modelAliasRepository,
-                                 OrchestratorHfReachabilityClient hfReachabilityClient) {
+                                 OrchestratorHfReachabilityClient hfReachabilityClient,
+                                 TransactionTemplate transactionTemplate) {
         this.requestedModelRepository = requestedModelRepository;
         this.voteRepository = voteRepository;
         this.modelRepository = modelRepository;
         this.modelAliasRepository = modelAliasRepository;
         this.hfReachabilityClient = hfReachabilityClient;
+        this.transactionTemplate = transactionTemplate;
     }
 
     /**
@@ -171,7 +175,10 @@ public class RequestedModelService {
      * processing, so the model is stored and listed under its plain name.
      *
      * Refused when the name is already served by Logos, as a model name or an
-     * alias of one (it is not something to request). Only then is the name
+     * alias of one (it is not something to request); that check is repeated
+     * under the shared model-name/alias namespace lock before persisting, so
+     * a model or alias added while the precheck was in flight is refused, too.
+     * Only then is the name
      * checked against Hugging Face through the orchestrator: the vote is
      * recorded when the repository is visible to the central HF_TOKEN,
      * refused when the Hub does not know it, and retriable when the Hub could
@@ -188,8 +195,11 @@ public class RequestedModelService {
      * @throws HfReachabilityUnavailableException when the precheck timed out
      *     or the orchestrator could not be reached
      */
-    @Transactional
     public RequestedModelResponse vote(Integer userId, String name) {
+        // Validation, the availability check and the Hugging Face precheck run
+        // without a transaction: the precheck is a remote round trip (bounded
+        // by the orchestrator's Hub timeout) and must not hold a pooled
+        // database connection while it waits for the answer.
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("A model name is required.");
         }
@@ -203,29 +213,42 @@ public class RequestedModelService {
             throw new IllegalArgumentException(
                 "The model name must be at most " + MAX_NAME_LENGTH + " characters.");
         }
-        if (modelRepository.existsByNameIgnoreCase(normalized)
-            || modelAliasRepository.existsByAliasIgnoreCase(normalized)) {
+        if (isAlreadyAvailable(normalized)) {
             throw new ModelAlreadyAvailableException("This model is already available in Logos.");
         }
         requireModelOnHuggingFace(normalized);
 
-        requestedModelRepository.lockRequestedModelsNamespace(REQUESTED_MODELS_NAMESPACE_LOCK_KEY);
-        RequestedModel model = requestedModelRepository.findByNameIgnoreCase(normalized).orElseGet(() -> {
-            RequestedModel created = new RequestedModel();
-            created.setName(normalized);
-            return created;
-        });
-        // The precheck just answered reachable: record the verdict with the row.
-        model.setHuggingFaceStatus(HfReachabilityResult.STATUS_REACHABLE);
-        model = requestedModelRepository.save(model);
+        // Only the registry/vote persistence is transactional, so the advisory
+        // locks are bound to the same transaction they protect.
+        return transactionTemplate.execute(status -> {
+            // The availability check above ran before the precheck, so a model
+            // or alias may have been added since. Re-check under the shared
+            // model-name/alias namespace lock — the same lock ModelService takes
+            // for its mutations: a concurrent add either commits before we read
+            // (and is rejected here) or waits for this transaction to finish.
+            modelAliasRepository.lockModelAliasNamespace(
+                ModelAliasRepository.MODEL_ALIAS_NAMESPACE_LOCK_KEY);
+            if (isAlreadyAvailable(normalized)) {
+                throw new ModelAlreadyAvailableException("This model is already available in Logos.");
+            }
+            requestedModelRepository.lockRequestedModelsNamespace(REQUESTED_MODELS_NAMESPACE_LOCK_KEY);
+            RequestedModel model = requestedModelRepository.findByNameIgnoreCase(normalized).orElseGet(() -> {
+                RequestedModel created = new RequestedModel();
+                created.setName(normalized);
+                return created;
+            });
+            // The precheck just answered reachable: record the verdict with the row.
+            model.setHuggingFaceStatus(HfReachabilityResult.STATUS_REACHABLE);
+            model = requestedModelRepository.save(model);
 
-        if (!voteRepository.existsByRequestedModelIdAndUserId(model.getId(), userId)) {
-            RequestedModelVote vote = new RequestedModelVote();
-            vote.setRequestedModelId(model.getId());
-            vote.setUserId(userId);
-            voteRepository.save(vote);
-        }
-        return toResponse(model, (int) voteRepository.countByRequestedModelId(model.getId()), true);
+            if (!voteRepository.existsByRequestedModelIdAndUserId(model.getId(), userId)) {
+                RequestedModelVote vote = new RequestedModelVote();
+                vote.setRequestedModelId(model.getId());
+                vote.setUserId(userId);
+                voteRepository.save(vote);
+            }
+            return toResponse(model, (int) voteRepository.countByRequestedModelId(model.getId()), true);
+        });
     }
 
     /**
@@ -298,6 +321,15 @@ public class RequestedModelService {
     @Transactional
     public int recordHfVerdictIfAbsent(Integer modelId, String status) {
         return requestedModelRepository.setHuggingFaceStatusIfNull(modelId, status);
+    }
+
+    /**
+     * Whether the name is already served by Logos, either as a model name or
+     * as an alias of one — in either case it is not something to request.
+     */
+    private boolean isAlreadyAvailable(String name) {
+        return modelRepository.existsByNameIgnoreCase(name)
+            || modelAliasRepository.existsByAliasIgnoreCase(name);
     }
 
     private void requireUser(Integer userId) {
