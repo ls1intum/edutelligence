@@ -15,6 +15,8 @@ export class ModalConfirmComponent {
   @Input({ required: true }) message!: string;
   @Input() icon = 'pi-trash';
   @Input() confirmLabel = 'Confirm';
+  /** Hide the Cancel button — a pure notification dialog that a single button dismisses. */
+  @Input() confirmOnly = false;
   @Input() danger = true;
   @Input() loading = false;
   @Output() visibleChange = new EventEmitter<boolean>();

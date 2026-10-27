@@ -71,4 +71,5 @@
 
     <include file="liquibase/changelog/065_nightly_benchmarks.xml"/>
     <include file="liquibase/changelog/066_lane_lock_restore.xml"/>
+    <include file="liquibase/changelog/067_requested_model_is_gated.xml"/>
 </databaseChangeLog>

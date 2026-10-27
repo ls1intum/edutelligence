@@ -13,36 +13,61 @@
   <section class="card">
     <h3>Request a model</h3>
 
-    <label class="field">
-      <span>Model name</span>
-      <input
-        type="text"
-        [value]="name()"
-        (input)="name.set($any($event.target).value)"
-        (keyup.enter)="submit()"
-        placeholder="e.g. openai/gpt-oss-120b"
-        autocomplete="off"
-      />
-      <small>
-        Please enter the <a href="https://huggingface.co" target="_blank" rel="noopener noreferrer" style="color: #0066cc; text-decoration: underline;">HuggingFace</a> model name or Hugging Face URL.
-        <button 
-          type="button" 
-          class="btn btn-link p-0 ms-1 align-baseline" 
-          (click)="showHelpImage.set(!showHelpImage())" 
-          aria-label="Help">
-          (?)
-        </button>
+    <div class="request-fields">
+      <label class="field">
+        <span>Model name</span>
+        <input
+          type="text"
+          [value]="name()"
+          (input)="name.set($any($event.target).value)"
+          (keyup.enter)="submit()"
+          placeholder="e.g. openai/gpt-oss-120b"
+          autocomplete="off"
+        />
+        <small>
+          Please enter the
+          <a href="https://huggingface.co" target="_blank" rel="noopener noreferrer" class="hf-link">HuggingFace</a>
+          model name or Hugging Face URL.
+          <button
+            type="button"
+            class="help-toggle"
+            (click)="showHelpImage.set(!showHelpImage())"
+            [attr.aria-expanded]="showHelpImage()"
+            [attr.aria-label]="showHelpImage() ? 'Hide copy instructions' : 'Show copy instructions'"
+          >
+            <i class="pi pi-question-circle" aria-hidden="true"></i>
+          </button>
+        </small>
 
-      </small>
+        @if (showHelpImage()) {
+          <img src="/huggingface-copy-icon.png" alt="How to copy a model name from Hugging Face" class="help-image" />
+        }
+      </label>
 
-      @if (showHelpImage()) {
-        <div class="mt-2">
-          <img src="/huggingface-copy-icon.png" alt="Help instructions" class="img-fluid" style="max-width: 300px;"/>
-        </div>
-}
-    </label>
+      <label class="field field--team">
+        <span>Requesting team</span>
+        <select
+          class="team-select"
+          [disabled]="teams().length === 0"
+          (change)="onTeamChange($any($event.target).value)"
+        >
+          @if (teams().length === 0) {
+            <option value="">No team</option>
+          } @else {
+            <option value="" [selected]="teamId() === null">Choose a team…</option>
+            @for (team of teams(); track team.id) {
+              <option [value]="team.id" [selected]="teamId() === team.id">{{ team.name }}</option>
+            }
+          }
+        </select>
+      </label>
+    </div>
 
-    <button class="primary" [disabled]="!name().trim() || submitting()" (click)="submit()">
+    <button
+      class="primary"
+      [disabled]="!name().trim() || teamId() === null || submitting()"
+      (click)="submit()"
+    >
       {{ submitting() ? 'Submitting…' : 'Vote for this model' }}
     </button>
   </section>
@@ -54,7 +79,7 @@
   }
 
   <section class="card">
-    @if (loading()) {
+    @if (loading() && requests().length === 0) {
       <p class="empty">Loading…</p>
     } @else if (requests().length === 0) {
       <p class="empty">No model requests yet — be the first to ask for one.</p>
@@ -87,7 +112,7 @@
                 } @else {
                   <button
                     class="ghost ghost--vote"
-                    [disabled]="submitting()"
+                    [disabled]="submitting() || teamId() === null"
                     (click)="toggle(request)"
                   >
                     Vote
@@ -100,4 +125,17 @@
       </table>
     }
   </section>
+
+  <!-- ── Failed Vote Dialog ───────────────────────────────────────────────── -->
+  <app-modal-confirm
+    [visible]="voteError() !== null"
+    (visibleChange)="$event || closeVoteError()"
+    (confirmed)="closeVoteError()"
+    title="Model request failed"
+    [message]="voteError() ?? ''"
+    icon="pi-exclamation-triangle"
+    confirmLabel="OK"
+    [confirmOnly]="true"
+    [danger]="false"
+  ></app-modal-confirm>
 </section>

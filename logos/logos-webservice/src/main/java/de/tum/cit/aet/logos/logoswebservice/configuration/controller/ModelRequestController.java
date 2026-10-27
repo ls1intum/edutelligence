@@ -1,9 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
 import java.util.List;
-import java.util.Map;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
@@ -45,35 +43,25 @@ public class ModelRequestController {
     }
 
     /**
-     * Cast the caller's vote for a model. Refused (409) when the model is
-     * already served by Logos. Re-voting an already-voted model is a no-op.
+     * Cast the caller's vote for a model, naming the team it is wanted for.
+     * The service's outcomes are mapped to HTTP in
+     * {@link ModelRequestExceptionHandler}: 409 when the model is already
+     * served by Logos, 400 when the name is invalid, when no team is given
+     * or the caller is not a member of it, or when the Hugging Face precheck
+     * does not find the repository, and 503 when the precheck could not be
+     * performed (the user should retry). Re-voting an already-voted model is
+     * a no-op.
      */
     @PostMapping("/add_model_request")
-    public ResponseEntity<?> addModelRequest(@RequestBody SubmitModelRequestDTO req,
-                                             @RequestAttribute("authContext") AuthContext auth) {
-        if (req == null || req.name() == null || req.name().isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "name is required"));
-        }
-        try {
-            return ResponseEntity.ok(requestedModelService.vote(auth.userId(), req.name()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-        } catch (RequestedModelService.ModelAlreadyAvailableException e) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
-        }
+    public ResponseEntity<RequestedModelResponse> addModelRequest(@RequestBody SubmitModelRequestDTO req,
+                                                                  @RequestAttribute("authContext") AuthContext auth) {
+        return ResponseEntity.ok(requestedModelService.vote(auth.userId(), req.name(), req.teamId()));
     }
 
     /** Take the caller's vote back for a model. Idempotent. */
     @PostMapping("/remove_model_request")
-    public ResponseEntity<?> removeModelRequest(@RequestBody RemoveModelRequestDTO req,
-                                                @RequestAttribute("authContext") AuthContext auth) {
-        if (req == null || req.name() == null || req.name().isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "name is required"));
-        }
-        try {
-            return ResponseEntity.ok(requestedModelService.undo(auth.userId(), req.name()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-        }
+    public ResponseEntity<RequestedModelResponse> removeModelRequest(@RequestBody RemoveModelRequestDTO req,
+                                                                     @RequestAttribute("authContext") AuthContext auth) {
+        return ResponseEntity.ok(requestedModelService.undo(auth.userId(), req.name()));
     }
 }

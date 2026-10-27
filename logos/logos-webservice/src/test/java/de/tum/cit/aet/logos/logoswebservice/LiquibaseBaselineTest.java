@@ -338,6 +338,21 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration067_requestedModelIsGatedColumnExists() {
+        // The decisive Hugging Face gating verdict a requested model carries
+        // (true when the Hub rejects the repository as gated); null until the
+        // precheck has produced a verdict, so the column must be nullable.
+        assertThat(columnExists("requested_models", "is_gated")).isTrue();
+    }
+
+    @Test
+    void migration067_requestedModelFirstRequestingTeamColumnExists() {
+        // The team that first requested the model; null on rows that predate
+        // the column, so it must be nullable.
+        assertThat(columnExists("requested_models", "first_requesting_team")).isTrue();
+    }
+
+    @Test
     void migration003_backfillsKeyForKeylessMembership() {
         // A current membership with no developer key for that team (the legacy
         // logos_admin case) must receive exactly one active developer key whose

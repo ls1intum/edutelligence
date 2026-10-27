@@ -13,6 +13,9 @@ export interface ModelRequest {
   name: string;
   request_count: number;
   has_voted: boolean;
+  is_gated: boolean | null;
+  /** The team that first requested the model; null until a vote named one. */
+  first_requesting_team: number | null;
 }
 
 /**
@@ -32,9 +35,14 @@ export class ModelRequestService {
     return firstValueFrom(this.http.post<ModelRequest[]>('/api/logosdb/get_model_requests', {}));
   }
 
-  /** Cast the caller's vote for a model (a no-op if they already voted). */
-  vote(name: string): Promise<ModelRequest> {
-    return firstValueFrom(this.http.post<ModelRequest>('/api/logosdb/add_model_request', { name }));
+  /**
+   * Cast the caller's vote for a model, naming the team it is wanted for (a
+   * no-op if they already voted).
+   */
+  vote(name: string, teamId: number): Promise<ModelRequest> {
+    return firstValueFrom(
+      this.http.post<ModelRequest>('/api/logosdb/add_model_request', { name, team_id: teamId }),
+    );
   }
 
   /** Take the caller's vote back for a model (idempotent). */

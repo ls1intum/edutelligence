@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 import { authGuard } from './core/auth/guards/auth.guard';
 import { roleGuard } from './core/auth/guards/role.guard';
 import { hasKeysGuard } from './core/auth/guards/has-keys.guard';
+import { hasTeamGuard } from './core/auth/guards/has-team.guard';
 import { ALL_ROLES } from './shared/constants/roles';
 
 export const routes: Routes = [
@@ -17,7 +18,7 @@ export const routes: Routes = [
     loadComponent: () => import('./core/layout/shell/shell').then(m => m.Shell),
     children: [
       { path: 'statistics',      title: 'Statistics · Logos',      data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/statistics/statistics').then(m => m.Statistics) },
-      { path: 'models',         title: 'Models · Logos',           data: { roles: ALL_ROLES },                canActivate: [roleGuard], loadComponent: () => import('./features/models/models').then(m => m.Models) },
+      { path: 'models',         title: 'Models · Logos',           data: { roles: ALL_ROLES },                canActivate: [roleGuard, hasTeamGuard], loadComponent: () => import('./features/models/models').then(m => m.Models) },
       { path: 'models/:id/details', title: 'Model Details · Logos', data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/model-error-report/model-error-report').then(m => m.ModelErrorReport) },
       { path: 'models/:id/errors', redirectTo: 'models/:id/details', pathMatch: 'full' },
       { path: 'providers',      title: 'Providers · Logos',        data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/providers/providers').then(m => m.Providers) },

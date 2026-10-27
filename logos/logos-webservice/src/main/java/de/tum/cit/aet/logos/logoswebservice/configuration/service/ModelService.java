@@ -40,12 +40,6 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
 @Service
 public class ModelService {
 
-    /**
-     * Arbitrary stable key identifying the shared model-name/alias namespace
-     * to {@code pg_advisory_xact_lock}; the value itself is meaningless.
-     */
-    private static final long MODEL_ALIAS_NAMESPACE_LOCK_KEY = 0x4C4F47414C494153L; // "LOGALIAS"
-
     private final ModelRepository modelRepository;
     private final ModelWeightService weightService;
     private final OrchestratorNotificationService orchestratorNotificationService;
@@ -242,7 +236,8 @@ public class ModelService {
      * The lock is released automatically when the surrounding transaction ends.
      */
     private void lockModelAliasNamespace() {
-        modelAliasRepository.lockModelAliasNamespace(MODEL_ALIAS_NAMESPACE_LOCK_KEY);
+        modelAliasRepository.lockModelAliasNamespace(
+            ModelAliasRepository.MODEL_ALIAS_NAMESPACE_LOCK_KEY);
     }
 
     private void ensureNameDoesNotCollideWithAlias(String name) {

@@ -16,14 +16,16 @@
       <ng-content select="[modal-error]" />
     </div>
     <div class="confirm-footer">
-      <button
-        class="btn-secondary"
-        type="button"
-        [disabled]="loading"
-        (click)="visibleChange.emit(false)"
-      >
-        Cancel
-      </button>
+      @if (!confirmOnly) {
+        <button
+          class="btn-secondary"
+          type="button"
+          [disabled]="loading"
+          (click)="visibleChange.emit(false)"
+        >
+          Cancel
+        </button>
+      }
       <button
         [class]="danger ? 'btn-danger' : 'btn-primary'"
         type="button"
