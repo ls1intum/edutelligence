@@ -133,3 +133,13 @@ docker compose -f <compose-file> logs -f pyris-app
 ```
 
 The log verbosity for third-party libraries is configured in `iris/src/iris/common/logging_config.py`.
+
+## Watchdog
+
+A watchdog thread (`iris/src/iris/watchdog.py`) restarts Iris when a model client's connection pool deadlocks: every request on that model would otherwise hang without any error. It checks the pool locks every 5 seconds. When a lock stays held on two checks in a row, it logs a thread dump, fails the open runs ("Iris had to restart"), sends an alert and exits; Docker (`restart: unless-stopped`) starts Iris again. At most one restart per 30 minutes; after that, Iris stays up and sends an urgent alert so someone restarts it by hand. Set `watchdog_enabled: false` in `application.yml` to turn it off.
+
+Alerts go to [Pushover](https://pushover.net/) when `PYRIS_PUSHOVER_APP_TOKEN` and `PYRIS_PUSHOVER_USER_KEY` are set (for example in the compose env file); `PYRIS_ALERT_NAME` names the instance. Without them, alerts are only logged.
+
+To see all thread stacks of a running Iris, for example when answers hang: `docker kill -s USR1 pyris-app`, then read the container log.
+
+The container has a memory limit (`PYRIS_MEMORY_LIMIT`, default `6g`), so running out of memory restarts Iris instead of making the host kill other services.

@@ -1,3 +1,5 @@
+import faulthandler
+import signal
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -18,6 +20,7 @@ from iris.pipeline.shared.global_search_intent_classifier import (
     warm_up as warm_up_intent_classifier,
 )
 from iris.tracing import init_langfuse, shutdown_langfuse
+from iris.watchdog import watchdog
 from iris.web.routers.faq_census import router as faq_census_router
 from iris.web.routers.health.health_endpoint import router as health_router
 from iris.web.routers.ingestion_census import router as ingestion_census_router
@@ -49,6 +52,10 @@ async def lifespan(_: FastAPI):
     )
 
     ingestion_worker.start()
+    if settings.watchdog_enabled:
+        watchdog.start()
+    # `docker kill -s USR1 pyris-app` writes all thread stacks to the log.
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     yield
 
     ingestion_worker.stop()

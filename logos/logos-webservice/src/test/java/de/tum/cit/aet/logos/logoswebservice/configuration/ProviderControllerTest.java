@@ -645,10 +645,10 @@ class ProviderControllerTest {
 
     @Test
     void maintenanceEndpoints_requireLogosAdmin() throws Exception {
-        mvc.perform(get("/logosdb/providers/logosnode/maintenance")
+        mvc.perform(get("/logosdb/maintenance")
                 .with(TestJwt.adminUser()))
            .andExpect(status().isForbidden());
-        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_calibration")
+        mvc.perform(post("/logosdb/maintenance/release_calibration")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001,\"claim_token\":\"t\"}"))
@@ -662,7 +662,7 @@ class ProviderControllerTest {
         when(workerAdminClient.maintenanceStatus())
             .thenReturn(ResponseEntity.ok(Map.of("free", false, "limit", 1)));
 
-        mvc.perform(get("/logosdb/providers/logosnode/maintenance")
+        mvc.perform(get("/logosdb/maintenance")
                 .with(TestJwt.logosAdmin()))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.free").value(false))
@@ -674,7 +674,7 @@ class ProviderControllerTest {
         when(workerAdminClient.maintenanceStatus())
             .thenThrow(new IllegalStateException("Orchestrator URL or internal secret not configured"));
 
-        mvc.perform(get("/logosdb/providers/logosnode/maintenance")
+        mvc.perform(get("/logosdb/maintenance")
                 .with(TestJwt.logosAdmin()))
            .andExpect(status().isServiceUnavailable())
            .andExpect(jsonPath("$.error").value("Orchestrator URL or internal secret not configured"));
@@ -682,7 +682,7 @@ class ProviderControllerTest {
 
     @Test
     void releaseCalibrationClaim_requiresProviderAndToken() throws Exception {
-        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_calibration")
+        mvc.perform(post("/logosdb/maintenance/release_calibration")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001}"))
@@ -697,7 +697,7 @@ class ProviderControllerTest {
         when(workerAdminClient.releaseCalibrationClaim(6001, "claim-1"))
             .thenReturn(ResponseEntity.ok(Map.of("released", true, "forced", true)));
 
-        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_calibration")
+        mvc.perform(post("/logosdb/maintenance/release_calibration")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001,\"claim_token\":\"claim-1\"}"))
@@ -723,7 +723,7 @@ class ProviderControllerTest {
                 "{\"detail\":\"The worker still reports a calibration session\"}".getBytes(StandardCharsets.UTF_8),
                 StandardCharsets.UTF_8));
 
-        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_calibration")
+        mvc.perform(post("/logosdb/maintenance/release_calibration")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001,\"claim_token\":\"claim-1\"}"))
@@ -736,12 +736,12 @@ class ProviderControllerTest {
 
     @Test
     void releaseRecovery_requiresLogosAdmin() throws Exception {
-        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+        mvc.perform(post("/logosdb/maintenance/release_recovery")
                 .with(TestJwt.adminUser())
                 .contentType("application/json")
                 .content("{\"model_provider_id\":31}"))
            .andExpect(status().isForbidden());
-        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+        mvc.perform(post("/logosdb/maintenance/release_recovery")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"model_provider_id\":31,\"force\":true}"))
@@ -751,7 +751,7 @@ class ProviderControllerTest {
 
     @Test
     void releaseRecovery_requiresTheDeployment() throws Exception {
-        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+        mvc.perform(post("/logosdb/maintenance/release_recovery")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"force\":true}"))
@@ -766,7 +766,7 @@ class ProviderControllerTest {
         when(workerAdminClient.releaseRecovery(31, false))
             .thenReturn(ResponseEntity.ok(Map.of("released", true, "forced", false)));
 
-        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+        mvc.perform(post("/logosdb/maintenance/release_recovery")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"model_provider_id\":31}"))
@@ -788,7 +788,7 @@ class ProviderControllerTest {
         when(workerAdminClient.releaseRecovery(31, true))
             .thenReturn(ResponseEntity.ok(Map.of("released", true, "forced", true)));
 
-        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+        mvc.perform(post("/logosdb/maintenance/release_recovery")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"model_provider_id\":31,\"force\":true}"))
@@ -810,7 +810,7 @@ class ProviderControllerTest {
                 "{\"detail\":\"The lane does not run its original settings yet\"}".getBytes(StandardCharsets.UTF_8),
                 StandardCharsets.UTF_8));
 
-        mvc.perform(post("/logosdb/providers/logosnode/maintenance/release_recovery")
+        mvc.perform(post("/logosdb/maintenance/release_recovery")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"model_provider_id\":31}"))

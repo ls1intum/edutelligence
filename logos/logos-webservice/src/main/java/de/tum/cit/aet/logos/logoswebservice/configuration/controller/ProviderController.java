@@ -199,8 +199,12 @@ public class ProviderController {
         }
     }
 
-    /** What holds the maintenance slot: calibrations, benchmarks and nightly recoveries. */
-    @GetMapping("/providers/logosnode/maintenance")
+    /**
+     * What holds the maintenance slot: calibrations, benchmarks and nightly recoveries.
+     * Keep the public maintenance paths outside /providers/logosnode, whose proxy
+     * catch-all routes to the orchestrator rather than this webservice.
+     */
+    @GetMapping({"/maintenance", "/providers/logosnode/maintenance"})
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> maintenanceStatus() {
         try {
@@ -216,7 +220,7 @@ public class ProviderController {
      * Releases a calibration claim that a normal stop could not release, for
      * example because the worker is offline. Recorded in the audit trail.
      */
-    @PostMapping("/providers/logosnode/maintenance/release_calibration")
+    @PostMapping({"/maintenance/release_calibration", "/providers/logosnode/maintenance/release_calibration"})
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> releaseCalibrationClaim(@RequestBody ReleaseCalibrationClaimRequestDTO req) {
         if (req == null || req.providerId() == null || req.claimToken() == null || req.claimToken().isBlank())
@@ -244,7 +248,7 @@ public class ProviderController {
      * Releases a nightly recovery that cannot finish on its own. Without force
      * the worker must run the lane's original settings. Recorded in the audit trail.
      */
-    @PostMapping("/providers/logosnode/maintenance/release_recovery")
+    @PostMapping({"/maintenance/release_recovery", "/providers/logosnode/maintenance/release_recovery"})
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> releaseRecovery(@RequestBody ReleaseRecoveryRequestDTO req) {
         if (req == null || req.modelProviderId() == null)

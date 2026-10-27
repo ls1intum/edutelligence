@@ -1,7 +1,8 @@
 """Tool for retrieving FAQ content using RAG."""
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
+from ..pipeline.shared.citation_sources import CitationSourceRegistry, source_id_line
 from ..retrieval.faq_retrieval import FaqRetrieval
 from ..retrieval.faq_retrieval_utils import format_faqs
 from ..web.status.status_update import StatusCallback
@@ -16,6 +17,7 @@ def create_tool_faq_content_retrieval(
     query_text: str,
     history: List[Any],
     faq_storage: Dict[str, Any],
+    citation_sources: Optional[CitationSourceRegistry] = None,
 ) -> Callable[[], str]:
     """
     Create a tool that retrieves FAQ content using RAG.
@@ -29,6 +31,8 @@ def create_tool_faq_content_retrieval(
         query_text: The student's query text.
         history: Chat history messages.
         faq_storage: Storage for retrieved FAQs.
+        citation_sources: When given, every FAQ gets a source id the agent can
+            cite. Pipelines without citations pass nothing and get the plain output.
 
     Returns:
         Callable[[], str]: Function that returns formatted FAQ content.
@@ -59,10 +63,15 @@ def create_tool_faq_content_retrieval(
             base_url=base_url,
         )
 
-        # Store the retrieved FAQs for later use (e.g., citation pipeline)
         faq_storage["faqs"] = retrieved_faqs
 
-        result = format_faqs(retrieved_faqs)
-        return result
+        if citation_sources is None:
+            return format_faqs(retrieved_faqs)
+        return "".join(
+            source_id_line(citation_sources.register_faq(faq))
+            + format_faqs([faq])
+            + "\n"
+            for faq in retrieved_faqs
+        )
 
     return faq_content_retrieval

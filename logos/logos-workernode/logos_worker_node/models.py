@@ -20,6 +20,10 @@ _DEFAULT_LANE_CONTEXT_LENGTH = 4096
 # Legacy model-path setting — WorkerConfig._translate_legacy_ollama_models_path
 # rewrites it to NEW_MODELS_PATH so a config left on the old path keeps working.
 NEW_MODELS_PATH = "/usr/share/logos/models"
+# Files of a Hugging Face repo that vLLM never loads. ``original/`` holds the
+# pre-transformers consolidated weights (Llama, gpt-oss) and duplicates the
+# safetensors at the repo root, doubling the download and the disk footprint.
+HF_REDUNDANT_WEIGHT_PATTERNS = ["original/*"]
 LEGACY_OLLAMA_MODELS_PATH = "/usr/share/ollama/.ollama/models"
 
 

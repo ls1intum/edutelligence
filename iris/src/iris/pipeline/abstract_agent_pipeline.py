@@ -4,6 +4,7 @@ from threading import Thread
 from typing import Any, Callable, Generic, List, Optional, TypeVar
 
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
@@ -22,6 +23,7 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.activity_callback_handler import ActivityCallbackHandler
 from iris.pipeline.shared.activity_tracker import ActivityTracker
+from iris.pipeline.shared.citation_sources import CitationSourceRegistry
 from iris.pipeline.shared.compaction import (
     CompactionSettings,
     ToolOutputBudget,
@@ -45,6 +47,7 @@ from iris.tracing import (
     set_current_context,
 )
 from iris.vector_database.database import VectorDatabase
+from iris.watchdog import track_run, untrack_run
 from iris.web.status.partial_result_sender import PartialResultSender
 from iris.web.status.status_update import StatusCallback
 
@@ -92,6 +95,8 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     # Context switch requested by the agent via the switch_chat_context tool;
     # delivered to Artemis with the final result status update.
     pending_context_switch: Optional[SuggestedContextDTO]
+    # Sources the retrieval tools handed out ids for; None in pipelines without citations.
+    citation_sources: Optional[CitationSourceRegistry]
     partial_result_sender: Optional[PartialResultSender]
     activity_tracker: ActivityTracker
     system_prompt: str
@@ -404,13 +409,19 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             prefix_messages.append(
                 (
                     "human",
-                    _escape_template_braces(summary_message_text(summary)),
+                    _escape_template_braces(
+                        summary_message_text(self.sanitize_history_text(summary))
+                    ),
                 )
             )
-        history_lc_messages = [
-            convert_iris_message_to_langchain_message(message)
-            for message in state.message_history
-        ]
+        history_lc_messages = []
+        for message in state.message_history:
+            lc_message = convert_iris_message_to_langchain_message(message)
+            if isinstance(lc_message, AIMessage) and isinstance(
+                lc_message.content, str
+            ):
+                lc_message.content = self.sanitize_history_text(lc_message.content)
+            history_lc_messages.append(lc_message)
         turn_context_messages = (
             [("system", _escape_template_braces(turn_context))] if turn_context else []
         )
@@ -459,6 +470,30 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         # Default: no-op
         return
 
+    def sanitize_history_text(self, text: str) -> str:
+        """
+        Optional hook to clean earlier assistant answers and the compaction summary
+        before they go back to the agent. Must be deterministic, so the cached
+        prompt prefix stays identical across turns.
+        """
+        return text
+
+    def sanitize_narration(  # pylint: disable=unused-argument
+        self, state: AgentPipelineExecutionState[DTO, VARIANT], text: str
+    ) -> str:
+        """
+        Optional hook to clean assistant text sent between tool calls; Artemis stores it.
+        """
+        return text
+
+    def partial_text_transform(  # pylint: disable=unused-argument
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> Optional[Callable[[str], str]]:
+        """
+        Optional hook that returns how a streamed draft is prepared before it is sent.
+        """
+        return None
+
     # ================================================
     # === MUST NOT override (private/final methods) ===
     # ================================================
@@ -500,7 +535,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         emitted_intermediate_texts: set[str] = set()
 
         def emit_narration(text: str) -> None:
-            text = text.strip()
+            text = self.sanitize_narration(state, text).strip()
             if not text or text in emitted_intermediate_texts:
                 return
             emitted_intermediate_texts.add(text)
@@ -683,6 +718,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         return PartialResultSender(
             state.callback.url,
             state.dto.settings.authentication_token,
+            text_transform=self.partial_text_transform(state),
         )
 
     def _start_partial_result_sender(
@@ -876,6 +912,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.answer_language = None
         state.deferred_session_title_delivered = False
         state.pending_context_switch = None
+        state.citation_sources = None
         state.partial_result_sender = None
         state.system_prompt = ""
         state.compaction_settings = None
@@ -894,6 +931,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         state.callback.update()
 
+        track_run(callback)
         try:
             # 1. Select the model, then prepare history, user query, LLM, prompt and tools
             selected_version = state.variant.model("chat", local)
@@ -991,5 +1029,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 len(state.tools),
             )
         finally:
+            untrack_run(callback)
             # Clean up tracing context to prevent memory leaks
             clear_current_context()
