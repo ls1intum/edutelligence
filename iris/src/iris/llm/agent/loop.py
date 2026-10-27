@@ -80,6 +80,8 @@ class AgentLoop:
     # the forced final answer is requested without any tool definitions.
     supports_tool_choice: bool = True
     on_narration: Callable[[str], None] = lambda _text: None
+    # Receives each tool result exactly as the model will read it.
+    on_tool_output: Callable[[str], None] = lambda _text: None
     on_model_call: Callable[[], None] = lambda: None
     activity: Optional[ToolActivity] = None
     should_stop: Callable[[], bool] = lambda: False
@@ -196,6 +198,7 @@ class AgentLoop:
             )
             if self.activity is not None:
                 self.activity.tool_finished(handle, name, raw_output)
+            self.on_tool_output(output)
         return PyrisToolMessage(
             contents=[
                 ToolMessageContentDTO(

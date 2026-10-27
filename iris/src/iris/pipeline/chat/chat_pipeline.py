@@ -44,6 +44,7 @@ from ..shared.citation_pipeline import CitationPipeline
 from ..shared.citation_sources import (
     CitationSourceRegistry,
     citation_free_draft,
+    framed_content,
     source_id_line,
     strip_source_markers,
 )
@@ -314,6 +315,16 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # Artemis stores this text as a message of its own, without cite blocks.
         return strip_source_markers(text)
 
+    def observe_model_input(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+        text: str,
+    ) -> None:
+        # Only sources the model actually read may be cited.
+        citation_sources = getattr(state, "citation_sources", None)
+        if citation_sources is not None:
+            citation_sources.mark_delivered(text)
+
     def partial_text_transform(
         self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
     ) -> Optional[Callable[[str], str]]:
@@ -433,7 +444,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Also detects MCQ intent for COURSE and LECTURE modes.
         """
         # Before the turn context is built: the current view hands out source ids too.
-        state.citation_sources = CitationSourceRegistry()
+        state.citation_sources = CitationSourceRegistry(require_delivery=True)
         dto = state.dto
         course_id = dto.course.id
         # The two availability checks are independent Weaviate round trips;
@@ -740,7 +751,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         def _cited(item, register, text: str) -> str:
             if citation_sources is None:
                 return text
-            return source_id_line(register(citation_sources, item)) + text
+            # The frame the lecture tool uses as well, so a source can be checked as read.
+            return source_id_line(register(citation_sources, item)) + framed_content(
+                text
+            )
 
         # Group the page chunks by slide page so all chunks of one page are
         # bundled into a single block under that page's position description.

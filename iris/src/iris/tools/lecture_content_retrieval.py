@@ -4,7 +4,11 @@ import math
 from typing import Any, Callable, Dict, List, Optional
 
 from ..domain.retrieval.lecture.lecture_retrieval_dto import printed_page_number
-from ..pipeline.shared.citation_sources import CitationSourceRegistry, source_id_line
+from ..pipeline.shared.citation_sources import (
+    CitationSourceRegistry,
+    framed_content,
+    source_id_line,
+)
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
 
@@ -129,7 +133,8 @@ def create_tool_lecture_content_retrieval(
                 )
                 + "\n"
                 + source_id_line(source_id)
-                + f"Content:\n---{paragraph.page_text_content}---\n\n"
+                + framed_content(paragraph.page_text_content)
+                + "\n\n"
             )
 
         result += "Lecture transcription content:\n"
@@ -154,7 +159,8 @@ def create_tool_lecture_content_retrieval(
                 )
                 + "s\n"
                 + source_id_line(source_id)
-                + f"Content:\n---{paragraph.segment_text}---\n\n"
+                + framed_content(paragraph.segment_text)
+                + "\n\n"
             )
 
         result += "Lecture segment content:\n"

@@ -473,6 +473,15 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         """
         return text
 
+    def observe_model_input(  # pylint: disable=unused-argument
+        self, state: AgentPipelineExecutionState[DTO, VARIANT], text: str
+    ) -> None:
+        """
+        Optional hook that sees the text of every message the agent sends to the model in
+        this run: the prompt messages and each tool result after output limits.
+        """
+        return
+
     def partial_text_transform(  # pylint: disable=unused-argument
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> Optional[Callable[[str], str]]:
@@ -535,9 +544,14 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             strict_tools=strict_tools,
             supports_tool_choice=supports_tool_choice,
             on_narration=emit_narration,
+            on_tool_output=lambda text: self.observe_model_input(state, text),
             on_model_call=lambda: self._track_llm_usage(state),
             activity=TrackerToolActivity(state.activity_tracker),
         )
+        for message in state.prompt_messages:
+            for content in message.contents:
+                if isinstance(content, TextMessageContentDTO) and content.text_content:
+                    self.observe_model_input(state, content.text_content)
         result = loop.run(state.prompt_messages)
         logger.info(
             "Agent finished | steps=%d tool_calls=%d output_length=%d%s",
