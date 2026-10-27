@@ -53,13 +53,7 @@ from ..shared.mcq_generation_pipeline import McqGenerationPipeline
 from ..shared.utils import datetime_to_string, format_custom_instructions
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
-from .mcq_chat_mixin import (
-    detect_mcq_intent,
-    mcq_execute_agent,
-    mcq_post_agent_hook,
-    mcq_pre_agent_hook,
-    previous_answer_was_quiz,
-)
+from .mcq_chat_mixin import mcq_post_agent_hook
 
 logger = get_logger(__name__)
 
@@ -259,37 +253,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     def __str__(self):
         return f"{self.__class__.__name__}(context={self.chat_mode.value})"
 
-    def pre_agent_hook(
-        self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-    ) -> None:
-        """Spawn parallel MCQ generation thread if intent was detected."""
-        if self.chat_mode not in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
-            return
-        lecture_id = (
-            state.dto.lecture.id if state.dto.lecture and state.dto.lecture.id else None
-        )
-
-        mcq_pre_agent_hook(
-            state=state,
-            mcq_pipeline=self.mcq_pipeline,
-            get_text_of_latest_user_message=self.get_text_of_latest_user_message,
-            db=state.db,
-            course_id=state.dto.course.id,
-            chat_history=state.dto.chat_history,
-            lecture_id=lecture_id,
-        )
-
-    def execute_agent(self, state):
-        """Use a direct LLM call when MCQ parallel is active, else default agent."""
-        if getattr(state, "mcq_parallel", False):
-            try:
-                return mcq_execute_agent(state)
-            finally:
-                # Also a call that stopped early is billed.
-                self._track_llm_usage(state)
-        return super().execute_agent(state)
-
     def should_stream_agent_response(
         self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
     ) -> bool:
@@ -374,8 +337,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             # JSON blob appended below must not leak into the title prompt).
             result_for_title = result
 
-            # Handle MCQ placeholder replacement and parallel thread joining
-            with timed_span("ChatPipeline", "mcq_join", state.start_time):
+            # Put the quiz the agent generated with the MCQ tool into the answer
+            with timed_span("ChatPipeline", "mcq_insert", state.start_time):
                 mcq_post_agent_hook(
                     state=state,
                     mcq_pipeline=self.mcq_pipeline,
@@ -468,16 +431,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
         state.query_text = self.get_text_of_latest_user_message(state)
 
-        # Detect MCQ intent for modes that support it
-        if self.chat_mode in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
-            is_mcq, count = detect_mcq_intent(
-                state.query_text,
-                previous_answer_was_quiz(state.dto.chat_history or []),
-            )
-            if is_mcq:
-                state.mcq_parallel = True
-                state.mcq_count = count
-
     def get_tools(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -488,18 +441,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Iterates over all registered tool providers and collects the ones
         whose required data is present in the current state.
 
-        When MCQ parallel mode is active the agent only needs to write a
-        short intro — no tools required.
-
         Args:
             state: The current pipeline execution state.
 
         Returns:
             List of tool functions for the agent.
         """
-        if getattr(state, "mcq_parallel", False):
-            return []
-
         state.mcq_pipeline = self.mcq_pipeline
 
         tools: list[Callable] = []
@@ -580,7 +527,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             state: The current pipeline execution state.
 
         Returns:
-            The rendered context: date, current position, submission, event and quiz request.
+            The rendered context: date, current position, submission and event.
         """
         dto = state.dto
         exercise = dto.programming_exercise or dto.text_exercise
@@ -603,7 +550,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     else ""
                 ),
                 "event": self.event,
-                "mcq_parallel": getattr(state, "mcq_parallel", False),
             }
         )
 

@@ -67,7 +67,7 @@ The template is a sequence of blocks in a fixed order. Some are unconditional, o
 | Format of your answers      | always                                   | Markdown, links, silent plan before the reply                            |
 | Custom instructions         | `custom_instructions`                    | The instructor's own additions                                           |
 
-The system prompt stays the same as long as its inputs do not change (chat mode, active context, tool availability, combined view), so the provider can cache it with the history. Values that change per message are in `chat_turn_context.j2`, sent after the history: the current date, the slide or video the student has open, the current text exercise submission, proactive build-failure and stalled-progress events, and a parallel quiz request.
+The system prompt stays the same as long as its inputs do not change (chat mode, active context, tool availability, combined view), so the provider can cache it with the history. Values that change per message are in `chat_turn_context.j2`, sent after the history: the current date, the slide or video the student has open, the current text exercise submission, and proactive build-failure and stalled-progress events.
 
 `build_system_message()` assembles the render context from the DTO and from the flags that `prepare_state()` resolved:
 

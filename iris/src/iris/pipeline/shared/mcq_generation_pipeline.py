@@ -3,7 +3,6 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
-from threading import Thread
 from typing import List, Optional
 
 from langchain_core.messages import SystemMessage
@@ -89,73 +88,37 @@ class McqGenerationPipeline(SubPipeline):
         result = self._extract_and_validate_json(response)
         return result
 
-    def run_in_thread(
+    def generate_set(
         self,
         command: str,
-        chat_history: Optional[List[PyrisMessage]],
-        language: str,
-        result_storage: dict,
-        count: int = 1,
+        count: int,
+        chat_history: Optional[List[PyrisMessage]] = None,
+        language: str = "English",
         lecture_content: Optional[str] = None,
-    ) -> Thread:
+    ) -> str:
         """
-        Run MCQ generation in a background thread.
+        Generate ``count`` questions on distinct subtopics, in parallel.
 
-        Uses contextvars.copy_context() to preserve the Langfuse observation
-        stack across the thread boundary.
-
-        Results are communicated via a Queue stored in result_storage["queue"].
-        Each item is a tuple of ("mcq", json_str), ("error", msg), or ("done", None).
-        For single-question mode, also stores the result under "mcq_json" for
-        backward compatibility.
-
-        :param command: Free-text instruction describing what to generate
-        :param chat_history: Recent chat history for context
-        :param language: Name of the language to write in, such as "German"
-        :param result_storage: Mutable dict for inter-thread communication
-        :param count: Number of questions to generate (1 = single, >1 = one-by-one)
-        :param lecture_content: Pre-retrieved lecture content to base questions on
-        :return: The started Thread handle
+        :return: JSON string of an ``mcq-set`` with up to ``count`` questions
+        :raises ValueError: when no question could be generated
         """
         q: Queue = Queue()
-        result_storage["queue"] = q
-        result_storage["count"] = count
-        ctx = contextvars.copy_context()
-
-        def _generate():
-            try:
-                if count > 1:
-                    self._generate_multiple(
-                        command,
-                        chat_history,
-                        language,
-                        count,
-                        q,
-                        lecture_content=lecture_content,
-                    )
-                else:
-                    result = self(
-                        command=command,
-                        chat_history=chat_history,
-                        language=language,
-                        callback=None,  # pre_agent_hook already sent status
-                        lecture_content=lecture_content,
-                    )
-                    result_storage["mcq_json"] = result
-                    q.put(("mcq", result))
-            except Exception as e:
-                logger.error("MCQ generation failed in thread", exc_info=e)
-                result_storage["error"] = str(e)
-                q.put(("error", str(e)))
-            finally:
-                q.put(("done", None))
-
-        thread = Thread(
-            name="McqGenerationThread",
-            target=lambda: ctx.run(_generate),
+        self._generate_multiple(
+            command, chat_history, language, count, q, lecture_content=lecture_content
         )
-        thread.start()
-        return thread
+        questions: list[dict] = []
+        while not q.empty():
+            kind, data = q.get_nowait()
+            if kind != "mcq":
+                continue
+            parsed = json.loads(data)
+            if parsed.get("type") == "mcq-set":
+                questions.extend(parsed.get("questions", []))
+            else:
+                questions.append(parsed)
+        if not questions:
+            raise ValueError("No MCQ question could be generated")
+        return json.dumps({"type": "mcq-set", "questions": questions[:count]})
 
     def _generate_multiple(
         self,

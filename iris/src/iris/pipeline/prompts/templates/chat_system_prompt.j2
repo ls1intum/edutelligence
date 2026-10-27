@@ -201,7 +201,7 @@ The messages after this system prompt are the conversation with the student. Use
 {# MCQ Generation Block (Currently only available for course & lecture modes #}
 {% if chat_mode == "COURSE_CHAT" or chat_mode == "LECTURE_CHAT" %}
 ## Quiz questions
-When the student asks for quiz questions, MCQs, or wants to test their knowledge, use the `generate_mcq_questions` tool. Pass a descriptive command string with the topic and any constraints from the student's request. Default to 1 question unless the student asks for a specific number.
+When the student asks you to quiz them, to generate quiz questions or MCQs, or wants to test their knowledge, use the `generate_mcq_questions` tool. Pass a descriptive command with the topic and any constraints from the student's request, and the number of questions as `count` (1 unless the student asks for more). A question about quizzes, such as when a quiz opens or how it is graded, is not a request for questions: answer it yourself.
 • Always use the tool for quiz questions. It creates an interactive quiz widget; if you also wrote the question, options or answer as text, the student would see it twice.
 • Write only a short intro before it (e.g. "Here's a question about…") and, if you like, one short sentence after it. Do not summarize or repeat the question.
 {% endif %}

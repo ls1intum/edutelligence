@@ -11,13 +11,10 @@ real model wrappers; only the request handler is a stub.
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.pipeline_enum import PipelineEnum  # noqa: E402
 from iris.common.token_usage_dto import TokenUsageDTO  # noqa: E402
 from iris.llm.errors import IncompleteModelResponse  # noqa: E402
-from iris.llm.iris_chat_model import IrisChatModel  # noqa: E402
 from iris.llm.request_handler.request_handler_interface import (  # noqa: E402
     RequestHandler,
 )
@@ -123,28 +120,3 @@ def test_the_chat_bills_citation_calls_also_when_they_fail():
 
     assert result == "The answer."
     assert usage in state.tokens
-
-
-def test_a_cut_quiz_intro_is_billed():
-    pipeline = ChatPipeline.__new__(ChatPipeline)
-    pipeline.chat_mode = None
-    llm = IrisChatModel(request_handler=_CutHandler())
-    state = SimpleNamespace(
-        mcq_parallel=True,
-        llm=llm,
-        prompt_messages=[],
-        tokens=[],
-        first_prompt_tokens=None,
-    )
-
-    with (
-        patch.object(
-            ChatPipeline,
-            "get_token_pipeline",
-            lambda self, state: PipelineEnum.IRIS_CHAT_COURSE_MESSAGE,
-        ),
-        pytest.raises(IncompleteModelResponse),
-    ):
-        pipeline.execute_agent(state)
-
-    assert [t.num_output_tokens for t in state.tokens] == [600]

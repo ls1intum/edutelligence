@@ -49,7 +49,6 @@ def _system_prompt_context(chat_mode: str, support_level: str) -> dict:
         "start_date": "",
         "end_date": "",
         "text_exercise_submission": "",
-        "mcq_parallel": False,
     }
 
 

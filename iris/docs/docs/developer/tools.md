@@ -174,7 +174,7 @@ Two providers gate on flags that `ChatPipeline.prepare_state()` computes once pe
 
 The two viewing-context tools gate on `state.lecture_contexts`, which `prepare_state()` also fills. Both additionally require `allow_lecture_tool`: a viewing context must not become a way around the gate that decides whether this course has lecture content at all. `provide_combined_view_point_out()` resolves the context through `get_combined_view_context()`, the same function the `can_point_out_in_combined_view` prompt flag derives from, so the prompt can never advertise a tool the provider withheld.
 
-One provider bypasses the whole mechanism: when `prepare_state()` detects MCQ intent, `get_tools()` returns an empty list, because the agent only has to write a short intro while the MCQ sub-pipeline runs in parallel.
+Quizzes go through the same mechanism: the agent decides whether a message asks for quiz questions and calls `generate_mcq_questions` with a command and a `count` (1 to 10). There is no keyword detection. With `count` above 1 the MCQ sub-pipeline writes the questions on distinct subtopics in parallel and returns one `mcq-set`. The tool returns a `[MCQ_RESULT]` placeholder, which `mcq_post_agent_hook()` replaces with the quiz JSON before the answer is sent.
 
 ## Creating a New Tool
 

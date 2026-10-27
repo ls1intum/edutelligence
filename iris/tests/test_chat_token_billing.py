@@ -199,34 +199,6 @@ def test_no_turn_context_keeps_the_previous_layout():
     assert len(pipeline.build_prompt_messages(state, system_prompt="Static")) == 1
 
 
-def test_mcq_intro_usage_is_billed_once_with_the_chat_pipeline():
-    usage = TokenUsageDTO(numInputTokens=40, numCachedInputTokens=32)
-    llm = MagicMock()
-    llm.tokens = None
-
-    def chat(_messages, tools=None, tool_choice=None):
-        assert tools is None
-        llm.tokens = usage
-        return _answer("Sure, here is a quiz!")
-
-    llm.chat.side_effect = chat
-    state = _agent_state(llm)
-    state.mcq_parallel = True
-
-    for mode, expected in [
-        (IrisChatMode.COURSE, PipelineEnum.IRIS_CHAT_COURSE_MESSAGE),
-        (IrisChatMode.LECTURE, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE),
-    ]:
-        state.tokens = []
-        llm.tokens = None
-
-        assert _pipeline(mode).execute_agent(state) == "Sure, here is a quiz!"
-
-        assert state.tokens == [usage]
-        assert state.tokens[0].pipeline == expected
-        assert state.tokens[0].num_cached_input_tokens == 32
-
-
 def test_failed_run_reports_the_usage_of_every_call_once(monkeypatch):
     """A run that dies in its second model call still bills both calls, once."""
     from iris.llm.errors import IncompleteModelResponse

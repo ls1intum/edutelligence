@@ -43,7 +43,6 @@ def _base_context() -> dict:
         "start_date": "",
         "end_date": "",
         "text_exercise_submission": "",
-        "mcq_parallel": False,
     }
 
 
@@ -95,47 +94,18 @@ def test_lecture_chat_mcq_tool_with_custom_instructions():
     assert "Always be polite." in rendered
 
 
-# --- Parallel mode: the per-message context overrides the standing tool instructions ---
+# --- The quiz tool and its instructions ---
 
 
-def test_course_chat_parallel_mode_overrides_tool_in_turn_context():
+def test_course_chat_shows_the_quiz_tool():
     context = _minimal_course_chat_context()
-    context["mcq_parallel"] = True
-    turn = _render_template("chat_turn_context.j2", context)
-    assert "generate_mcq_questions" not in turn
-    assert "being generated" in turn
-    assert "Do not include questions, answer options" in turn
-    assert "quiz instructions above do not apply" in turn
-    assert "context switching instructions above do not apply" in turn
-
-
-def test_lecture_chat_parallel_mode_overrides_tool_in_turn_context():
-    context = _minimal_lecture_chat_context()
-    context["mcq_parallel"] = True
-    turn = _render_template("chat_turn_context.j2", context)
-    assert "being generated" in turn
-    assert "Do not include questions, answer options" in turn
-
-
-def test_exercise_chat_turn_context_has_no_quiz_override():
-    context = _minimal_course_chat_context()
-    context["chat_mode"] = "PROGRAMMING_EXERCISE_CHAT"
-    context["mcq_parallel"] = True
-    turn = _render_template("chat_turn_context.j2", context)
-    assert "being generated" not in turn
-
-
-def test_course_chat_non_parallel_shows_tool():
-    context = _minimal_course_chat_context()
-    context["mcq_parallel"] = False
     rendered = _render_template("chat_system_prompt.j2", context)
     assert "generate_mcq_questions" in rendered
     assert "Always use the tool for quiz questions." in rendered
 
 
-def test_lecture_chat_non_parallel_shows_tool():
+def test_lecture_chat_shows_the_quiz_tool():
     context = _minimal_lecture_chat_context()
-    context["mcq_parallel"] = False
     rendered = _render_template("chat_system_prompt.j2", context)
     assert "generate_mcq_questions" in rendered
     assert "Always use the tool for quiz questions." in rendered
@@ -150,7 +120,6 @@ def _volatile_context(date: str, view: str, submission: str, mcq: bool) -> dict:
             "current_view_blocks": [view],
             "exercise_id": 5,
             "text_exercise_submission": submission,
-            "mcq_parallel": mcq,
             "has_chat_history": mcq,
             "has_query": mcq,
             "event": "build_failed" if mcq else None,

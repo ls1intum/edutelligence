@@ -6,7 +6,6 @@ import copy
 import json
 import re
 from contextlib import contextmanager
-from queue import Queue
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -839,30 +838,9 @@ def _assert_mcq_clean(result):
 
 def test_mcq_tool_path_inserts_clean_json():
     state = SimpleNamespace(
-        mcq_parallel=False,
         result="Here is a question:\n[MCQ_RESULT]",
         mcq_result_storage={"mcq_json": json.dumps(_MCQ_WITH_MARKERS)},
     )
     mcq_post_agent_hook(state, SimpleNamespace(tokens=[]), lambda state, token: None)
 
     _assert_mcq_clean(state.result)
-
-
-@pytest.mark.parametrize("count", [1, 3])
-def test_mcq_parallel_paths_insert_clean_json(count):
-    queue = Queue()
-    for _ in range(count):
-        queue.put(("mcq", json.dumps(_MCQ_WITH_MARKERS)))
-    state = SimpleNamespace(
-        mcq_parallel=True,
-        mcq_count=count,
-        mcq_thread=SimpleNamespace(
-            join=lambda timeout=None: None, is_alive=lambda: False
-        ),
-        result="Here you go.",
-        mcq_result_storage={"queue": queue},
-    )
-    mcq_post_agent_hook(state, SimpleNamespace(tokens=[]), lambda state, token: None)
-
-    _assert_mcq_clean(state.result)
-    assert ('"mcq-set"' in state.result) == (count > 1)

@@ -57,12 +57,3 @@ End with an invitation to ask, so the student can easily continue or ignore the 
 {% endif %}
 
 {% endif %}
-
-{% if (chat_mode == "COURSE_CHAT" or chat_mode == "LECTURE_CHAT") and mcq_parallel %}
-# Quiz request
-For this message only, the quiz instructions above do not apply.
-The context switching instructions above do not apply to this message either: do not switch the context.
-The student asked for quiz questions. An interactive quiz widget is being generated automatically and will appear directly in your message, so you do not write any questions yourself.
-Write only a short, friendly intro of one or two sentences that acknowledges the request, for example "Sure! Here are some questions to test your knowledge."
-Do not include questions, answer options, explanations, follow-up text, or offers like "let me know if you want more" — the widget follows your intro directly.
-{% endif %}
