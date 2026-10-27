@@ -12,6 +12,6 @@ Language: write keywords and summaries in {language}. Keep established technical
 as they are (for example "hashCode", "Load Factor"), but write every other word in {language}.
 Do not use ":" "[" or "]".
 
-Answer with JSON only. Use the plain source numbers as keys, for example {{"3": {{"keyword": "...", "summary": "..."}}}}.
+Answer with JSON: {{"labels": [{{"source": 3, "keyword": "...", "summary": "..."}}]}}, one entry per source.
 
 {sources}

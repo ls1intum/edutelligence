@@ -20,6 +20,7 @@ from iris.common.reply_language import (  # noqa: E402
     detect_language_name,
     reply_language,
 )
+from iris.common.token_usage_dto import TokenUsageDTO  # noqa: E402
 from iris.config import settings as iris_settings  # noqa: E402
 from iris.domain.data.lecture_dto import PyrisLectureDTO  # noqa: E402
 from iris.domain.data.text_message_content_dto import (  # noqa: E402
@@ -31,6 +32,7 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (  # noqa: E402
     LectureUnitPageChunkRetrievalDTO,
 )
 from iris.llm.llm_configuration import validate_llm_configuration  # noqa: E402
+from iris.llm.structured_output import parse_structured_output  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
 from iris.pipeline.chat.mcq_chat_mixin import (  # noqa: E402
@@ -38,8 +40,9 @@ from iris.pipeline.chat.mcq_chat_mixin import (  # noqa: E402
     mcq_post_agent_hook,
 )
 from iris.pipeline.shared.citation_pipeline import (  # noqa: E402
+    MAX_EXCERPT_CHARS,
+    CitationLabels,
     CitationPipeline,
-    parse_labels,
 )
 from iris.pipeline.shared.citation_sources import (  # noqa: E402
     CitationSourceRegistry,
@@ -336,59 +339,54 @@ def test_final_cite_blocks_match_the_artemis_patterns(answer):
 # --------------------------------------------------------------------------- labels
 
 
-def test_parse_labels_accepts_plain_and_source_keys_and_fences():
-    raw = (
-        '```json\n{"1": {"keyword": "A:B", "summary": "x [y]"}, '
-        '"Source 3": {"keyword": "Exam", "summary": "Feb"}}\n```'
-    )
-
-    assert parse_labels(raw) == {1: ("A -B", "x (y)"), 3: ("Exam", "Feb")}
-
-
-@pytest.mark.parametrize("raw", ["not json", "[1, 2]", '{"x": {"keyword": "a"}}', ""])
-def test_parse_labels_returns_no_labels_for_unusable_output(raw):
-    assert not parse_labels(raw)
-
-
 class _FakeLlm:
-    """Stands in for IrisLangchainChatModel inside the citation pipeline."""
+    """Stands in for IrisChatModel inside the citation pipeline."""
 
     responses: list = []
     prompts: list = []
+    schemas: list = []
 
     def __init__(self, request_handler, completion_args):
         del request_handler, completion_args
-        self.tokens = SimpleNamespace(pipeline=None)
+        self.tokens = None
 
-    def __or__(self, parser):
-        del parser
-        return self
-
-    def invoke(self, messages):
-        _FakeLlm.prompts.append(messages[0].content)
+    def structured(self, messages, schema):
+        _FakeLlm.prompts.append(messages[0].contents[0].text_content)
+        _FakeLlm.schemas.append(schema)
+        self.tokens = TokenUsageDTO(numInputTokens=10, numOutputTokens=5)
         response = _FakeLlm.responses.pop(0)
         if isinstance(response, Exception):
             raise response
-        return response
+        return parse_structured_output(schema, response)
 
 
 @contextmanager
 def _citation_pipeline(responses):
     _FakeLlm.responses = list(responses)
     _FakeLlm.prompts = []
+    _FakeLlm.schemas = []
     with (
         patch("iris.pipeline.shared.citation_pipeline.resolve_model", return_value="m"),
         patch("iris.pipeline.shared.citation_pipeline.LlmRequestHandler"),
-        patch(
-            "iris.pipeline.shared.citation_pipeline.IrisLangchainChatModel", _FakeLlm
-        ),
+        patch("iris.pipeline.shared.citation_pipeline.IrisChatModel", _FakeLlm),
     ):
         pipeline = CitationPipeline(local=True)
         yield pipeline
 
 
+def _labels(*items) -> str:
+    return json.dumps(
+        {
+            "labels": [
+                {"source": source, "keyword": keyword, "summary": summary}
+                for source, keyword, summary in items
+            ]
+        }
+    )
+
+
 def test_citation_pipeline_labels_all_cited_sources_in_one_call():
-    labels = json.dumps({"1": {"keyword": "Composition", "summary": "Parts die"}})
+    labels = _labels((1, "Composition", "Parts die"))
     with _citation_pipeline([labels]) as pipeline:
         result = pipeline(
             "Parts die. [src:1] Unused id. [src:9]",
@@ -403,7 +401,26 @@ def test_citation_pipeline_labels_all_cited_sources_in_one_call():
     )
     assert "Source 9" not in _FakeLlm.prompts[0]
     assert "write keywords and summaries in German" in _FakeLlm.prompts[0]
+    assert _FakeLlm.schemas == [CitationLabels]
     assert len(pipeline.tokens) == 1
+
+
+def test_citation_labels_are_made_safe_for_the_cite_block_and_unasked_ones_dropped():
+    labels = _labels((1, "A:B", "x [y]"), (5, "Other", "Not cited"))
+    with _citation_pipeline([labels]) as pipeline:
+        result = pipeline("Parts die. [src:1]", _registry_with_sources())
+
+    assert result == "Parts die. [cite:L:7:13:::A -B:x (y)]"
+
+
+def test_citation_label_call_sends_at_most_the_excerpt_cap_per_source():
+    registry = CitationSourceRegistry()
+    registry.register_page_chunk(_page_chunk("x" * (MAX_EXCERPT_CHARS + 500)))
+    with _citation_pipeline([_labels((1, "K", "S"))]) as pipeline:
+        pipeline("Long. [src:1]", registry)
+
+    assert "x" * MAX_EXCERPT_CHARS in _FakeLlm.prompts[0]
+    assert "x" * (MAX_EXCERPT_CHARS + 1) not in _FakeLlm.prompts[0]
 
 
 def test_citation_pipeline_sends_citations_without_labels_when_the_call_fails():

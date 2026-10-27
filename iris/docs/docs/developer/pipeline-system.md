@@ -55,7 +55,7 @@ Design decisions and their reasons:
 
 ### Structured outputs
 
-Side pipelines that need data pass a Pydantic model as `CompletionArguments.response_schema`. OpenAI and Azure models enforce the schema while decoding (`json_schema` with `strict: true`), Ollama gets it as `format`, and models that do not support schemas fall back to JSON mode (`supports_structured_output: false`). The answer is validated with the same Pydantic model (`llm/structured_output.py`). Session titles (`TitleDecision`) and interaction suggestions (`Questions`) use this instead of parsing free text such as `KEEP` or `UPDATE: <title>`.
+Side pipelines that need data pass a Pydantic model as `CompletionArguments.response_schema`. OpenAI and Azure models enforce the schema while decoding (`json_schema` with `strict: true`), Ollama gets it as `format`, and models that do not support schemas fall back to JSON mode (`supports_structured_output: false`). The answer is validated with the same Pydantic model (`llm/structured_output.py`). Session titles (`TitleDecision`), interaction suggestions (`Questions`) and citation labels (`CitationLabels`) use this instead of parsing free text such as `KEEP` or `UPDATE: <title>`.
 
 ### Retries
 

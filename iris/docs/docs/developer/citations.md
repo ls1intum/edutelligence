@@ -61,9 +61,9 @@ The chat registry is created with `require_delivery=True`. A source is registere
 
 ### Labels
 
-`citation_label_prompt.txt` lists the cited sources as `Source N:` with their content and asks for JSON keyed by the source numbers, with a `keyword` (the concept, 1–3 words) and a `summary` (what the source is about) per source. The summary is shown next to a tutoring answer, so it names the topics a source covers without stating results the student may still be working out; organizational facts such as dates may be stated. Keywords and summaries are written in the answer's language.
+`citation_label_prompt.txt` lists the cited sources as `Source N:` with the first 1,500 characters of their content (`MAX_EXCERPT_CHARS`; the beginning shows what a source is about, and the cap keeps the call short when an answer cites long transcript passages). The answer is schema-enforced (`CitationLabels`: a list of `source`, `keyword` and `summary`), with a `keyword` (the concept, 1–3 words) and a `summary` (what the source is about) per source. The summary is shown next to a tutoring answer, so it names the topics a source covers without stating results the student may still be working out; organizational facts such as dates may be stated. Keywords and summaries are written in the answer's language.
 
-`parse_labels()` also accepts `"Source 3"` keys and a Markdown code fence. Unreadable output gives no labels: the citations are still sent, with empty keyword and summary fields. `_sanitize_citation_field()` replaces `:`, `[` and `]` in every keyword and summary and collapses whitespace, because the fields are colon-delimited and bracket-terminated.
+Providers enforce the schema while decoding (see [structured outputs](./pipeline-system.md#structured-outputs)); labels for sources that were not asked for are dropped. Output that does not match the schema gives no labels: the citations are still sent, with empty keyword and summary fields. `_sanitize_citation_field()` replaces `:`, `[` and `]` in every keyword and summary and collapses whitespace, because the fields are colon-delimited and bracket-terminated.
 
 ## Where markers are removed
 
