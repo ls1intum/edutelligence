@@ -55,7 +55,7 @@
   }
 
   <section class="card">
-    @if (loading()) {
+    @if (loading() && requests().length === 0) {
       <p class="empty">Loading…</p>
     } @else if (requests().length === 0) {
       <p class="empty">No model requests yet — be the first to ask for one.</p>
