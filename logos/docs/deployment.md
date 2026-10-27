@@ -135,17 +135,18 @@ worker service. Use the node manager instead.
 
 To use the node manager on a host without the deploy workflow, do these steps:
 
-1. If the registry needs a login, run `docker login` on the host.
+1. If the registry needs a login, run
+   `DOCKER_CONFIG=<worker directory>/.docker docker login <registry>` on the
+   host.
 2. Add `COMPOSE_PROFILES=node-manager` to the `.env` file of the worker.
 3. To pull a version tag, set `REGISTRY` in the `.env` file of the worker to
    the deployment registry (`<registry>/logos`). Then set `IMAGE_TAG`. The
    public mirror has only the tag `latest`.
 4. In the worker directory, run `docker compose up -d logos-node-manager`.
 
-The node manager keeps the login that existed when it started. If you run
-`docker login` again, run
-`docker compose up -d --force-recreate logos-node-manager`. The deploy
-workflows do this on each run.
+The node manager reads the login from the directory `.docker` of the worker
+directory. A new login is visible at once. The deploy workflows write the login
+to this directory on each run.
 
 To send a deploy request, run this command:
 

@@ -189,8 +189,13 @@ jobs:
           envs: LOGOS_HARBOR_PASSWORD
           script: |
             set -eu
-            # The node manager mounts this login to pull the worker image.
+            # The login of the deploy user serves the commands below that run on the host, for example the pull of the
+            # image of the node manager.
             printf '%s' "$LOGOS_HARBOR_PASSWORD" | docker login ${{ vars.LOGOS_HARBOR_REGISTRY }} -u '${{ vars.LOGOS_HARBOR_USER }}' --password-stdin
+            # The node manager reads its own login from the directory .docker of the worker directory, whoever starts it.
+            # It pulls the worker image with it.
+            mkdir -p -m 700 ${{ matrix.base-path }}/.docker
+            printf '%s' "$LOGOS_HARBOR_PASSWORD" | DOCKER_CONFIG=${{ matrix.base-path }}/.docker docker login ${{ vars.LOGOS_HARBOR_REGISTRY }} -u '${{ vars.LOGOS_HARBOR_USER }}' --password-stdin
             compose() {
               docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env "$@"
             }
@@ -198,8 +203,6 @@ jobs:
             # by its ID. The ID is empty when no node manager runs yet.
             old_image=$(docker inspect --type container --format '{{.Image}}' logos-node-manager 2>/dev/null || true)
             compose pull logos-node-manager
-            # Recreated on every run: `docker login` replaces config.json with a new file, and the node manager
-            # mounts that one file, so a container that is kept would go on with the old login.
             compose up -d --force-recreate logos-node-manager
             for attempt in $(seq 1 30); do
               if docker exec logos-node-manager node-manager ping; then

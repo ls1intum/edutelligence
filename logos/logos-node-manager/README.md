@@ -169,16 +169,24 @@ carries the image of `main` (tag `latest`). The deploy workflows set `REGISTRY` 
 deployment registry (`<registry>/logos`). Set it there as well to pull a version tag or a pull request build, which the
 mirror does not carry.
 
-The service needs three things from the host:
+The service needs two things from the host:
 
 * the Docker socket, so it can run `docker`;
 * the worker directory, mounted at the same path as on the host (Compose turns relative bind mounts into absolute host
-  paths before it sends them to the Docker engine);
-* the Docker login of the host user, mounted read-only, so it can pull from a registry that needs a login. Run
-  `docker login` on the host first. The mount is declared so that Docker does not create the file when it is missing:
-  the service then fails to start with a clear message. A new `docker login` replaces the file, and a mounted file keeps
-  showing the old one. After each login, recreate the service with
-  `docker compose up -d --force-recreate logos-node-manager`. The deploy workflows do this on every run.
+  paths before it sends them to the Docker engine).
+
+To pull from a registry that needs a login, the manager reads the login from the directory `.docker` of the worker
+directory. The compose file sets `DOCKER_CONFIG` to this directory. Because the directory is part of the mount of the
+worker directory, the login does not depend on the user who runs `docker compose`. A new login is visible at once. The
+deploy workflows write the login there. On a host without them, run this command:
+
+```bash
+DOCKER_CONFIG=/opt/logos-workernode/.docker docker login <registry>
+```
+
+A host without a login still starts the service. Only a pull from a registry that needs a login fails, and the
+deployment ends as `pull_failed`. The running worker is not touched. At the start, the log of the manager shows whether
+it finds a login file.
 
 The socket is root on the host. "Security model" below says what that allows and how the container is limited.
 
@@ -271,10 +279,9 @@ for the worker. The risk is accepted for these reasons:
   could already connect as the worker.
 * Every command is an argument list and never goes through a shell. The command line checks a deployment id and a tag
   against strict patterns before it accepts a request. The free text of `--requested-by` is only stored in the record.
-* The container sees little of the host: the worker directory (read-only), the Docker login of the host user
-  (read-only), its own state directory and the socket. The worker directory includes the `.env` with the secrets of the
-  worker, because Compose needs that file. No output of `docker compose config` and no environment is logged (see
-  "Rules the code keeps").
+* The container sees little of the host: the worker directory (read-only), its own state directory and the socket. The
+  worker directory includes the `.env` with the secrets of the worker, because Compose needs that file, and the Docker
+  login in `.docker`. No output of `docker compose config` and no environment is logged (see "Rules the code keeps").
 
 The container gets nothing more than that. It starts with `no-new-privileges`, drops all Linux capabilities except
 `DAC_OVERRIDE`, and has a read-only root filesystem with a 16 MB `/tmp`. `DAC_OVERRIDE` stays because the manager runs
@@ -288,8 +295,8 @@ host. A proxy would add a second container that holds the socket and would not r
 
 For operators:
 
-* Use a registry account that can pull but not push for the `docker login` on the host. The manager can read the login
-  file, and so can every user who can run `docker` on the host.
+* Use a registry account that can pull but not push for the login in `.docker` of the worker directory. The manager can
+  read the login file, and so can every user who can run `docker` on the host.
 * Limit who can run `docker` and `docker exec` on the host, and who can write to the state directory. These users are
   root-equivalent with or without the manager.
 

@@ -126,12 +126,14 @@ services:
   # it sends them to the Docker engine, so the path has to mean the same thing in
   # both places. The directory is read-only except for the state of the manager.
   #
-  # The Docker login of the host user is mounted read-only, for registries that
-  # need a login (run `docker login` on the host first). The mount does not
-  # create the file: a host without a login fails to start the service, instead
-  # of getting a directory in place of config.json. A new `docker login` replaces
-  # that file and the mount keeps showing the old one, so recreate the service
-  # after it (`docker compose up -d --force-recreate logos-node-manager`).
+  # The node manager reads its registry login from the directory .docker of the
+  # worker directory (DOCKER_CONFIG, below). The directory is part of the
+  # read-only mount of the worker directory, so the login does not depend on who
+  # runs `docker compose`, and a new login is visible at once. The deploy
+  # workflows write the login there. Without them, run this on the host:
+  #   DOCKER_CONFIG=<worker directory>/.docker docker login <registry>
+  # A host without a login still starts the service. Only a pull from a registry
+  # that needs a login fails.
   #
   # The Docker socket is root on the host, and a read-only mount does not change
   # that. The container therefore gets nothing else: no published port, no new
@@ -157,6 +159,9 @@ services:
       - /tmp:size=16m
     environment:
       NODE_MANAGER_PROJECT_DIR: ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}
+      # The directory in which the Docker command line of the manager looks for the registry login (config.json). It is
+      # part of the worker directory, which the manager sees at the same path.
+      DOCKER_CONFIG: ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}/.docker
       # How long the manager waits for the first healthy state, in seconds. It must stay above the start period of the
       # worker health check (10 min) by the check interval (30 s) plus the poll interval of the manager (5 s): a worker
       # that opens its port at the end of the start period is seen as healthy up to 35 s later. 660 s leaves margin.
@@ -172,12 +177,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}:${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}:ro
       - ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}/node-manager:${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}/node-manager
-      - type: bind
-        source: ${NODE_MANAGER_DOCKER_CONFIG:-${HOME}/.docker/config.json}
-        target: /root/.docker/config.json
-        read_only: true
-        bind:
-          create_host_path: false
     healthcheck:
       test: ["CMD", "node-manager", "ping"]
       interval: 30s

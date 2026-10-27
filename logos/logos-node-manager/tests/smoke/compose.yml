@@ -34,6 +34,7 @@ services:
       - /tmp:size=16m
     environment:
       NODE_MANAGER_PROJECT_DIR: ${SMOKE_DIR}
+      DOCKER_CONFIG: ${SMOKE_DIR}/.docker
       NODE_MANAGER_PROJECT_NAME: nm-smoke
       NODE_MANAGER_SERVICE: worker
       NODE_MANAGER_CONTAINER: nm-smoke-worker
@@ -47,12 +48,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${SMOKE_DIR}:${SMOKE_DIR}:ro
       - ${SMOKE_DIR}/node-manager:${SMOKE_DIR}/node-manager
-      - type: bind
-        source: ${SMOKE_DIR}/docker-config.json
-        target: /root/.docker/config.json
-        read_only: true
-        bind:
-          create_host_path: false
     healthcheck:
       test: ["CMD", "node-manager", "ping"]
       interval: 5s

@@ -117,7 +117,9 @@ log "Building the node manager image"
 docker build -q -t "$MANAGER_IMAGE" "$COMPONENT" >/dev/null || die "the build of the manager image failed"
 
 cp "$HERE/compose.yml" "$WORK/docker-compose.yml"
-echo '{}' >"$WORK/docker-config.json"
+# The login directory that the manager reads, with one made-up registry login. The local registry needs none.
+mkdir -p "$WORK/.docker"
+echo '{"auths":{"registry.invalid":{"auth":"c21va2U6c21va2U="}}}' >"$WORK/.docker/config.json"
 cat >"$WORK/.env" <<EOF
 SMOKE_DIR=$WORK
 SMOKE_REGISTRY=$REGISTRY
@@ -131,6 +133,11 @@ compose up -d worker node-manager || die "docker compose up failed"
 wait_for 60 worker_healthy || die "the dummy worker did not become healthy"
 wait_for 60 nm ping || die "the manager did not start"
 expect_equal "the worker starts on v1" "$REGISTRY/dummy-worker:v1" "$(worker_image)"
+if docker logs "$MANAGER" 2>&1 | grep -q "Docker login file: 1 registry login(s)"; then
+  pass "the manager reads the registry login from the worker directory"
+else
+  fail "the manager does not see the registry login in the worker directory"
+fi
 
 log "1. A healthy release replaces the container"
 nm deploy --id t1 --tag v2 --wait --timeout 240
