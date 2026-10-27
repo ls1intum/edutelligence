@@ -100,7 +100,6 @@ export class ModelRequests implements OnInit {
         return;
       } else {
         const updated = await this.service.vote(name, teamId);
-        const team = this.teamName(teamId);
         this.notice.set(
           `Thanks — "${updated.name}" now has ${updated.request_count} vote${
             updated.request_count === 1 ? '' : 's'
@@ -121,12 +120,6 @@ export class ModelRequests implements OnInit {
   /** Close the failed-vote modal. */
   closeVoteError(): void {
     this.voteError.set(null);
-  }
-
-  /** Display name of one of the caller's teams; null for an unknown id. */
-  teamName(teamId: number | null): string | null {
-    if (teamId === null) return null;
-    return this.teams().find((team) => team.id === teamId)?.name ?? null;
   }
 
   /** Team selector change; the empty option clears the selection. */

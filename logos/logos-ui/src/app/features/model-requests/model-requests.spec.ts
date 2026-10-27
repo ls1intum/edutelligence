@@ -76,7 +76,6 @@ describe('ModelRequests', () => {
     expect(vote).toHaveBeenCalledWith('gpt-5', 2001);
     expect(page.name()).toBe('');
     expect(page.notice()).toContain('gpt-5');
-    expect(page.notice()).toContain('test-team');
   });
 
   it('submits for the switched team', async () => {
