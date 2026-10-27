@@ -82,13 +82,6 @@ def _faq_result(output: Any) -> str | None:
     return f"{count} FAQs"
 
 
-def _memory_result(output: Any) -> str | None:
-    count = _sequence_count(output)
-    if count is None:
-        return None
-    return f"{count} memories"
-
-
 ACTIVITY_METADATA: dict[str, ToolActivityMeta] = {
     "lecture_content_retrieval": ToolActivityMeta(
         detail_fn=_detail_from_fields("query", "student_query", "input"),
@@ -97,9 +90,5 @@ ACTIVITY_METADATA: dict[str, ToolActivityMeta] = {
     "faq_content_retrieval": ToolActivityMeta(
         detail_fn=_detail_from_fields("query", "student_query", "input"),
         result_fn=_faq_result,
-    ),
-    "memiris_search_for_memories": ToolActivityMeta(
-        detail_fn=_detail_from_fields("query"),
-        result_fn=_memory_result,
     ),
 }

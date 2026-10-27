@@ -2,15 +2,81 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { RequestItem, VramV2Payload } from '../statistics.models';
+import { RequestLatencyScope, RequestLatencyStats } from './request-latency.models';
 
 /**
  * Lane-picker view of POST /api/logosdb/get_provider_models. The endpoint also
- * returns `endpoint`/`api_key`; both are deliberately left out here so the
- * credential never enters this feature's data flow.
+ * returns `endpoint`/`api_key` to Logos admins; both are deliberately left out
+ * here so the credential never enters this feature's data flow.
  */
 export interface ProviderModel {
   model_id: number;
   model_name: string;
+}
+
+/**
+ * A lane an administrator locked warm, as `GET /api/logosdb/providers/logosnode/lanes/locks`
+ * returns it. The capacity planner never sleeps, drains or unloads a locked lane.
+ */
+export interface LaneLock {
+  provider_id: number;
+  lane_id: string;
+  model_name: string | null;
+  locked_by: string | null;
+  locked_at: string;
+}
+
+/**
+ * A calibration that holds the maintenance slot. `claim_token` is null for a
+ * session the worker reports without a claim; such a session can be stopped
+ * but has no claim to release.
+ */
+export interface MaintenanceCalibration {
+  provider_id: number;
+  provider_name: string | null;
+  claim_token: string | null;
+  automatic: boolean | null;
+  confirmed: boolean | null;
+  since: string | null;
+  age_s: number | null;
+  online: boolean;
+  calibrating: boolean;
+  status_supported: boolean;
+}
+
+/**
+ * A benchmark that holds the maintenance slot. While its cleanup still runs,
+ * `status` is the job's final status, or null when the job record is gone.
+ */
+export interface MaintenanceBenchmark {
+  job_id: number;
+  status: string | null;
+  provider_id: number | null;
+  provider_name: string | null;
+  model_name: string | null;
+  nightly: boolean;
+  since: string | null;
+  age_s: number | null;
+}
+
+/** A nightly run whose worker settings are not restored yet. */
+export interface MaintenanceRecovery {
+  model_provider_id: number;
+  status: string;
+  provider_id: number | null;
+  provider_name: string | null;
+  model_name: string | null;
+  since: string | null;
+  age_s: number | null;
+}
+
+/** What holds the maintenance slot, as `GET /api/logosdb/maintenance` returns it. */
+export interface MaintenanceStatus {
+  limit: number;
+  free: boolean;
+  calibrations: MaintenanceCalibration[];
+  benchmarks: MaintenanceBenchmark[];
+  recoveries: MaintenanceRecovery[];
 }
 
 /** Position to continue a request-feed page from, as the server hands it back. */
@@ -108,6 +174,26 @@ export class StatisticsService {
       errors_only: scope.errorsOnly || null,
     }));
   }
+
+  // ── Cloud request delays ──────────────────────────────────────────────────
+
+  /**
+   * Delay percentiles of finished cloud requests inside `[startIso, endIso]`,
+   * per model and provider, narrowed to the page scope.
+   */
+  getRequestLatencyStats(startIso: string, endIso: string, scope: RequestLatencyScope): Promise<RequestLatencyStats> {
+    return firstValueFrom(this.http.post<RequestLatencyStats>('/api/logosdb/request_latency_stats', {
+      start_date: startIso,
+      end_date: endIso,
+      team_id: scope.teamId,
+      user_id: scope.userId,
+      provider_id: scope.providerId,
+      api_key_id: scope.apiKeyId,
+      model_ids: scope.modelIds.length ? scope.modelIds : null,
+    }));
+  }
+
+  // ── End cloud request delays ──────────────────────────────────────────────
 
   /**
    * One page of the request feed inside `[startIso, endIso]`, newest first.
@@ -229,12 +315,66 @@ export class StatisticsService {
     }));
   }
 
+  /** Every lane lock across all providers. */
+  getLaneLocks(): Promise<LaneLock[]> {
+    return firstValueFrom(this.http.get<LaneLock[]>('/api/logosdb/providers/logosnode/lanes/locks'));
+  }
+
+  /** Lock a lane warm. Idempotent. */
+  lockLane(providerId: number, laneId: string, modelName: string | null): Promise<LaneLock> {
+    return firstValueFrom(this.http.post<LaneLock>('/api/logosdb/providers/logosnode/lanes/lock', {
+      provider_id: providerId,
+      lane_id: laneId,
+      model_name: modelName,
+    }));
+  }
+
+  /** Release a lane lock. Idempotent. */
+  unlockLane(providerId: number, laneId: string): Promise<{ unlocked: boolean }> {
+    return firstValueFrom(this.http.post<{ unlocked: boolean }>('/api/logosdb/providers/logosnode/lanes/unlock', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
   calibrateUncalibrated(providerId: number): Promise<{ count?: number; models?: string[]; error?: string }> {
     return firstValueFrom(this.http.post<{ count?: number; models?: string[]; error?: string }>(
       '/api/logosdb/providers/logosnode/calibrate_uncalibrated',
       {
         provider_id: providerId,
       }
+    ));
+  }
+
+  getMaintenanceStatus(): Promise<MaintenanceStatus> {
+    return firstValueFrom(this.http.get<MaintenanceStatus>('/api/logosdb/maintenance'));
+  }
+
+  /**
+   * Release a calibration claim. The server stops the calibration first and
+   * refuses while the worker still reports a session.
+   */
+  releaseCalibrationClaim(
+    providerId: number,
+    claimToken: string,
+  ): Promise<{ released: boolean; forced: boolean; message?: string }> {
+    return firstValueFrom(this.http.post<{ released: boolean; forced: boolean; message?: string }>(
+      '/api/logosdb/maintenance/release_calibration',
+      { provider_id: providerId, claim_token: claimToken },
+    ));
+  }
+
+  /**
+   * Release a nightly recovery. Without `force` the server refuses (409) unless
+   * the worker runs the lane's original settings.
+   */
+  releaseRecovery(
+    modelProviderId: number,
+    force: boolean,
+  ): Promise<{ released: boolean; forced: boolean; message?: string }> {
+    return firstValueFrom(this.http.post<{ released: boolean; forced: boolean; message?: string }>(
+      '/api/logosdb/maintenance/release_recovery',
+      { model_provider_id: modelProviderId, force },
     ));
   }
 

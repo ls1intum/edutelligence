@@ -91,7 +91,6 @@ Tests stub heavy dependencies (sentence_transformers, gRPC) via `tests/conftest.
 - Provider types: `cloud` (Azure/OpenAI) and self-hosted GPU workers via `logos-workernode` (websocket bridge: `logosnode_registry.py`).
 - `api_keys.settings` JSONB: flexible per-key config (e.g. rate limits) — no migration needed for new keys.
 - Docker build: multi-stage with pinned `uv`; runtime uses slim Python with `VIRTUAL_ENV=/opt/venv`. **Python must stay 3.13** — 3.14 breaks tiktoken/PyO3 builds.
-- The repo-root `shared/` directory is symlinked in for local dev/CI: `ln -s ../../shared logos/logos-orchestrator/shared`.
 
 ## Running
 

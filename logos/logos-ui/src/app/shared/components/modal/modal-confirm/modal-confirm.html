@@ -6,11 +6,12 @@
   size="small"
 >
   <div class="confirm-body">
-    <div class="confirm-icon-wrap">
+    <div class="confirm-icon-wrap" [class.confirm-icon-wrap--primary]="!danger">
       <i [class]="'pi ' + icon" aria-hidden="true"></i>
     </div>
     <p class="confirm-title">{{ title }}</p>
     <p class="confirm-message">{{ message }}</p>
+    <ng-content select="[modal-details]" />
     <div class="confirm-error">
       <ng-content select="[modal-error]" />
     </div>

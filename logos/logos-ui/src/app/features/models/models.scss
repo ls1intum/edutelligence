@@ -244,3 +244,16 @@
 
   .table-row { padding-top: 12px; }
 }
+
+.nightly-cell { display: flex; flex-direction: column; gap: .4rem; align-items: flex-start; }
+.nightly-status {
+  display: inline-flex; align-items: center; gap: .45rem; padding: .25rem 0;
+  border: 0; background: transparent; color: inherit; font: inherit; font-size: .8125rem;
+  cursor: pointer; text-align: left;
+  i { font-size: .65rem; color: rgb(var(--color-typography-500)); }
+  &[data-state="next"] > i:first-child { color: #3b82f6; }
+  &[data-state="queued"] > i:first-child { color: #d99b16; }
+  .nightly-recent, &[data-state="recent"] i { color: #22a06b; font-size: .9rem; }
+  &[data-state="blocked"] > i:first-child { color: #ef6464; }
+}
+.nightly-off { color: rgb(var(--color-typography-500)); font-size: .8125rem; }

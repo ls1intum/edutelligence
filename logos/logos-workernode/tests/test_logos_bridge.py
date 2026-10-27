@@ -24,6 +24,19 @@ def _pin_backend_to_cuda(monkeypatch):
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
 
 
+_REAL_RESERVE_CALIBRATION = LogosBridgeClient._reserve_calibration
+
+
+@pytest.fixture(autouse=True)
+def _no_calibration_reservation_over_http(monkeypatch):
+    """Sessions would otherwise call a Logos that does not exist."""
+
+    async def _unreachable(self, model_name):
+        return None
+
+    monkeypatch.setattr(LogosBridgeClient, "_reserve_calibration", _unreachable)
+
+
 class _DummyState:
     pass
 
@@ -3421,6 +3434,105 @@ async def test_cancelling_a_stream_closes_the_upstream_and_frees_the_lane(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_phase", ["decrement", "close"])
+async def test_repeated_cancellation_during_cleanup_waits_for_release(monkeypatch, cancel_phase):
+    upstream = _FakeUpstream(200, [b"data: [DONE]\n\n"])
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+    lock = asyncio.Lock()
+    await lock.acquire()
+    cleanup_entered = asyncio.Event()
+    active = 1
+    closed = False
+
+    async def decrement(lane_id):
+        nonlocal active
+        if cancel_phase == "decrement":
+            cleanup_entered.set()
+            async with lock:
+                active -= 1
+        else:
+            active -= 1
+
+    async def close():
+        nonlocal closed
+        if cancel_phase == "close":
+            cleanup_entered.set()
+            async with lock:
+                closed = True
+        else:
+            closed = True
+
+    lane_manager.decrement_active_requests = AsyncMock(side_effect=decrement)
+    upstream.aclose = close
+    task = asyncio.create_task(client._execute_stream_command(ws, "cmd-1", {"lane_id": "lane-a", "payload": {}}))
+    client._command_tasks["cmd-1"] = task
+    try:
+        await asyncio.wait_for(cleanup_entered.wait(), timeout=1)
+        for _ in range(2):
+            assert client.cancel_command("cmd-1")
+            await asyncio.sleep(0)
+            assert not task.done(), "Cancellation must await cleanup, not leave it running in the background"
+        assert not any(frame["type"] == "stream_end" for frame in ws.frames)
+    finally:
+        lock.release()
+        result = await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1)
+    assert isinstance(result[0], asyncio.CancelledError)
+    assert active == 0
+    assert closed
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+    assert not any(frame["type"] == "stream_end" for frame in ws.frames)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_releases_count_and_upstream_while_lane_is_locked(monkeypatch):
+    from logos_worker_node.lane_manager import LaneManager
+    from logos_worker_node.models import WorkerConfig
+
+    upstream = _BlockingUpstream()
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15400, lane_port_end=15410)
+    manager._handles["lane-a"] = object()
+    manager._active_requests["lane-a"] = 1
+    lane_manager.decrement_active_requests = manager.decrement_active_requests
+    task = asyncio.create_task(
+        client._execute_stream_command(_CollectWS(), "cmd-1", {"lane_id": "lane-a", "payload": {}})
+    )
+    await upstream.first_chunk_sent.wait()
+    async with manager._lock.scoped(["lane-a"]):
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+        assert upstream.closed
+        assert manager._active_requests["lane-a"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,chunks", [(200, [b"data: [DONE]\n\n"]), (200, []), (500, [b"error"])])
+async def test_stream_end_is_sent_only_after_cleanup(monkeypatch, status, chunks):
+    upstream = _FakeUpstream(status, chunks)
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    events = []
+
+    async def decrement(lane_id):
+        events.append("decrement")
+
+    async def close():
+        events.append("close")
+
+    class ObservedWS(_CollectWS):
+        async def send(self, raw):
+            if json.loads(raw)["type"] == "stream_end":
+                events.append("stream_end")
+            await super().send(raw)
+
+    lane_manager.decrement_active_requests = AsyncMock(side_effect=decrement)
+    upstream.aclose = close
+    await client._execute_stream_command(ObservedWS(), "cmd-1", {"lane_id": "lane-a", "payload": {}})
+    assert events == ["decrement", "close", "stream_end"]
+
+
+@pytest.mark.asyncio
 async def test_cancelled_stream_sends_no_terminal_frame(monkeypatch):
     """Nobody is reading: the server already dropped the queue for this
     cmd_id. Emitting a stream_end failure would only be noise."""
@@ -3843,6 +3955,7 @@ def _central_client(tmp_path) -> LogosBridgeClient:
     # Startup leaves models without a profile out of the capabilities.
     cfg.capabilities_models = ["org/ready"]
     app.state.model_profiles.set_calibration_keys({"org/ready": {"schema": 1}, "org/pending": {"schema": 1}})
+    app.state.model_profiles.set_slice_gpu_counts({"org/ready": 2})
     return LogosBridgeClient(app, cfg)
 
 
@@ -3856,6 +3969,8 @@ async def test_hello_offers_profile_sync_with_the_current_calibration_keys(tmp_p
     assert "sync_model_profiles" in hello["actions"]
     assert set(hello["calibration_key_hashes"]) == {"org/ready", "org/pending"}
     assert hello["calibration_key_hashes"] == client._app.state.model_profiles.calibration_key_hashes()  # noqa: SLF001
+    assert hello["slice_gpu_counts"] == {"org/ready": 2}
+    assert hello["calibrating"] is False and hello["calibrating_model"] is None
 
 
 @pytest.mark.asyncio
@@ -4012,12 +4127,17 @@ async def test_startup_fetch_posts_keys_and_legacy_files(tmp_path, monkeypatch):
     monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", lambda timeout=15.0: _Http())
     legacy = {"model_profiles": {}, "unsupported_models": {"org/bad": "invalid-repo-id"}}
 
-    profiles = await client.fetch_model_profiles({"org/ready": "h"}, legacy)
+    profiles = await client.fetch_model_profiles({"org/ready": "h"}, {"org/ready": 2}, legacy)
 
     assert profiles == {"org/ready": {"base_residency_mb": 5.0, "sync_revision": 1}}
     url, body = posted[0]
     assert url == "https://logos.example/logosdb/providers/logosnode/model-profiles"
-    assert body == {"shared_key": "secret", "calibration_key_hashes": {"org/ready": "h"}, "legacy_import": legacy}
+    assert body == {
+        "shared_key": "secret",
+        "calibration_key_hashes": {"org/ready": "h"},
+        "slice_gpu_counts": {"org/ready": 2},
+        "legacy_import": legacy,
+    }
 
 
 @pytest.mark.asyncio
@@ -4041,7 +4161,7 @@ async def test_startup_fetch_rejects_an_orchestrator_without_central_profiles(tm
 
     monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", lambda timeout=15.0: _Http())
     with pytest.raises(RuntimeError, match="HTTP 404"):
-        await client.fetch_model_profiles({}, None)
+        await client.fetch_model_profiles({}, {}, None)
 
 
 @pytest.mark.asyncio
@@ -4068,3 +4188,312 @@ async def test_a_command_answer_carries_the_lifecycle_revision_after_the_command
 
     assert sent[-1]["cmd_id"] == "cmd-1"
     assert sent[-1]["lifecycle_revision"] == 7
+
+
+async def test_calibration_status_waits_for_task_cleanup(tmp_path):
+    from types import SimpleNamespace
+
+    app = _make_app_for_calibration(tmp_path)
+    client = LogosBridgeClient(app, LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"))
+    assert await client._execute_command("get_calibration_status", {}) == {"calibrating": False}
+    finished = asyncio.Event()
+    task = asyncio.create_task(finished.wait())
+    client._active_calibration_session = SimpleNamespace(task=task)
+    try:
+        assert await client._execute_command("get_calibration_status", {}) == {"calibrating": True}
+    finally:
+        finished.set()
+        await task
+    assert await client._execute_command("get_calibration_status", {}) == {"calibrating": False}
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_passes_explicit_restart_to_lane_manager():
+    client = _client_with_calibration_session(session_done=True)
+    manager = SimpleNamespace(reconfigure_lane=AsyncMock(return_value=_make_lane_status()))
+    client._app.state.lane_manager = manager
+    await client._execute_command("reconfigure_lane", {"lane_id": "lane-a", "updates": {}, "force_restart": True})
+    manager.reconfigure_lane.assert_awaited_once_with("lane-a", {}, require_idle=True, force_restart=True)
+
+
+@pytest.mark.asyncio
+async def test_a_model_calibrated_meanwhile_is_not_calibrated_again(tmp_path, monkeypatch):
+    """Logos may hand the node a calibration measured elsewhere during the
+    session; probing that model anyway would be wasted GPU time."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/first", "org/second"],
+    )
+    client = LogosBridgeClient(app, cfg)
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=200 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    probed: list[str] = []
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        lambda plan, **kwargs: probed.append(plan["model"]),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+    answers = iter([["org/first", "org/second"], ["org/first", "org/second"], []])
+    monkeypatch.setattr(client, "_list_uncalibrated_models", lambda **_kw: next(answers))  # noqa: SLF001
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    events = [(e.event, e.model, e.details) for e in app.state.lane_manager._event_log]
+    assert ("calibration_model_skipped", "org/second", "calibrated meanwhile") in events
+    names = [e for e, m, _ in events if m == "org/first" and e.startswith("calibration_model_")]
+    assert names[0] == "calibration_model_selected"  # before the precheck can skip it
+    assert probed == []
+    assert not any(e == "calibration_model_started" and m == "org/second" for e, m, _ in events)
+
+
+@pytest.mark.asyncio
+async def test_hello_names_the_calibrations_logos_has_not_snapshotted_yet(tmp_path):
+    client = _central_client(tmp_path)
+    client._app.state.model_profiles.apply_calibration_result(  # noqa: SLF001
+        "org/ready", {"base_residency_mb": 9.0, "residency_source": "calibrated"}
+    )
+    ws = _CollectWS()
+    await client._send_hello(ws)  # noqa: SLF001
+    assert ws.frames[0]["pending_snapshots"] == ["org/ready"]
+
+
+def _calibration_session_client(tmp_path, monkeypatch, models):
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=list(models)
+    )
+    client = LogosBridgeClient(app, cfg)
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=200 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    probed: list[str] = []
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        lambda plan, **kwargs: probed.append(plan["model"]),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+    return app, client, probed
+
+
+_ADOPTED = {
+    "base_residency_mb": 9000.0,
+    "residency_source": "calibrated",
+    "kv_cache_to_max_model_len_pairs": [{"kv": 1, "mml": 1}],
+    "sleeping_residual_mb": 100.0,
+    "sleep_l1_transient_host_ram_mb": 10.0,
+    "sync_revision": 5,
+    "calibration_id": 9,
+    "calibration_origin": "shared",
+    "calibration_stale": False,
+}
+
+
+@pytest.mark.asyncio
+async def test_the_model_is_reserved_before_its_events_can_be_sent(tmp_path, monkeypatch):
+    """The events go out up to a second late; only the reservation, made first,
+    bars an adoption in that gap."""
+    app, client, probed = _calibration_session_client(tmp_path, monkeypatch, ["org/first"])
+    seen: list[tuple[str, list[str]]] = []
+
+    async def _reserve(self, model_name):
+        seen.append((model_name, [e.event for e in app.state.lane_manager._event_log]))
+        return None
+
+    monkeypatch.setattr(LogosBridgeClient, "_reserve_calibration", _reserve)
+    assert (await client._handle_start_calibration_session({"sleep_level": 0}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    assert [m for m, _ in seen] == ["org/first"]
+    assert "calibration_model_selected" not in seen[0][1]  # nothing announced yet
+    events = [e.event for e in app.state.lane_manager._event_log]
+    assert "calibration_model_selected" in events
+
+
+@pytest.mark.asyncio
+async def test_a_calibration_adopted_while_events_were_in_flight_is_used_not_probed(tmp_path, monkeypatch):
+    """A sibling's calibration reached Logos before the node's events did.
+
+    The reservation answers with it: the node takes it and measures nothing.
+    """
+    app, client, probed = _calibration_session_client(tmp_path, monkeypatch, ["org/first"])
+
+    async def _reserve(self, model_name):
+        return dict(_ADOPTED)
+
+    monkeypatch.setattr(LogosBridgeClient, "_reserve_calibration", _reserve)
+    assert (await client._handle_start_calibration_session({"sleep_level": 0}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    profile = app.state.model_profiles.get_profile("org/first")
+    assert profile.base_residency_mb == 9000.0
+    assert (profile.sync_revision, profile.calibration_id, profile.calibration_origin) == (5, 9, "shared")
+    assert probed == []
+    events = [(e.event, e.details) for e in app.state.lane_manager._event_log if e.model == "org/first"]
+    assert ("calibration_model_skipped", "calibrated meanwhile") in events
+    assert not any(name == "calibration_model_selected" for name, _ in events)
+
+
+@pytest.mark.asyncio
+async def test_the_profile_revision_is_synchronized_before_probing_starts(tmp_path, monkeypatch):
+    """The reservation hands back a revision above the worker's; the probe then
+    runs against it, so its result is not rejected as outdated."""
+    app, client, probed = _calibration_session_client(tmp_path, monkeypatch, ["org/first"])
+    revisions: list[int] = []
+
+    async def _reserve(self, model_name):
+        return {"sync_revision": 7}  # a central change the worker has not seen
+
+    def _spy_precheck(*a, **k):
+        revisions.append(app.state.model_profiles.get_profile("org/first").sync_revision)
+        raise RuntimeError("stop before the probe")
+
+    monkeypatch.setattr(LogosBridgeClient, "_reserve_calibration", _reserve)
+    monkeypatch.setattr(client, "_run_hf_compatibility_precheck", _spy_precheck)  # noqa: SLF001
+    await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    await _drain_session(client)
+    assert revisions == [7]
+
+
+class _Http:
+    def __init__(self, status=200, body=None, error=None):
+        self.status, self.body, self.error, self.posted = status, body, error, []
+
+    def __call__(self, timeout=15.0):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def post(self, url, json=None):
+        self.posted.append((url, json))
+        if self.error:
+            raise self.error
+        outer = self
+
+        class _Resp:
+            status_code = outer.status
+            content = b"{}"
+            text = ""
+
+            @staticmethod
+            def json():
+                return outer.body
+
+        return _Resp()
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_is_asked_of_logos_with_the_shared_key(tmp_path, monkeypatch):
+    client = _central_client(tmp_path)
+    http = _Http(body={"profiles": {"org/ready": {"sync_revision": 3}}})
+    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", http)
+    assert await _REAL_RESERVE_CALIBRATION(client, "org/ready") == {"sync_revision": 3}
+    url, body = http.posted[0]
+    assert url == "https://logos.example/logosdb/providers/logosnode/calibration-reservation"
+    registry = client._app.state.model_profiles  # noqa: SLF001
+    assert body == {
+        "shared_key": "secret",
+        "model_name": "org/ready",
+        "calibration_key_hash": registry.calibration_key_hashes()["org/ready"],
+        "slice_gpu_count": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_model_without_a_known_key_is_reserved_by_name_only(tmp_path, monkeypatch):
+    client = _central_client(tmp_path)
+    http = _Http(body={"profiles": {}})
+    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", http)
+    await _REAL_RESERVE_CALIBRATION(client, "org/unknown")
+    assert http.posted[0][1] == {"shared_key": "secret", "model_name": "org/unknown"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "http",
+    [_Http(status=404), _Http(status=500), _Http(error=RuntimeError("down")), _Http(body={"profiles": {}})],
+)
+async def test_without_a_reservation_the_events_remain_the_barrier(tmp_path, monkeypatch, http):
+    client = _central_client(tmp_path)
+    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", http)
+    assert await _REAL_RESERVE_CALIBRATION(client, "org/ready") is None
+
+
+class _LogosJudgingStaleness(_Http):
+    """Answers a reservation as Logos does: staleness is judged against the key
+    on file, which a config edit not yet reported through a status has not changed."""
+
+    def __init__(self, key_on_file: str):
+        super().__init__()
+        self.key_on_file = key_on_file
+
+    async def post(self, url, json=None):
+        if "calibration_key_hash" in json:
+            self.key_on_file = json["calibration_key_hash"]  # stored before the profile is built
+        self.posted.append((url, json))
+        outer = self
+
+        class _Resp:
+            status_code = 200
+            content = b"{}"
+            text = ""
+
+            @staticmethod
+            def json():
+                profile = {**_ADOPTED, "calibration_origin": "local", "calibration_id": 9, "sync_revision": 5}
+                profile["calibration_stale"] = outer.key_on_file != "KEY-IN-MEASUREMENT"
+                return {"profiles": {json["model_name"]: profile}}
+
+        return _Resp()
+
+
+@pytest.mark.asyncio
+async def test_a_config_edit_not_yet_reported_still_gets_its_model_recalibrated(tmp_path, monkeypatch):
+    """The session refreshes the node's keys and marks the calibration stale. The
+    reservation must not let Logos, still holding the old key, say otherwise."""
+    app, client, probed = _calibration_session_client(tmp_path, monkeypatch, ["org/first"])
+    registry = app.state.model_profiles
+    registry.replace_from_sync({"org/first": dict(_ADOPTED, calibration_origin="local")})
+    registry.set_calibration_keys({"org/first": {"plan": "KEY-IN-MEASUREMENT"}})
+    registry.set_slice_gpu_counts({"org/first": 2})
+    registry.set_calibration_keys({"org/first": {"plan": "after-the-config-edit"}})
+    assert registry.get_profile("org/first").calibration_stale is True
+
+    logos = _LogosJudgingStaleness(key_on_file="KEY-IN-MEASUREMENT")
+    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", logos)
+    monkeypatch.setattr(LogosBridgeClient, "_reserve_calibration", _REAL_RESERVE_CALIBRATION)
+    assert (await client._handle_start_calibration_session({"sleep_level": 0}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    assert logos.posted[0][1]["calibration_key_hash"] == registry.calibration_key_hashes()["org/first"]
+    events = [(e.event, e.details) for e in app.state.lane_manager._event_log if e.model == "org/first"]
+    assert ("calibration_model_skipped", "calibrated meanwhile") not in events
+    assert any(name == "calibration_model_selected" for name, _ in events)
+    assert registry.get_profile("org/first").calibration_stale is True

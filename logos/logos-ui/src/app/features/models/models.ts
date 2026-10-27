@@ -6,6 +6,10 @@ import {
   OnInit,
   ChangeDetectionStrategy,
 } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { DestroyRef } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { timer, switchMap, catchError, of } from 'rxjs';
 import { FormsModule } from '@angular/forms';
 import { TitleCasePipe } from '@angular/common';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
@@ -24,6 +28,12 @@ import {
   formatLastUsedParts,
   type LastUsedParts,
 } from '../../shared/utils/date';
+
+interface NightlySchedule {
+  model_id: number; model_provider_id: number; provider_name: string;
+  state: 'next' | 'queued' | 'recent' | 'blocked' | 'disabled' | 'waiting' | 'busy';
+  reason: string; last_run_date: string | null; recent_success: boolean;
+}
 
 const PROFILE_AXES = ['latency', 'quality', 'price'] as const;
 
@@ -46,6 +56,27 @@ const PROFILE_AXES = ['latency', 'quality', 'price'] as const;
   styleUrl: './models.scss',
 })
 export class Models implements OnInit {
+  private http = inject(HttpClient);
+  private destroyRef = inject(DestroyRef);
+  nightly = signal<{ schedules: NightlySchedule[]; next_date: string } | null>(null);
+  nightlyError = signal(false);
+  readonly nightlyLabels = { next: 'Next night', queued: 'In rotation', recent: 'Tested recently',
+    busy: 'In progress', blocked: 'Blocked', disabled: 'Off', waiting: 'Waiting' };
+
+  nightlyFor(modelId: number): NightlySchedule[] {
+    return this.nightly()?.schedules.filter(row => row.model_id === modelId) ?? [];
+  }
+
+  openPerformance(model: Model): void {
+    this.router.navigate(['/models', model.id, 'details'], { queryParams: { tab: 'performance' } });
+  }
+
+  nightlyDetail(row: NightlySchedule): string {
+    return `${row.provider_name}: ${row.reason}${row.state === 'next' ? ' · ' + this.nightly()?.next_date : ''}`
+      + (row.last_run_date ? ` · Last attempt: ${row.last_run_date}` : '')
+      + (row.recent_success ? ' · Successful measurement in the last 7 days' : '');
+  }
+
   private modelService = inject(ModelManagementService);
   readonly role = inject(AuthService).role;
   private router = inject(Router);
@@ -65,6 +96,7 @@ export class Models implements OnInit {
   search = signal('');
   loadError = signal(false);
   /** Sort of the last-used column: unsorted, oldest first or newest first. */
+  nightlySort = signal<'none' | 'asc' | 'desc'>('none');
   lastUsedSort = signal<'none' | 'asc' | 'desc'>('none');
 
   /** Sort direction for the table header; null while unsorted. */
@@ -118,6 +150,17 @@ export class Models implements OnInit {
             (m.aliases ?? '').toLowerCase().includes(q),
         )
       : this.models();
+    const nightlyDir = this.nightlySort();
+    if (nightlyDir !== 'none') {
+      const priority: Record<NightlySchedule['state'], number> = {
+        busy: 0, next: 1, queued: 2, recent: 3, waiting: 4, blocked: 5, disabled: 6,
+      };
+      // A model can have several providers; its most immediate status determines its position.
+      const rank = (id: number) => Math.min(6, ...this.nightlyFor(id).map(row => priority[row.state]));
+      return [...list].sort((a, b) =>
+        (nightlyDir === 'asc' ? rank(a.id) - rank(b.id) : rank(b.id) - rank(a.id))
+        || a.name.localeCompare(b.name));
+    }
     const dir = this.lastUsedSort();
     if (dir === 'none') return list;
     // ISO-8601 UTC timestamps sort lexicographically; the empty string (never
@@ -179,6 +222,13 @@ export class Models implements OnInit {
 
   ngOnInit(): void {
     this.fetchModels();
+    if (this.role() === 'logos_admin') {
+      timer(0, 30000).pipe(
+        switchMap(() => this.http.post<{ schedules: NightlySchedule[]; next_date: string }>(
+          '/api/logosdb/model_benchmarks/nightly/overview', {}).pipe(catchError(() => of(null)))),
+        takeUntilDestroyed(this.destroyRef),
+      ).subscribe(value => { this.nightly.set(value); this.nightlyError.set(value === null); });
+    }
   }
 
   async fetchModels(): Promise<void> {
@@ -210,7 +260,17 @@ export class Models implements OnInit {
 
   // ── Last used ─────────────────────────────────────────────────────────────
   /** Cycles unsorted → oldest first (deprecation candidates) → newest first. */
+  toggleSort(column: number): void {
+    if (column === 7) {
+      this.lastUsedSort.set('none');
+      this.nightlySort.update(dir => dir === 'none' ? 'asc' : dir === 'asc' ? 'desc' : 'none');
+    } else {
+      this.toggleLastUsedSort();
+    }
+  }
+
   toggleLastUsedSort(): void {
+    this.nightlySort.set('none');
     this.lastUsedSort.update((dir) => (dir === 'none' ? 'asc' : dir === 'asc' ? 'desc' : 'none'));
   }
 

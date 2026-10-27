@@ -4,7 +4,7 @@ title: RAG Pipeline
 
 # RAG Pipeline
 
-Iris uses retrieval-augmented generation (RAG) to ground lecture and FAQ responses in course content. This page describes Iris's content collections and processing. It does not describe Memiris memory schemas, which are separate tenant-aware storage owned by the [Memiris library](https://github.com/ls1intum/edutelligence/tree/main/memiris).
+Iris uses retrieval-augmented generation (RAG) to ground lecture and FAQ responses in course content. This page describes Iris's content collections and processing.
 
 Model roles, providers, and local/cloud selection belong in [LLM configuration](../admin/llm-configuration.md), the [variant system](./variant-system.md), and [developer configuration](./configuration.md), rather than this execution reference.
 
@@ -21,7 +21,7 @@ Ingestion callbacks report processing state to Artemis. Retrieval classes are in
 
 ## Iris content collections
 
-`VectorDatabase` initializes five Iris-specific collections. They are distinct from Artemis Global Search and Memiris data.
+`VectorDatabase` initializes five Iris-specific collections. They are distinct from Artemis Global Search data.
 
 | Collection              | Content                                                     |
 | ----------------------- | ----------------------------------------------------------- |
@@ -37,7 +37,7 @@ The collections retain course and lecture/unit metadata so ingestion, deletion, 
 
 ### Lecture PDFs
 
-`LectureIngestionUpdatePipeline` coordinates the lecture-unit update flow. The PDF ingestion path extracts lecture-page content, processes relevant visual material, chunks text, vectorizes it, and writes `Lectures` records with their metadata. It also updates the related lecture-unit representation used by retrieval. The incoming lecture-unit webhook runs on a thread through `IngestionJobHandler`; its duplicate-job suppression is only for the same course, lecture, and lecture-unit identity.
+`LectureIngestionUpdatePipeline` coordinates the lecture-unit update flow. The PDF ingestion path extracts lecture-page content, processes relevant visual material, chunks text, vectorizes it, and writes `Lectures` records with their metadata. It also updates the related lecture-unit representation used by retrieval. The incoming lecture-unit webhook runs on a thread registered in `IngestionJobHandler`, which starts it immediately and supersedes any run still in progress for the same base URL, course, lecture, and lecture unit. See [ingestion jobs](./ingestion-jobs.md) for the supersession and cancellation contract.
 
 For an updated attachment, `LectureUnitPageIngestionPipeline` performs the following source-backed sequence:
 
@@ -49,6 +49,31 @@ For an updated attachment, `LectureUnitPageIngestionPipeline` performs the follo
 6. remove the temporary file and report token/status updates through the ingestion callback.
 
 If the stored attachment version is already current, the pipeline can retain the existing chunks and restore display-page metadata instead of re-ingesting the PDF. Updated content is scoped and replaced before the new chunks are written.
+
+### Printed slide numbers
+
+A slide has two numbers, and keeping them apart is a cross-cutting constraint rather than an ingestion detail:
+
+| Number                          | Stored as             | Role                                                                                                            |
+| ------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------- |
+| The slide's index in the deck   | `page_number`         | What Artemis navigates by — a citation's position and a point-out target. Internal; never shown to the student. |
+| The number printed on the slide | `display_page_number` | What the student sees on the slide. The only page number the agent may name in an answer.                       |
+
+They diverge for any deck with a title or agenda slide before printed page 1, which is most of them.
+
+The printed number is read during ingestion. `interpret_image()` returns a `SlideVisionDTO` per page carrying the `academic_description` that is merged into the page text and the `display_page_number` visible on the slide, or `-1` when none is legible. Because vision reads each slide in isolation, a number can come back missing or simply wrong — a figure label or a "Lecture 6" footer read as the page number.
+
+`_reconcile_display_page_numbers()` turns those independent reads into one consistent sequence:
+
+1. **A dominant offset wins.** Printed numbers almost always track the physical index by a constant offset. When a strict majority of the legible reads agree on one offset, every page is snapped to it. That single step both fills the `-1` gaps and overrides the minority of misreads. Front-matter pages that snap to zero or below carry no printed number and are recorded as `-1`.
+2. **Otherwise, gaps are interpolated.** With no majority — irregular or restarting numbering — the confident reads are trusted and only the `-1` gaps are filled from their nearest read neighbours.
+3. **With nothing legible at all**, the sequential page number is used.
+
+The reconciled list is written onto every page chunk and the matching unit segments, and is reported to Artemis as `displayPageNumbers` on the terminal ingestion status update, so both services describe a slide by the same number.
+
+`printed_page_number()` in `domain/retrieval/lecture/lecture_retrieval_dto.py` is the single normalizer: it maps `-1`, legacy `0`, and `None` to `None`, meaning "no printed number". Everything that shows a page to the agent or to Artemis goes through it — the retrieval tool's output, the student's current position, the point-out parameters — so a slide is never described by a nonsensical number and the three can never disagree about which slides count as unnumbered.
+
+Retrieval results make the distinction explicit. A page chunk is rendered as `Page: N, point-out id: M`, a transcription segment as `Page: N` only (its `page_number` is the printed number read off the video frame, not a deck index), and a unit segment as `Page: N` with no handle of its own. The prompt instructs the agent accordingly: quote `Page`, pass `point-out id`, and never the other way round. See [client commands](./client-commands.md) and [viewing context](./viewing-context.md).
 
 ### Transcriptions and segments
 
@@ -88,7 +113,7 @@ Retrieval requests carry course, lecture, lecture-unit, and Artemis-instance sco
 
 `FaqRetrieval` searches the `Faqs` collection for a course-scoped FAQ context. Chat modes and tools decide whether FAQ retrieval is available for a particular request.
 
-After a response uses lecture or FAQ material, the nested citation pipeline can generate source attribution for the parent response. Citation generation is post-processing inside the parent pipeline, not an independently callable Artemis endpoint.
+After a response uses lecture or FAQ material, the nested citation pipeline can generate source attribution for the parent response. Citation generation is post-processing inside the parent pipeline, not an independently callable Artemis endpoint. The marker format, the keyword/summary enrichment, and what the citations are built from are documented in [citations](./citations.md).
 
 ## Vector database lifecycle
 
@@ -97,4 +122,3 @@ After a response uses lecture or FAQ material, the nested citation pipeline can 
 ## Boundaries
 
 - **Artemis Global Search** has its own authorization model and schemas. Iris's global-search answer path may retrieve lecture content, but it does not merge the two storage systems.
-- **Memiris** uses separate learning, memory, and relationship schemas. Iris's wrapper, memory tools, and periodic sleep scheduling are documented in the [pipeline system](./pipeline-system.md); reusable library internals live in the Memiris README.

@@ -46,3 +46,43 @@ describe('request feed REST filters', () => {
     http.verify();
   });
 });
+
+describe('maintenance API', () => {
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+  });
+
+  afterEach(() => TestBed.inject(HttpTestingController).verify());
+
+  it('reads maintenance status through the webservice route', async () => {
+    const http = TestBed.inject(HttpTestingController);
+    const result = TestBed.inject(StatisticsService).getMaintenanceStatus();
+    const request = http.expectOne('/api/logosdb/maintenance');
+    expect(request.request.method).toBe('GET');
+    const status = { free: true, limit: 1, calibrations: [], benchmarks: [], recoveries: [] };
+    request.flush(status);
+    expect(await result).toEqual(status);
+  });
+
+  it('releases a calibration claim through the webservice route', async () => {
+    const http = TestBed.inject(HttpTestingController);
+    const result = TestBed.inject(StatisticsService).releaseCalibrationClaim(12, 'claim-1');
+    const request = http.expectOne('/api/logosdb/maintenance/release_calibration');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({ provider_id: 12, claim_token: 'claim-1' });
+    request.flush({ released: true, forced: false });
+    expect(await result).toEqual({ released: true, forced: false });
+  });
+
+  it.each([false, true])('posts the deployment and force=%s', async (force) => {
+    const http = TestBed.inject(HttpTestingController);
+    const result = TestBed.inject(StatisticsService).releaseRecovery(31, force);
+    const request = http.expectOne('/api/logosdb/maintenance/release_recovery');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({ model_provider_id: 31, force });
+    request.flush({ released: true, forced: force });
+    expect((await result).forced).toBe(force);
+  });
+});

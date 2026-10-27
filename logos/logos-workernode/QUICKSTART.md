@@ -58,6 +58,8 @@ The server decides when to spin up or tear down lanes based on `capabilities_mod
 
 > [!NOTE]
 > The worker automatically measures each model's VRAM footprint and reports it to Logos, which stores it centrally and hands it back when the worker starts. The worker therefore needs Logos to be reachable before it starts any lane.
+>
+> Calibration measures the lane that will serve. It applies every setting in `model_overrides`, including `attention_backend`. Without `attention_backend`, calibration picks the backend the same way the lane does: `TRITON_ATTN` on GPUs older than compute capability 8.0, otherwise the vLLM default. A backend set in `extra_args` is passed through once and wins.
 
 ## 4. Start the Worker
 

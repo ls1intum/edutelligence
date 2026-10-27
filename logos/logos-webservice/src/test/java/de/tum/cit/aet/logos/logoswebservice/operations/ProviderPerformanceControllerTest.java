@@ -46,6 +46,38 @@ class ProviderPerformanceControllerTest {
     @MockitoBean OrchestratorWorkerAdminClient orchestratorWorkerAdminClient;
 
     @Test
+    void nightlyOverview_requiresLogosAdmin() throws Exception {
+        when(orchestratorWorkerAdminClient.nightlyBenchmark("overview", Map.of()))
+            .thenReturn(ResponseEntity.ok(Map.of("next_date", "2026-10-22", "schedules", java.util.List.of())));
+        mvc.perform(post("/logosdb/model_benchmarks/nightly/overview"))
+            .andExpect(status().isUnauthorized());
+        mvc.perform(post("/logosdb/model_benchmarks/nightly/overview").with(TestJwt.testUser()))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/logosdb/model_benchmarks/nightly/overview").with(TestJwt.logosAdmin()))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.next_date").value("2026-10-22"));
+    }
+
+    @Test
+    void nightlyToggle_requiresLogosAdminAndForwardsExplicitState() throws Exception {
+        Map<String, Object> body = Map.of("model_provider_id", 31, "enabled", true, "expected_enabled", false);
+        when(orchestratorWorkerAdminClient.nightlyBenchmark("configure", body))
+            .thenReturn(ResponseEntity.ok(Map.of("enabled", true)));
+        String payload = "{\"model_provider_id\":31,\"enabled\":true,\"expected_enabled\":false}";
+        mvc.perform(post("/logosdb/model_benchmarks/nightly/configure").with(TestJwt.testUser())
+                .contentType("application/json").content(payload)).andExpect(status().isForbidden());
+        mvc.perform(post("/logosdb/model_benchmarks/nightly/configure").with(TestJwt.logosAdmin())
+                .contentType("application/json").content(payload))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.enabled").value(true));
+    }
+
+    @Test
+    void nightlyStatus_requiresAuthentication() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks/nightly/status")
+                .contentType("application/json").content("{\"model_provider_id\":31}"))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void benchmarkLimits_returnsWorkerGpuCount() throws Exception {
         when(orchestratorWorkerAdminClient.benchmarkLimits(Map.of("model_provider_id", 31)))
             .thenReturn(ResponseEntity.ok(Map.of("gpu_count", 2, "current", Map.of("tensor_parallel_size", 1))));

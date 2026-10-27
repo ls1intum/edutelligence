@@ -1,0 +1,65 @@
+<section class="nightly" [class.nightly--active]="state()?.enabled" aria-label="Nightly benchmarks">
+  <div class="nightly__heading">
+    <div class="nightly__title">
+      <strong><i class="pi pi-moon" aria-hidden="true"></i> Nightly benchmarks · {{ providerName }}</strong>
+      <p class="nightly__status" role="status" [class.nightly__status--enabled]="state()?.enabled && !state()?.recovery_required"
+        [class.nightly__status--blocked]="state()?.recovery_required">
+        <i [class]="!state() ? 'pi pi-spin pi-spinner' : state()!.recovery_required ? 'pi pi-exclamation-circle' : state()!.enabled ? 'pi pi-calendar' : 'pi pi-pause-circle'" aria-hidden="true"></i>
+        {{ !state() ? 'Loading nightly status…' : state()!.recovery_required ? 'Recovery pending' : state()!.enabled ? 'Enabled · in nightly rotation' : 'Disabled · not scheduled' }}
+      </p>
+    </div>
+    <button type="button" (click)="review()" [disabled]="!state() || saving() || (!state()!.enabled && (!window || state()!.recovery_required))">
+      {{ state()?.enabled ? 'Disable nightly runs…' : 'Enable nightly runs…' }}
+    </button>
+  </div>
+  <div class="nightly__preview">
+    <strong>Current settings → {{ (state()?.plan?.length ?? 1) - 1 }} test configurations</strong>
+    <p>Same workload · 50 requests · 4 concurrent · up to 512 output tokens</p>
+    <div class="nightly__parameters">
+      @for (parameter of plannedParameters; track parameter.name) {
+        <span>{{ parameter.name === 'max_num_seqs' ? 'Sequence limit' : 'Batch token limit' }} <b>{{ parameter.values }}</b></span>
+      }
+    </div>
+  </div>
+  <details>
+    <summary>Schedule and test plan</summary>
+    @if (window; as timing) {
+      <p>{{ timing.start }}–{{ timing.end }} · {{ timing.timezone }} · up to 2 model/worker pairs per night, oldest first.</p>
+      <p>Calibration runs first. No new test after {{ timing.benchmark_start_cutoff }}. At {{ timing.end }}, runs below 50% stop. Five minutes without progress also stops a run.</p>
+    }
+    <ol>
+      @for (run of state()?.plan ?? []; track $index) {
+        <li>{{ $index === 0 ? 'Current settings' : 'Variant ' + $index }}
+          @if ($index > 0) {
+            · sequences {{ run.serving_overrides['max_num_seqs'] ?? 'auto' }}
+            · batch tokens {{ run.serving_overrides['max_num_batched_tokens'] ?? 'auto' }}
+          }
+        </li>
+      }
+    </ol>
+    <p>The whole worker is reserved during testing. Original settings are restored afterwards.</p>
+  </details>
+  @if (state(); as status) {
+    <small>Latest state: {{ statusLabel(status.status) }} @if (status.last_run_date) { · {{ status.last_run_date }} }</small>
+    @if (status.recovery_required) { <p role="alert">Worker recovery is pending. Further nightly benchmarks are paused.</p> }
+    @if (status.report.length) {
+      <details><summary>Latest nightly results</summary>
+        <ul>@for (result of status.report; track $index) {
+          <li>@if (result.configuration) {Configuration {{ result.configuration }} · }{{ statusLabel(result.status) }}
+            @if (result.attempt) { · attempt {{ result.attempt }} }
+            @if (result.benchmark_id) { · benchmark #{{ result.benchmark_id }} }
+            @if (result.reason) { — {{ result.reason }} }
+          </li>
+        }</ul>
+        <p>Successful measurements appear in the performance comparison below. Production settings are restored after the nightly plan.</p>
+      </details>
+    }
+  }
+  @if (error() && !confirming()) { <p role="alert">{{ error() }}</p> }
+</section>
+<app-modal-confirm [visible]="confirming()" (visibleChange)="!saving() && confirming.set($event)"
+  [title]="enabling ? 'Enable nightly runs?' : 'Disable nightly runs?'"
+  [message]="confirmationMessage" [confirmLabel]="enabling ? 'Enable nightly runs' : 'Disable nightly runs'"
+  [danger]="!enabling" icon="pi-moon" [loading]="saving()" (confirmed)="confirm()">
+  @if (error()) { <p modal-error role="alert">{{ error() }}</p> }
+</app-modal-confirm>

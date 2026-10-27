@@ -196,3 +196,30 @@ def normalize_reasoning_effort(payload: Dict[str, Any], model_name: Optional[str
             result = {**result, "chat_template_kwargs": {**template_kwargs, "reasoning_effort": mapped}}
 
     return result
+
+
+def effective_reasoning_effort(payload: Any) -> Optional[str]:
+    """The reasoning effort a payload sends, lower-cased, or None when it sends none.
+
+    Reads the same locations ``normalize_reasoning_effort`` rewrites, so a
+    normalized payload yields the value the upstream actually receives. The
+    explicit template kwarg comes first: vLLM hands it to the chat template
+    as given, over the API-level field.
+    """
+    if not isinstance(payload, dict):
+        return None
+    candidates = []
+    template_kwargs = payload.get("chat_template_kwargs")
+    if isinstance(template_kwargs, dict):
+        candidates.append(template_kwargs.get("reasoning_effort"))
+    candidates.append(payload.get("reasoning_effort"))
+    reasoning = payload.get("reasoning")
+    if isinstance(reasoning, dict):
+        candidates.append(reasoning.get("effort"))
+    output_config = payload.get("output_config")
+    if isinstance(output_config, dict):
+        candidates.append(output_config.get("effort"))
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return None

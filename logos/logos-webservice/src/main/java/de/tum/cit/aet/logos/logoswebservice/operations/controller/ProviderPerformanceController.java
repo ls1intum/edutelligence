@@ -167,6 +167,34 @@ public class ProviderPerformanceController {
         }
     }
 
+    @PostMapping("/model_benchmarks/nightly/overview")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> nightlyOverview() {
+        return nightlyResponse("overview", Map.of());
+    }
+
+    @PostMapping("/model_benchmarks/nightly/status")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> nightlyStatus(@RequestBody Map<String, Object> body) {
+        return nightlyResponse("status", body);
+    }
+
+    @PostMapping("/model_benchmarks/nightly/configure")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> configureNightly(@RequestBody Map<String, Object> body) {
+        return nightlyResponse("configure", body);
+    }
+
+    private ResponseEntity<?> nightlyResponse(String operation, Map<String, Object> body) {
+        try {
+            return orchestratorWorkerAdminClient.nightlyBenchmark(operation, body);
+        } catch (HttpStatusCodeException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(orchestratorError(e));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(503).body(Map.of("error", "Nightly benchmark service is unavailable"));
+        }
+    }
+
     private Map<String, Object> orchestratorError(HttpStatusCodeException exception) {
         try {
             return objectMapper.readValue(exception.getResponseBodyAsString(), new TypeReference<>() {});

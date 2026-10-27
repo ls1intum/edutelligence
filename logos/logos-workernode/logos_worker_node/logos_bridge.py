@@ -31,6 +31,7 @@ except Exception:  # noqa: BLE001
 
 from logos_worker_node import perf_trace as worker_perf
 from logos_worker_node import prometheus_metrics as prom
+from logos_worker_node.lane_manager import _lane_id_from_config, _normalize_lane_id
 from logos_worker_node.metal import is_metal_backend
 from logos_worker_node.models import (
     LaneConfig,
@@ -141,6 +142,19 @@ class LogosBridgeClient:
         self._command_tasks: dict[str, asyncio.Task] = {}
         self._stopping = asyncio.Event()
         self._send_lock = asyncio.Lock()
+        # Commands other than inference run off the receive loop, so a command
+        # is read and answered while a load is still starting. The lane
+        # manager orders what must not overlap. Strong references: a
+        # disconnect does not cancel them, since a lane change half done is
+        # worse than one whose answer is lost.
+        self._lifecycle_tasks: set[asyncio.Task] = set()
+        # Lifecycle commands keep their arrival order per lane: a sleep then a
+        # wake, or an unload then a load, must not overtake each other. A
+        # worker-wide change (apply_lanes) waits for every earlier lane
+        # command, and every later one waits for it. Each entry is the
+        # completion of the newest command of that lane.
+        self._lane_tails: dict[str, asyncio.Future] = {}
+        self._worker_tail: asyncio.Future | None = None
         # One pooled relay client shared by every infer/stream command instead
         # of a fresh AsyncClient (and a fresh TCP connection to the lane) per
         # request. It outlives individual commands, so command finally-blocks
@@ -229,6 +243,16 @@ class LogosBridgeClient:
                 await task
             except asyncio.CancelledError:
                 pass
+        # No command is read any more. Shutdown, unlike a disconnect, ends the
+        # lane commands still running before the lane manager cleans up. An
+        # unload runs to its end: cancelled mid-exit, it would leave a process
+        # that no handle tracks.
+        lifecycle = tuple(self._lifecycle_tasks)
+        for running in lifecycle:
+            if not running.get_name().startswith("logos-bridge-delete_lane-"):
+                running.cancel()
+        if lifecycle:
+            await asyncio.gather(*lifecycle, return_exceptions=True)
         await self._relay_client.aclose()
         self._connected = False
         logger.info("Logos bridge stopped")
@@ -343,9 +367,36 @@ class LogosBridgeClient:
             raise RuntimeError("logos.shared_key (LOGOS_API_KEY) is required")
         return logos_url
 
+    async def _reserve_calibration(self, model_name: str) -> dict[str, Any] | None:
+        """Have Logos stop adopting for this model, and get its profile.
+
+        The events below reach Logos up to a second late, so they cannot bar
+        an adoption in time. None when Logos cannot answer (an older server,
+        unreachable): the events are then the only barrier.
+        """
+        url = f"{self._logos_base_url()}/logosdb/providers/logosnode/calibration-reservation"
+        profiles = self._app.state.model_profiles
+        body: dict[str, Any] = {"shared_key": self._cfg.shared_key, "model_name": model_name}
+        # A config edit since the last status is known only here.
+        if model_name in profiles.calibration_key_hashes():
+            body["calibration_key_hash"] = profiles.calibration_key_hashes()[model_name]
+            body["slice_gpu_count"] = profiles.slice_gpu_counts().get(model_name)
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(url, json=body)
+            if resp.status_code != 200:
+                logger.info("[Calibration] No reservation for %s (HTTP %s)", model_name, resp.status_code)
+                return None
+            profile = ((resp.json() if resp.content else {}).get("profiles") or {}).get(model_name)
+        except Exception:  # noqa: BLE001
+            logger.info("[Calibration] Could not reserve %s with Logos", model_name, exc_info=True)
+            return None
+        return profile if isinstance(profile, dict) else None
+
     async def fetch_model_profiles(
         self,
         calibration_key_hashes: dict[str, str],
+        slice_gpu_counts: dict[str, int],
         legacy_import: dict[str, Any] | None,
     ) -> dict[str, dict[str, Any]]:
         """This node's profiles from Logos, the only place they are stored."""
@@ -353,6 +404,7 @@ class LogosBridgeClient:
         payload: dict[str, Any] = {
             "shared_key": self._cfg.shared_key,
             "calibration_key_hashes": calibration_key_hashes,
+            "slice_gpu_counts": slice_gpu_counts,
         }
         if legacy_import is not None:
             payload["legacy_import"] = legacy_import
@@ -552,8 +604,12 @@ class LogosBridgeClient:
         if hasattr(self._app, "state") and hasattr(self._app.state, "lane_manager"):
             static_lane_ids = sorted(self._app.state.lane_manager._static_lane_ids)
         calibration_key_hashes: dict[str, str] = {}
+        slice_gpu_counts: dict[str, int] = {}
+        pending_snapshots: list[str] = []
         if hasattr(self._app, "state") and hasattr(self._app.state, "model_profiles"):
             calibration_key_hashes = self._app.state.model_profiles.calibration_key_hashes()
+            slice_gpu_counts = self._app.state.model_profiles.slice_gpu_counts()
+            pending_snapshots = self._app.state.model_profiles.awaiting_snapshot_models()
         await self._send_json(
             ws,
             {
@@ -573,7 +629,10 @@ class LogosBridgeClient:
                 # start clears it, and reporting that as live would exclude this
                 # worker from placement for as long as no new session begins.
                 "calibrating": self._calibration_session_is_live(),
+                "calibrating_model": self._calibrating_model(),
+                "pending_snapshots": pending_snapshots,
                 "calibration_key_hashes": calibration_key_hashes,
+                "slice_gpu_counts": slice_gpu_counts,
                 "actions": [
                     "infer",
                     "infer_stream",
@@ -592,6 +651,7 @@ class LogosBridgeClient:
                     "reconfigure_lane",
                     "start_calibration_session",
                     "stop_calibration_session",
+                    "get_calibration_status",
                     "sync_model_profiles",
                 ],
             },
@@ -887,7 +947,66 @@ class LogosBridgeClient:
             self._track_command_task(task, action=action, cmd_id=cmd_id)
             return
 
-        await self._execute_command_and_respond(ws, cmd_id, action, params)
+        # Off the receive loop: every command is read, and answered, while a
+        # load is still starting.
+        self._start_lifecycle_task(self._execute_in_order(ws, cmd_id, action, params), action, cmd_id)
+
+    @staticmethod
+    def _command_target(action: str, params: dict[str, Any]) -> str | None:
+        """The lane a lifecycle command changes, ``*`` for the whole worker, or None for a read."""
+        if action in {"add_lane", "delete_lane", "sleep_lane", "wake_lane", "reconfigure_lane"}:
+            try:
+                if action == "add_lane":
+                    return _lane_id_from_config(LaneConfig(**params))
+                lane_id = str(params.get("lane_id") or "").strip()
+                return _normalize_lane_id(lane_id) if lane_id else "*"
+            except Exception:  # noqa: BLE001 — the command itself reports a bad config
+                return "*"
+        if action == "apply_lanes":
+            return "*"
+        return None
+
+    async def _execute_in_order(self, ws, cmd_id: str, action: str, params: dict[str, Any]) -> None:
+        target = self._command_target(action, params)
+        if target is None:
+            await self._execute_command_and_respond(ws, cmd_id, action, params)
+            return
+        # Registered before the first await: tasks start in arrival order, so
+        # each command finds exactly the commands that arrived before it.
+        done: asyncio.Future = asyncio.get_running_loop().create_future()
+        if target == "*":
+            earlier = [*self._lane_tails.values(), *([self._worker_tail] if self._worker_tail else [])]
+            self._lane_tails = {}
+            self._worker_tail = done
+        else:
+            earlier = [tail for tail in (self._lane_tails.get(target), self._worker_tail) if tail is not None]
+            self._lane_tails[target] = done
+        try:
+            if earlier:
+                await asyncio.wait(earlier)
+            await self._execute_command_and_respond(ws, cmd_id, action, params)
+        finally:
+            done.set_result(None)
+            if self._lane_tails.get(target) is done:
+                del self._lane_tails[target]
+            if self._worker_tail is done:
+                self._worker_tail = None
+
+    def _start_lifecycle_task(self, coro: Any, action: str, cmd_id: str) -> None:
+        task = asyncio.create_task(coro, name=f"logos-bridge-{action}-{cmd_id[:8]}")
+        self._lifecycle_tasks.add(task)
+
+        def _done(done_task: asyncio.Task) -> None:
+            self._lifecycle_tasks.discard(done_task)
+            if done_task.cancelled():
+                return
+            exc = done_task.exception()
+            if exc is not None:
+                # The command itself reports its failure; this is the answer
+                # that could not be sent, e.g. after a disconnect.
+                logger.warning("Could not answer %s cmd_id=%s: %s", action, cmd_id[:8], exc)
+
+        task.add_done_callback(_done)
 
     async def _execute_command(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         lane_manager = self._app.state.lane_manager
@@ -920,6 +1039,8 @@ class LogosBridgeClient:
 
         if action == "infer":
             return await self._execute_infer_command(params)
+        if action == "get_calibration_status":
+            return {"calibrating": self._calibration_session_is_live()}
         if action == "get_runtime":
             runtime = await build_runtime_status(self._app)
             return runtime.model_dump(mode="json")
@@ -952,7 +1073,10 @@ class LogosBridgeClient:
             return status.model_dump(mode="json")
         if action == "reconfigure_lane":
             updates = params.get("updates") or {}
-            if params.get("require_idle"):
+            if params.get("force_restart"):
+                status = await lane_manager.reconfigure_lane(lane_id, updates, require_idle=True, force_restart=True)
+                return {**status.model_dump(mode="json"), "restarted": True}
+            elif params.get("require_idle"):
                 status = await lane_manager.reconfigure_lane(lane_id, updates, require_idle=True)
             else:
                 status = await lane_manager.reconfigure_lane(lane_id, updates)
@@ -970,6 +1094,10 @@ class LogosBridgeClient:
             return await self._handle_run_compatibility_precheck(params)
 
         raise ValueError(f"Unsupported bridge command '{action}'")
+
+    def _calibrating_model(self) -> str | None:
+        session = self._active_calibration_session
+        return session.current_model if session is not None and self._calibration_session_is_live() else None
 
     def _handle_sync_model_profiles(self, params: dict[str, Any]) -> dict[str, Any]:
         """Adopt profiles Logos changed centrally (a new calibration snapshot,
@@ -1723,7 +1851,7 @@ class LogosBridgeClient:
         )
         self._record_calibration_probe_log(model_name, result, None)
 
-    def _list_uncalibrated_models(self) -> list[str]:
+    def _list_uncalibrated_models(self, log_skips: bool = True) -> list[str]:
         """Pick configured models that still need calibration.
 
         Mirrors the previous server-side selection logic so behaviour is
@@ -1752,11 +1880,12 @@ class LogosBridgeClient:
         ordered: list[str] = []
         for model_name in candidates:
             if model_name in session_skip_models:
-                logger.info(
-                    "[Calibration] skipping %s — orchestrator flagged it as "
-                    "too large for this node's known capacity",
-                    model_name,
-                )
+                if log_skips:
+                    logger.info(
+                        "[Calibration] skipping %s — orchestrator flagged it as "
+                        "too large for this node's known capacity",
+                        model_name,
+                    )
                 continue
             profile = model_profiles.get_profile(model_name)
             if profile is not None and profile.calibration_unsupported:
@@ -1812,16 +1941,21 @@ class LogosBridgeClient:
             return
         try:
             from logos_worker_node.calibration import plans_from_config  # noqa: PLC0415
-            from logos_worker_node.profile_fingerprint import node_calibration_keys  # noqa: PLC0415
+            from logos_worker_node.profile_fingerprint import (  # noqa: PLC0415
+                node_calibration_keys,
+                node_slice_gpu_counts,
+            )
 
             snapshot = await gpu_collector.get_snapshot()
             config_path = self._resolve_config_path()
             plans = plans_from_config(config_path) if config_path.exists() else []
             # Resolving an unknown vLLM version may fork a subprocess.
             keys = await asyncio.to_thread(node_calibration_keys, self._app.state.config, plans, list(snapshot.devices))
+            counts = node_slice_gpu_counts(self._app.state.config, plans, list(snapshot.devices))
         except Exception:  # noqa: BLE001
             logger.warning("[Calibration] Could not refresh calibration keys; keeping the previous ones", exc_info=True)
             return
+        self._app.state.model_profiles.set_slice_gpu_counts(counts)
         changed = self._app.state.model_profiles.set_calibration_keys(keys)
         if changed:
             logger.info("[Calibration] Calibration key changed for %s — re-measuring", ", ".join(sorted(changed)))
@@ -1914,7 +2048,22 @@ class LogosBridgeClient:
                     terminal_event = "calibration_session_cancelled"
                     break
 
+                # Reserved: Logos adopts nothing for it from here, and the
+                # answer carries its profile now. Probe from that, or not
+                # at all when another node's calibration already arrived.
+                reserved = await self._reserve_calibration(model_name)
+                if reserved is not None:
+                    model_profiles.replace_from_sync({model_name: reserved})
+                if model_name not in self._list_uncalibrated_models(log_skips=False):
+                    self._record_calibration_event(
+                        "calibration_model_skipped", model=model_name, details="calibrated meanwhile"
+                    )
+                    continue
+
                 session.current_model = model_name
+                # Without a reservation this is the only barrier; the
+                # precheck below can take a while.
+                self._record_calibration_event("calibration_model_selected", model=model_name)
                 plan = plan_by_model.get(model_name) or {"model": model_name}
 
                 # Pin to the slice begin_calibration_session actually freed
@@ -2060,6 +2209,7 @@ class LogosBridgeClient:
                         )
                         return False
 
+                started_at = time.monotonic()
                 try:
                     if is_metal_backend():
                         # No TP escalation, no KV sweep, no sleep/wake — see
@@ -2118,7 +2268,9 @@ class LogosBridgeClient:
                 if result.success:
                     # Logos snapshots it from the next runtime status (pushed
                     # right below) and answers with its calibration_id.
-                    model_profiles.apply_calibration_result(model_name, result_to_profile_dict(result))
+                    model_profiles.apply_calibration_result(
+                        model_name, result_to_profile_dict(result), time.monotonic() - started_at
+                    )
                     # Models pruned from capabilities at startup for lack of a
                     # profile must be announced now, or Logos never learns the
                     # worker can serve them.
@@ -2468,6 +2620,7 @@ class LogosBridgeClient:
         # abort the sequence. stop() closes the client itself.
         client = self._relay_client
         upstream = None
+        terminal_frame = None
         try:
             request_path = params.get("request_path")
             target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
@@ -2501,15 +2654,12 @@ class LogosBridgeClient:
                             "chunk_b64": base64.b64encode(raw).decode("ascii"),
                         },
                     )
-                await self._send_json(
-                    ws,
-                    {
-                        "type": "stream_end",
-                        "cmd_id": cmd_id,
-                        "success": False,
-                        "error": f"Lane '{lane_id}' returned HTTP {upstream.status_code}",
-                    },
-                )
+                terminal_frame = {
+                    "type": "stream_end",
+                    "cmd_id": cmd_id,
+                    "success": False,
+                    "error": f"Lane '{lane_id}' returned HTTP {upstream.status_code}",
+                }
                 return
 
             # 2xx: DEFER stream_start until the FIRST real token byte. vLLM returns
@@ -2540,17 +2690,14 @@ class LogosBridgeClient:
                 # 2xx but the upstream produced ZERO bytes (engine not ready / lane
                 # re-slept mid-request). Fail cleanly BEFORE any stream_start so the
                 # request is reroutable rather than a client-visible 200-then-drop.
-                await self._send_json(
-                    ws,
-                    {
-                        "type": "stream_end",
-                        "cmd_id": cmd_id,
-                        "success": False,
-                        "error": f"Lane '{lane_id}' returned 200 but produced no output (not ready / re-slept)",
-                    },
-                )
+                terminal_frame = {
+                    "type": "stream_end",
+                    "cmd_id": cmd_id,
+                    "success": False,
+                    "error": f"Lane '{lane_id}' returned 200 but produced no output (not ready / re-slept)",
+                }
                 return
-            await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": True})
+            terminal_frame = {"type": "stream_end", "cmd_id": cmd_id, "success": True}
         except asyncio.CancelledError:
             # The server cancelled this stream because its client went away.
             # No terminal frame: nobody is reading, and the server already
@@ -2568,37 +2715,56 @@ class LogosBridgeClient:
             )
             raise
         except Exception as exc:  # noqa: BLE001
-            await self._send_json(
-                ws,
-                {
-                    "type": "stream_end",
-                    "cmd_id": cmd_id,
-                    "success": False,
-                    "error": str(exc),
-                },
-            )
+            terminal_frame = {
+                "type": "stream_end",
+                "cmd_id": cmd_id,
+                "success": False,
+                "error": str(exc),
+            }
         finally:
-            # Decrement before the response is closed so that a client-side
-            # disconnect that leaves httpx draining the upstream stream does
-            # not keep worker_active > 0 and falsely trigger proxy_stuck
-            # detection.
-            #
-            # Guarded so a lane-manager failure cannot skip the close below:
-            # on the cancellation path that close is the whole point — it is
-            # what makes vLLM abort the sequence and release its KV blocks.
-            # Only the streamed response is closed; the pooled client is
-            # shared with every other command and outlives this one.
+            # A late (or repeated) cancellation must not interrupt the decrement
+            # while it waits for the lane lock. Own and await the shielded task
+            # so command completion never leaves detached cleanup behind.
+            cleanup = asyncio.create_task(self._cleanup_stream(lane_manager, lane_id, cmd_id, upstream))
+            cancelled = False
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    cancelled = True
+            cleanup.result()
+            if cancelled:
+                raise asyncio.CancelledError
+            if terminal_frame is not None:
+                await self._send_json(ws, terminal_frame)
+
+    async def _cleanup_stream(self, lane_manager, lane_id: str, cmd_id: str, upstream) -> None:
+        # Decrement before the response is closed so that a client-side
+        # disconnect that leaves httpx draining the upstream stream does
+        # not keep worker_active > 0 and falsely trigger proxy_stuck
+        # detection.
+        #
+        # Guarded so a lane-manager failure cannot skip the close below:
+        # on the cancellation path that close is the whole point — it is
+        # what makes vLLM abort the sequence and release its KV blocks.
+        # Only the streamed response is closed; the pooled client is
+        # shared with every other command and outlives this one.
+        try:
+            await lane_manager.decrement_active_requests(lane_id)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to decrement in-flight count for lane=%s (cmd_id=%s)",
+                lane_id,
+                cmd_id[:8],
+                exc_info=True,
+            )
+        if upstream is not None:
             try:
-                await lane_manager.decrement_active_requests(lane_id)
+                await asyncio.wait_for(upstream.aclose(), timeout=5.0)
             except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Failed to decrement in-flight count for lane=%s (cmd_id=%s)",
+                logger.debug(
+                    "Failed to close upstream stream for lane=%s (cmd_id=%s)",
                     lane_id,
                     cmd_id[:8],
                     exc_info=True,
                 )
-            if upstream is not None:
-                try:
-                    await asyncio.wait_for(upstream.aclose(), timeout=5.0)
-                except Exception:  # noqa: BLE001
-                    pass

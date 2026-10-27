@@ -1023,3 +1023,33 @@
     border-radius: 6px;
   }
 }
+
+// ── Delays tab ───────────────────────────────────────────────────────────────
+
+.delays {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.delays__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.delays__title {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+}
+
+.delays__subtitle {
+  margin: 4px 0 0;
+  max-width: 640px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+}

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Gating verdict for a requested model.
+
+         The reachable answer of the precheck at submission only gates the
+         submission and is not stored. is_gated is true when the Hub rejects
+         the repository with the model-gated reason, false when a verdict
+         exists and the repository is not gated (reachable, or rejected for
+         another reason), and NULL when no verdict has been recorded yet —
+         the check was never run, or it timed out. A timeout is a statement
+         about the check, not about the model, so it is not stored and the
+         row is checked again on the next sweep at application start
+         (RequestedModelHfStatusSweeper). -->
+    <changeSet id="067-requested-model-is-gated" author="maltebai">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="requested_models" columnName="is_gated"/></not>
+        </preConditions>
+        <addColumn tableName="requested_models">
+            <column name="is_gated" type="BOOLEAN">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="requested_models" columnName="is_gated"/>
+        </rollback>
+    </changeSet>
+
+    <!-- The team a requested model was first requested for.
+
+         A vote names the team the model is wanted for; that team's app admin
+         is the one who later accepts a gated model's license agreement, so
+         the first team to ask is recorded on the row. It is set when the row
+         is created (and filled in on a row that predates the column) and
+         never overwritten: later votes from other teams still count toward
+         the total, they just do not change who requested first. No foreign
+         key — team_id columns in this schema are application-managed, like
+         everywhere else. -->
+    <changeSet id="067-requested-model-first-requesting-team" author="maltebai">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="requested_models" columnName="first_requesting_team"/></not>
+        </preConditions>
+        <addColumn tableName="requested_models">
+            <column name="first_requesting_team" type="INTEGER">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="requested_models" columnName="first_requesting_team"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

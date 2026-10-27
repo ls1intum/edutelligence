@@ -1,11 +1,24 @@
 package de.tum.cit.aet.logos.logoswebservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import java.sql.DriverManager;
 import java.util.List;
+import java.util.UUID;
+import liquibase.Contexts;
+import liquibase.LabelExpression;
+import liquibase.Liquibase;
+import liquibase.Scope;
+import liquibase.changelog.FastCheckService;
+import liquibase.database.jvm.JdbcConnection;
+import liquibase.resource.ClassLoaderResourceAccessor;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -46,6 +59,116 @@ class LiquibaseBaselineTest {
     @Test
     void schemaApplied() {
         assertThat(tableExists("users")).isTrue();
+    }
+
+    @Test
+    void nightlySchedulesCoexistWithCentralProfilesAndUseConsolidatedMigrationIds() {
+        assertThat(tableExists("model_profiles")).isTrue();
+        assertThat(tableExists("model_calibrations")).isTrue();
+        assertThat(tableExists("nightly_benchmarks")).isTrue();
+        assertThat(tableExists("maintenance_calibration")).isTrue();
+        assertThat(tableExists("maintenance_benchmark")).isTrue();
+        assertThat(columnExists("nightly_benchmarks", "recovery")).isTrue();
+        assertThat(jdbc.queryForList(
+            "SELECT id FROM databasechangelog WHERE filename = ? AND author = 'logos' ORDER BY orderexecuted",
+            String.class, "liquibase/changelog/065_nightly_benchmarks.xml"))
+            .containsExactly("065-nightly-benchmarks", "065-maintenance-calibration", "065-parallel-maintenance");
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 2, 3})
+    void consolidatedMaintenanceChangelogUpgradesAndRollsBack(int legacyChangeSets) throws Exception {
+        String schema = "maintenance_upgrade_" + UUID.randomUUID().toString().replace("-", "");
+        jdbc.execute("CREATE SCHEMA " + schema);
+        try (var connection = DriverManager.getConnection(
+                postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+                var resources = new ClassLoaderResourceAccessor();
+                var liquibase = new Liquibase("liquibase/changelog/065_nightly_benchmarks.xml",
+                    resources, new JdbcConnection(connection))) {
+            connection.setSchema(schema);
+            liquibase.getDatabase().setDefaultSchemaName(schema);
+            liquibase.getDatabase().setLiquibaseSchemaName(schema);
+            var isolated = new JdbcTemplate(new SingleConnectionDataSource(connection, true));
+            isolated.execute("CREATE TABLE jobs (id integer PRIMARY KEY, request_payload jsonb)");
+            isolated.execute("INSERT INTO jobs VALUES (1, '{\"provider_id\":42}')");
+            connection.commit();
+            liquibase.update(2, new Contexts(), new LabelExpression());
+            isolated.execute("INSERT INTO nightly_benchmarks (model_provider_id, enabled) VALUES (31, true)");
+            isolated.execute("INSERT INTO maintenance_calibration (provider_id, token) VALUES (42, 'existing')");
+            isolated.execute("INSERT INTO maintenance_benchmark (job_id) VALUES (1)");
+            connection.commit();
+            if (legacyChangeSets == 3) {
+                liquibase.update(new Contexts(), new LabelExpression());
+            }
+            if (legacyChangeSets > 0) {
+                // Reproduce the history identities recorded by earlier deployments of this schema.
+                isolated.execute("""
+                    UPDATE databasechangelog SET
+                        id = CASE id
+                            WHEN '065-nightly-benchmarks' THEN '057-nightly-benchmarks'
+                            WHEN '065-maintenance-calibration' THEN '061-maintenance-calibration'
+                            WHEN '065-parallel-maintenance' THEN '067-parallel-maintenance' END,
+                        filename = CASE id
+                            WHEN '065-nightly-benchmarks' THEN 'liquibase/changelog/057_nightly_benchmarks.xml'
+                            WHEN '065-maintenance-calibration' THEN 'liquibase/changelog/061_maintenance_calibration.xml'
+                            WHEN '065-parallel-maintenance' THEN 'liquibase/changelog/067_parallel_maintenance.xml' END
+                    """);
+                connection.commit();
+            }
+            var oldHistory = isolated.queryForList("SELECT * FROM databasechangelog WHERE id NOT LIKE '065-%' ORDER BY id");
+
+            liquibase.update(new Contexts(), new LabelExpression());
+            liquibase.update(new Contexts(), new LabelExpression());
+
+            assertThat(isolated.queryForObject("SELECT count(*) FROM databasechangelog", Integer.class))
+                .isEqualTo(3 + legacyChangeSets);
+            assertThat(isolated.queryForList("SELECT * FROM databasechangelog WHERE id NOT LIKE '065-%' ORDER BY id"))
+                .isEqualTo(oldHistory);
+            assertThat(isolated.queryForObject("SELECT enabled FROM nightly_benchmarks", Boolean.class)).isTrue();
+            assertThat(isolated.queryForObject("SELECT token FROM maintenance_calibration", String.class)).isEqualTo("existing");
+            assertThat(isolated.queryForObject("SELECT provider_id FROM maintenance_benchmark", Integer.class)).isEqualTo(42);
+            isolated.execute("INSERT INTO maintenance_calibration (provider_id, token) VALUES (43, 'parallel')");
+            isolated.execute("INSERT INTO maintenance_benchmark (job_id, provider_id) VALUES (2, 43)");
+            connection.commit();
+
+            assertThatThrownBy(() -> liquibase.rollback(1, new Contexts(), new LabelExpression()))
+                .hasMessageContaining("maintenance_benchmark_pkey");
+            assertThat(isolated.queryForObject("SELECT count(*) FROM maintenance_benchmark WHERE provider_id IS NOT NULL",
+                Integer.class)).isEqualTo(2);
+            isolated.execute("DELETE FROM maintenance_benchmark WHERE job_id = 2");
+            connection.commit();
+            assertThatThrownBy(() -> liquibase.rollback(1, new Contexts(), new LabelExpression()))
+                .hasMessageContaining("maintenance_calibration_pkey");
+            assertThat(isolated.queryForObject("SELECT provider_id FROM maintenance_benchmark", Integer.class)).isEqualTo(42);
+            isolated.execute("DELETE FROM maintenance_calibration WHERE provider_id = 43");
+            connection.commit();
+
+            liquibase.rollback(1, new Contexts(), new LabelExpression());
+            assertThat(isolated.queryForObject("SELECT token FROM maintenance_calibration", String.class)).isEqualTo("existing");
+            assertThat(isolated.queryForList("""
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE connamespace = ?::regnamespace AND contype = 'p'
+                AND conrelid IN ('maintenance_calibration'::regclass, 'maintenance_benchmark'::regclass)
+                """, String.class, schema)).containsExactlyInAnyOrder("PRIMARY KEY (singleton)", "PRIMARY KEY (singleton)");
+            liquibase.rollback(2, new Contexts(), new LabelExpression());
+            assertThat(isolated.queryForObject("SELECT count(*) FROM information_schema.tables"
+                + " WHERE table_schema = ? AND table_name IN ('nightly_benchmarks', 'maintenance_calibration', 'maintenance_benchmark')",
+                Integer.class, schema)).isZero();
+            // Use a fresh Liquibase instance, as on application restart after rollback.
+            Scope.getCurrentScope().getSingleton(FastCheckService.class).clearCache();
+            try (var restartConnection = DriverManager.getConnection(
+                    postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+                    var restarted = new Liquibase("liquibase/changelog/065_nightly_benchmarks.xml",
+                        resources, new JdbcConnection(restartConnection))) {
+                restartConnection.setSchema(schema);
+                restarted.getDatabase().setDefaultSchemaName(schema);
+                restarted.getDatabase().setLiquibaseSchemaName(schema);
+                restarted.update(new Contexts(), new LabelExpression());
+            }
+            assertThat(isolated.queryForObject("SELECT count(*) FROM nightly_benchmarks", Integer.class)).isZero();
+        } finally {
+            jdbc.execute("DROP SCHEMA " + schema + " CASCADE");
+        }
     }
 
     @Test
@@ -215,7 +338,7 @@ class LiquibaseBaselineTest {
     }
 
     @Test
-    void migration061_requestedModelIsGatedColumnExists() {
+    void migration067_requestedModelIsGatedColumnExists() {
         // The decisive Hugging Face gating verdict a requested model carries
         // (true when the Hub rejects the repository as gated); null until the
         // precheck has produced a verdict, so the column must be nullable.
@@ -223,7 +346,7 @@ class LiquibaseBaselineTest {
     }
 
     @Test
-    void migration061_requestedModelFirstRequestingTeamColumnExists() {
+    void migration067_requestedModelFirstRequestingTeamColumnExists() {
         // The team that first requested the model; null on rows that predate
         // the column, so it must be nullable.
         assertThat(columnExists("requested_models", "first_requesting_team")).isTrue();

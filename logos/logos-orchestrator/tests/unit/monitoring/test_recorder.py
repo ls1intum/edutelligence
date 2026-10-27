@@ -454,3 +454,28 @@ def test_record_provider_response_uses_the_arrival_instant_when_given(monkeypatc
     recorder2.record_complete("req-at-none", result_status="success")
     # at=None falls back to now(): a real, current instant.
     assert calls2[0]["timestamp_provider_response"] >= datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+def test_record_reasoning_effort_rides_the_completion_write(monkeypatch):
+    recorder, calls = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
+
+    recorder.record_reasoning_effort("req-effort", "xhigh")
+    # A resend after an effort rejection notes the adapted value; it wins.
+    recorder.record_reasoning_effort("req-effort", "high")
+    assert calls == [], "buffered fields must not hit the DB mid-flight"
+
+    recorder.record_complete("req-effort", result_status="success")
+
+    assert len(calls) == 1
+    assert calls[0]["reasoning_effort"] == "high"
+
+
+def test_a_request_without_an_effort_writes_none(monkeypatch):
+    recorder, calls = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
+
+    recorder.record_reasoning_effort("req-no-effort", None)
+    recorder.record_complete("req-no-effort", result_status="success")
+
+    assert "reasoning_effort" not in calls[0]
