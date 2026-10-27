@@ -38,6 +38,7 @@ class PartialResultSender(Thread):
         run_id: str,
         interval_seconds: float = 0.35,
         status_dto_factory: Optional[Callable[[str, int], BaseModel]] = None,
+        text_transform: Optional[Callable[[str], str]] = None,
     ):
         super().__init__(daemon=True)
         self.url = url
@@ -52,6 +53,9 @@ class PartialResultSender(Thread):
                 partial_seq=seq,
             )
         )
+        # Prepares the accumulated draft before it is posted (chat: removes source
+        # markers). Applied to the whole draft, so it needs no state of its own.
+        self._text_transform = text_transform
         self._lock = Lock()
         self._stop_event = Event()
         self._accumulated = ""
@@ -108,6 +112,8 @@ class PartialResultSender(Thread):
                 return None
 
             text = self._accumulated
+            if self._text_transform is not None:
+                text = self._text_transform(text)
             epoch = self._epoch
 
             # Already delivered exactly this text at this epoch -> nothing new.
