@@ -7,6 +7,13 @@
 # "failed to compute cache key: … not found" — the path is simply absent from
 # the context.
 *
+# The session image installs the repository's own hook environments at build
+# time, because a session has no network to install them with. Every config:
+# the root one delegates to the services through sub-pre-commit, and they pin
+# their own versions of the same tools.
+!.pre-commit-config.yaml
+!iris/.pre-commit-config.yaml
+!athena/.pre-commit-config.yaml
 !iris/pyproject.toml
 !iris/poetry.lock
 !iris/src/iris
