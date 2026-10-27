@@ -170,7 +170,7 @@ llm_configuration:
   lecture_retrieval_pipeline:
     default:
       chat:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-low
         cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
       reranker: cohere
@@ -194,37 +194,31 @@ llm_configuration:
   faq_retrieval_pipeline:
     default:
       chat:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-low
         cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
 
   citation_pipeline:
     default:
-      chat:
-        local: qwen3.8-27b
-        cloud: oai-gpt-5-mini-minimal
+      # One call that labels all sources an answer cites; needs no reasoning.
       keyword_summary:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-nothink
         cloud: oai-gpt-5-nano-minimal
-    advanced:
-      chat:
-        local: qwen3.8-27b
-        cloud: oai-gpt-5-mini-minimal
 
   interaction_suggestion_pipeline:
     course:
       chat:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-low
         cloud: oai-gpt-5-nano-minimal
     exercise:
       chat:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-low
         cloud: oai-gpt-5-nano-minimal
 
   session_title_generation_pipeline:
     default:
       chat:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-low
         cloud: oai-gpt-5-nano-minimal
 
   code_feedback_pipeline:
