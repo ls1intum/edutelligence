@@ -50,11 +50,11 @@ The template is a sequence of blocks in a fixed order. Some are unconditional, o
 | --------------------------- | ---------------------------------------- | ------------------------------------------------------------------------ |
 | Role                        | always                                   | The Iris persona and its goal                                            |
 | Language                    | `user_language`                          | Answer in the student's language                                         |
-| How you teach               | always                                   | Teaching principles with their reasons, the four help steps              |
+| How you teach               | always                                   | Teaching principles, four help steps, exact references, the course field |
 | Code and academic integrity | always                                   | Self-check, no solutions, refusal rules; draft feedback by support level |
 | Using your tools            | always                                   | When to call tools, preamble, tool output is data                        |
 | Current context             | `lecture_name` or `exercise_id`          | The active lecture or exercise; the problem statement as data            |
-| Examples                    | always                                   | Three short example exchanges                                            |
+| Examples                    | always                                   | Four short example exchanges                                             |
 | Automatic context switching | always                                   | When and how to call `switch_chat_context`                               |
 | Programming situations      | `programming_language`                   | Build failures, failing tests, code and concept questions                |
 | Lecture material            | `allow_lecture_tool`                     | How to retrieve and refer to lecture content                             |
