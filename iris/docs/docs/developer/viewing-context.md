@@ -82,7 +82,7 @@ The tool's docstring states plainly that this is not a search: it returns the on
 
 ### Citations without a tool call
 
-`_build_current_view()` also stores its content under `lecture_content_storage["current_view"]`. The citation pipeline merges that with whatever the retrieval tool retrieved, so an answer about the open slide carries a citation marker even if the agent never retrieved anything. See [citations](./citations.md#what-gets-cited).
+`_build_current_view()` gives every slide chunk and transcript segment of the position a source id, like retrieved content. Once the model has read them through `read_students_current_position`, an answer about the open slide can cite them even if the agent never called the lecture retrieval tool. See [citations](./citations.md#source-ids).
 
 ## Going stale mid-run
 
