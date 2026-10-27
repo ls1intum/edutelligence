@@ -1,7 +1,7 @@
 # The Docker command line and the Compose plugin come from the official CLI image. The tag is pinned like the other
 # build tools in this repo, so an engine release cannot change what lands in the image without a bump here. The command
 # line talks to the engine of the host through the mounted socket and is compatible with older engines.
-FROM docker:28.5.2-cli AS docker-cli
+FROM docker:29.9.2-cli AS docker-cli
 
 FROM python:3.13-slim
 

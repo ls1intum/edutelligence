@@ -4,7 +4,7 @@
 # browser for screenshots. It deliberately holds no credentials and no Docker
 # client: everything privileged is done by the runner service outside this
 # container (see app/docker_engine.py for the sandbox this image runs under).
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
