@@ -34,10 +34,21 @@ public class RequestedModel {
      */
     private Boolean isGated;
 
+    /**
+     * The team that first requested this model: set when the row is created
+     * (or filled in on a row that predates the column) and never overwritten
+     * — later votes from other teams count toward the total, they just do
+     * not change who requested first. The team's app admin is the one who
+     * accepts a gated model's license agreement.
+     */
+    private Integer firstRequestingTeam;
+
     public Integer getId() { return id; }
     public String getName() { return name; }
     public Boolean getIsGated() { return isGated; }
+    public Integer getFirstRequestingTeam() { return firstRequestingTeam; }
 
     public void setName(String name) { this.name = name; }
     public void setIsGated(Boolean isGated) { this.isGated = isGated; }
+    public void setFirstRequestingTeam(Integer firstRequestingTeam) { this.firstRequestingTeam = firstRequestingTeam; }
 }

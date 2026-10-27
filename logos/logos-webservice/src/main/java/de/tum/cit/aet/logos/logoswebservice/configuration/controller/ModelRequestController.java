@@ -43,17 +43,19 @@ public class ModelRequestController {
     }
 
     /**
-     * Cast the caller's vote for a model. The service's outcomes are mapped to
-     * HTTP in {@link ModelRequestExceptionHandler}: 409 when the model is
-     * already served by Logos, 400 when the name is invalid or the Hugging
-     * Face precheck does not find the repository, and 503 when the precheck
-     * could not be performed (the user should retry). Re-voting an
-     * already-voted model is a no-op.
+     * Cast the caller's vote for a model, naming the team it is wanted for.
+     * The service's outcomes are mapped to HTTP in
+     * {@link ModelRequestExceptionHandler}: 409 when the model is already
+     * served by Logos, 400 when the name is invalid, when no team is given
+     * or the caller is not a member of it, or when the Hugging Face precheck
+     * does not find the repository, and 503 when the precheck could not be
+     * performed (the user should retry). Re-voting an already-voted model is
+     * a no-op.
      */
     @PostMapping("/add_model_request")
     public ResponseEntity<RequestedModelResponse> addModelRequest(@RequestBody SubmitModelRequestDTO req,
                                                                   @RequestAttribute("authContext") AuthContext auth) {
-        return ResponseEntity.ok(requestedModelService.vote(auth.userId(), req.name()));
+        return ResponseEntity.ok(requestedModelService.vote(auth.userId(), req.name(), req.teamId()));
     }
 
     /** Take the caller's vote back for a model. Idempotent. */

@@ -34,6 +34,12 @@
   }
 }
 
+.request-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
 .field {
   display: block;
   margin-bottom: 16px;
@@ -52,6 +58,30 @@
     border: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
     background: transparent;
     color: inherit;
+  }
+
+  .field--team {
+    min-width: 220px;
+  }
+
+  .team-select {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: var(--opacity-disabled);
+      cursor: default;
+    }
+
+    option {
+      background: rgb(var(--color-surface-0));
+      color: rgb(var(--color-typography-0));
+    }
   }
 
   small {

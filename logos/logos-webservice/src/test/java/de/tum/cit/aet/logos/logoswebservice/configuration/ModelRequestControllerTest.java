@@ -72,13 +72,15 @@ class ModelRequestControllerTest {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
-                .content("{\"name\": \"openai/gpt-5\"}"))
+                .content("{\"name\": \"openai/gpt-5\", \"team_id\": 2001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.name").value("openai/gpt-5"))
            .andExpect(jsonPath("$.request_count").value(1))
            .andExpect(jsonPath("$.has_voted").value(true))
            // The precheck answered reachable: the repository is not gated.
            .andExpect(jsonPath("$.is_gated").value(false))
+           // The calling user's team is the first one to request the model.
+           .andExpect(jsonPath("$.first_requesting_team").value(2001))
            .andExpect(jsonPath("$.id").isNumber());
     }
 
@@ -95,7 +97,7 @@ class ModelRequestControllerTest {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
-                .content("{\"name\": \"meta-llama/llama-3.1-8b-instruct\"}"))
+                .content("{\"name\": \"meta-llama/llama-3.1-8b-instruct\", \"team_id\": 2001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.name").value("meta-llama/llama-3.1-8b-instruct"))
            .andExpect(jsonPath("$.request_count").value(1))
@@ -109,11 +111,62 @@ class ModelRequestControllerTest {
     }
 
     @Test
-    void vote_isOnePerUserPerModel() throws Exception {
+    void vote_requiresATeam() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
                 .content("{\"name\": \"openai/gpt-5\"}"))
+           .andExpect(status().isBadRequest());
+
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM requested_models WHERE name = 'openai/gpt-5'", Integer.class)).isZero();
+    }
+
+    @Test
+    void vote_rejectsATeamTheCallerIsNotAMemberOf() throws Exception {
+        // Team 2002 exists in the seed, but the test user is not a member of it.
+        mvc.perform(post("/logosdb/add_model_request")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"name\": \"openai/gpt-5\", \"team_id\": 2002}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("You can only request a model for one of your own teams."));
+
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM requested_models WHERE name = 'openai/gpt-5'", Integer.class)).isZero();
+    }
+
+    @Test
+    void vote_keepsTheFirstRequestingTeamForLaterTeams() throws Exception {
+        mvc.perform(post("/logosdb/add_model_request")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"name\": \"acme/first-team\", \"team_id\": 2001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.first_requesting_team").value(2001));
+
+        // A second team votes for the very same model: the vote counts ...
+        jdbc.update("INSERT INTO team_members (user_id, team_id, is_owner) VALUES (1002, 2002, false)");
+        try {
+            mvc.perform(post("/logosdb/add_model_request")
+                    .with(TestJwt.adminUser())
+                    .contentType("application/json")
+                    .content("{\"name\": \"acme/first-team\", \"team_id\": 2002}"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.request_count").value(2))
+               // ... but the first requesting team is not overwritten.
+               .andExpect(jsonPath("$.first_requesting_team").value(2001));
+        } finally {
+            jdbc.update("DELETE FROM team_members WHERE user_id = 1002 AND team_id = 2002");
+        }
+    }
+
+    @Test
+    void vote_isOnePerUserPerModel() throws Exception {
+        mvc.perform(post("/logosdb/add_model_request")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"name\": \"openai/gpt-5\", \"team_id\": 2001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(1));
 
@@ -122,7 +175,7 @@ class ModelRequestControllerTest {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
-                .content("{\"name\": \"openai/gpt-5\"}"))
+                .content("{\"name\": \"openai/gpt-5\", \"team_id\": 2001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(1));
     }
@@ -131,11 +184,11 @@ class ModelRequestControllerTest {
     void vote_secondUserIncrementsTheCount() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"openai/gpt-5\"}"))
+                .contentType("application/json").content("{\"name\": \"openai/gpt-5\", \"team_id\": 2001}"))
            .andExpect(status().isOk());
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.adminUser())
-                .contentType("application/json").content("{\"name\": \"openai/gpt-5\"}"))
+                .contentType("application/json").content("{\"name\": \"openai/gpt-5\", \"team_id\": 2001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(2));
     }
@@ -149,7 +202,7 @@ class ModelRequestControllerTest {
             mvc.perform(post("/logosdb/add_model_request")
                     .with(TestJwt.testUser())
                     .contentType("application/json")
-                    .content("{\"name\": \"openai/gpt-4\"}"))
+                    .content("{\"name\": \"openai/gpt-4\", \"team_id\": 2001}"))
                .andExpect(status().isConflict())
                .andExpect(jsonPath("$.error").exists());
         } finally {
@@ -174,7 +227,7 @@ class ModelRequestControllerTest {
             mvc.perform(post("/logosdb/add_model_request")
                     .with(TestJwt.testUser())
                     .contentType("application/json")
-                    .content("{\"name\": \"openai/raced\"}"))
+                    .content("{\"name\": \"openai/raced\", \"team_id\": 2001}"))
                .andExpect(status().isConflict())
                .andExpect(jsonPath("$.error").value("This model is already available in Logos."));
             assertThat(jdbc.queryForObject(
@@ -193,7 +246,7 @@ class ModelRequestControllerTest {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
-                .content("{\"name\": \"openai/does-not-exist\"}"))
+                .content("{\"name\": \"openai/does-not-exist\", \"team_id\": 2001}"))
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.error").value(
                "Model not found on HuggingFace. Maybe it is a cloud model (unsupported)?"));
@@ -211,7 +264,7 @@ class ModelRequestControllerTest {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
-                .content("{\"name\": \"openai/slow-hub\"}"))
+                .content("{\"name\": \"openai/slow-hub\", \"team_id\": 2001}"))
            .andExpect(status().isServiceUnavailable())
            .andExpect(jsonPath("$.error").value(
                "Hugging Face did not respond in time. Please try again later."));
@@ -222,7 +275,7 @@ class ModelRequestControllerTest {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
-                .content("{\"name\": \"https://huggingface.co/openai/gpt-oss-120b\"}"))
+                .content("{\"name\": \"https://huggingface.co/openai/gpt-oss-120b\", \"team_id\": 2001}"))
            .andExpect(status().isOk());
 
         // The URL prefix is stripped before the precheck sees the name.
@@ -233,14 +286,14 @@ class ModelRequestControllerTest {
     void undo_takesTheVoteBackAndAllowsRevoting() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"anthropic/claude\"}"))
+                .contentType("application/json").content("{\"name\": \"anthropic/claude\", \"team_id\": 2001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(1));
 
         // Undo: the (only) vote is removed, the model's registry row goes with it.
         mvc.perform(post("/logosdb/remove_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"anthropic/claude\"}"))
+                .contentType("application/json").content("{\"name\": \"anthropic/claude\", \"team_id\": 2001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(0))
            .andExpect(jsonPath("$.has_voted").value(false));
@@ -253,7 +306,7 @@ class ModelRequestControllerTest {
         // Re-vote: the model is requestable again and counts one.
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"anthropic/claude\"}"))
+                .contentType("application/json").content("{\"name\": \"anthropic/claude\", \"team_id\": 2001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(1));
     }
@@ -262,7 +315,7 @@ class ModelRequestControllerTest {
     void list_reportsHasVotedPerVoter() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"meta-llama/llama-3\"}"))
+                .contentType("application/json").content("{\"name\": \"meta-llama/llama-3\", \"team_id\": 2001}"))
            .andExpect(status().isOk());
 
         // The voter sees has_voted=true ...
@@ -291,7 +344,7 @@ class ModelRequestControllerTest {
         // First request "openai/gpt-5" (not yet served) ...
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"openai/gpt-5\"}"))
+                .contentType("application/json").content("{\"name\": \"openai/gpt-5\", \"team_id\": 2001}"))
            .andExpect(status().isOk());
         mvc.perform(post("/logosdb/get_model_requests")
                 .with(TestJwt.testUser())
@@ -316,15 +369,15 @@ class ModelRequestControllerTest {
     void list_ordersByVoteCountDescending() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"acme/alpha\"}"))
+                .contentType("application/json").content("{\"name\": \"acme/alpha\", \"team_id\": 2001}"))
            .andExpect(status().isOk());
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.adminUser())
-                .contentType("application/json").content("{\"name\": \"acme/alpha\"}"))
+                .contentType("application/json").content("{\"name\": \"acme/alpha\", \"team_id\": 2001}"))
            .andExpect(status().isOk());
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"acme/beta\"}"))
+                .contentType("application/json").content("{\"name\": \"acme/beta\", \"team_id\": 2001}"))
            .andExpect(status().isOk());
 
         mvc.perform(post("/logosdb/get_model_requests")
@@ -393,7 +446,7 @@ class ModelRequestControllerTest {
     void addModelRequest_withoutTokenIsUnauthorized() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .contentType("application/json")
-                .content("{\"name\": \"openai/gpt-5\"}"))
+                .content("{\"name\": \"openai/gpt-5\", \"team_id\": 2001}"))
            .andExpect(status().isUnauthorized());
     }
 }

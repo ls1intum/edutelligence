@@ -30,4 +30,28 @@
         </rollback>
     </changeSet>
 
+    <!-- The team a requested model was first requested for.
+
+         A vote names the team the model is wanted for; that team's app admin
+         is the one who later accepts a gated model's license agreement, so
+         the first team to ask is recorded on the row. It is set when the row
+         is created (and filled in on a row that predates the column) and
+         never overwritten: later votes from other teams still count toward
+         the total, they just do not change who requested first. No foreign
+         key — team_id columns in this schema are application-managed, like
+         everywhere else. -->
+    <changeSet id="061-requested-model-first-requesting-team" author="maltebai">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="requested_models" columnName="first_requesting_team"/></not>
+        </preConditions>
+        <addColumn tableName="requested_models">
+            <column name="first_requesting_team" type="INTEGER">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="requested_models" columnName="first_requesting_team"/>
+        </rollback>
+    </changeSet>
+
 </databaseChangeLog>

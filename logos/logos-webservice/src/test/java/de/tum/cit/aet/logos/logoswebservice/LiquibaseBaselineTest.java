@@ -223,6 +223,13 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration061_requestedModelFirstRequestingTeamColumnExists() {
+        // The team that first requested the model; null on rows that predate
+        // the column, so it must be nullable.
+        assertThat(columnExists("requested_models", "first_requesting_team")).isTrue();
+    }
+
+    @Test
     void migration003_backfillsKeyForKeylessMembership() {
         // A current membership with no developer key for that team (the legacy
         // logos_admin case) must receive exactly one active developer key whose
