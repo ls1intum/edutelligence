@@ -6,7 +6,7 @@ authors = ["Matthias Lehner <ga59bip@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = ">=3.11,<3.12.dev0"
+python = ">=3.15,<3.16"
 athena = { path = "../../../athena", develop = true }
 #athena = { git = "https://github.com/ls1intum/Athena.git", rev = "d9ff3bd", subdirectory = "athena"}
 llm_core = { path = "../../../llm_core", develop = true }
@@ -15,7 +15,7 @@ tiktoken = "0.14.0"
 
 [tool.poetry.group.dev.dependencies]
 pydantic = "2.14.1"
-prospector = { version = "1.19.1", extras = ["with_mypy"] }
+prospector = { version = "1.20.0", extras = ["with_mypy"] }
 types-requests = "2.33.0.20261006"
 pytest-asyncio = "0.26.0"
 
