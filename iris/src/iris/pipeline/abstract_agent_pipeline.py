@@ -79,7 +79,6 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     # Material at the student's current viewing position, shared between the current-position tool
     # that reads it out and the point-out tool that invalidates it after moving the student.
     current_view_storage: dict
-    faq_storage: dict
     allow_lecture_tool: bool
     allow_faq_tool: bool
     # perf_counter() timestamp of the run start, for latency span logging
@@ -883,7 +882,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.query_text = ""
         state.lecture_content_storage = {}
         state.current_view_storage = {}
-        state.faq_storage = {}
         state.allow_lecture_tool = False
         state.allow_faq_tool = False
         state.start_time = start_time

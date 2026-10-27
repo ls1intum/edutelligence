@@ -1,61 +1,11 @@
-"""Chat retrievers keep the request's local/cloud choice, and the transcription
-presence check stays within the asking Artemis instance."""
+"""The transcription presence check stays within the asking Artemis instance."""
 
 # pylint: disable=protected-access
 
 from types import SimpleNamespace
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
-from iris.pipeline.chat import chat_pipeline
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
-from iris.tools import chat_tool_providers
-
-
-class _RecordingRetriever:
-    instances: list = []
-
-    def __init__(self, client, local=False):
-        self.client = client
-        self.local = local
-        _RecordingRetriever.instances.append(self)
-
-
-def test_lecture_retriever_for_the_current_view_uses_the_local_choice(monkeypatch):
-    monkeypatch.setattr(chat_pipeline, "LectureRetrieval", _RecordingRetriever)
-    _RecordingRetriever.instances = []
-    state = SimpleNamespace(db=SimpleNamespace(client="client"), local=True)
-
-    retriever = chat_pipeline.ChatPipeline._get_lecture_retriever(None, state)
-
-    assert retriever.local is True
-    assert state.lecture_retriever is retriever
-
-
-def test_faq_retriever_uses_the_local_choice(monkeypatch):
-    monkeypatch.setattr(chat_tool_providers, "FaqRetrieval", _RecordingRetriever)
-    monkeypatch.setattr(
-        chat_tool_providers,
-        "create_tool_faq_content_retrieval",
-        lambda retriever, *args, **kwargs: retriever,
-    )
-    _RecordingRetriever.instances = []
-    state = SimpleNamespace(
-        db=SimpleNamespace(client="client"),
-        local=True,
-        allow_faq_tool=True,
-        dto=SimpleNamespace(
-            course=SimpleNamespace(id=1, name="Course"),
-            settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
-        ),
-        callback=None,
-        query_text="q",
-        message_history=[],
-        faq_storage={},
-    )
-
-    retriever = chat_tool_providers.provide_faq_retrieval(state)
-
-    assert retriever.local is True
 
 
 class _CapturingCollection:

@@ -1,25 +1,15 @@
 from typing import List
 
-from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
-from iris.common.message_converters import (
-    convert_iris_message_to_langchain_message,
-)
-from iris.common.pyris_message import PyrisMessage
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureUnitPageChunkRetrievalDTO,
     LectureUnitRetrievalDTO,
 )
-from iris.llm import (
-    EMERGENCY_MAX_TOKENS,
-    CompletionArguments,
-    LlmRequestHandler,
-)
-from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm import LlmRequestHandler
 from iris.llm.llm_configuration import resolve_model
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
@@ -29,7 +19,7 @@ from iris.retrieval.lecture.lecture_visibility import (
     is_slide_visible,
     is_unit_released,
 )
-from iris.tracing import TracedThreadPoolExecutor, observe
+from iris.tracing import observe
 from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
@@ -43,27 +33,6 @@ from iris.vector_database.lecture_unit_schema import (
 logger = get_logger(__name__)
 
 
-def _add_last_four_messages_to_prompt(
-    prompt,
-    chat_history: List[PyrisMessage],
-):
-    """
-    Adds the chat history and user question to the prompt
-        :param chat_history: The chat history
-        :param user_question: The user question
-        :return: The prompt with the chat history
-    """
-    if chat_history is not None and len(chat_history) > 0:
-        num_messages_to_take = min(len(chat_history), 4)
-        last_messages = chat_history[-num_messages_to_take:]
-        chat_history_messages = [
-            convert_iris_message_to_langchain_message(message)
-            for message in last_messages
-        ]
-        prompt += chat_history_messages
-    return prompt
-
-
 class LecturePageChunkRetrieval(SubPipeline):
     """
     Class for retrieving lecture data from the database.
@@ -71,25 +40,15 @@ class LecturePageChunkRetrieval(SubPipeline):
 
     tokens: List[TokenUsageDTO]
 
-    def __init__(self, client: WeaviateClient, local: bool = False):
+    def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         pipeline_id = "lecture_retrieval_pipeline"
-        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
         embedding_model = resolve_model(
             pipeline_id, "default", "embedding", local=False
-        )
-        request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(
-            temperature=0, max_tokens=EMERGENCY_MAX_TOKENS
-        )
-        self.llm = IrisLangchainChatModel(
-            request_handler=request_handler, completion_args=completion_args
         )
         self.llm_embedding = LlmRequestHandler(embedding_model)
         reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
         self.cohere_client = RerankRequestHandler(reranker_id)
-
-        self.pipeline = self.llm | StrOutputParser()
         self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
             client
         )
@@ -104,46 +63,23 @@ class LecturePageChunkRetrieval(SubPipeline):
     @observe(name="Full Lecture Retrieval")
     def __call__(
         self,
-        student_query: str,
-        rewritten_student_query: str,
-        hypothetical_answer: str,
+        query: str,
         lecture_unit: LectureUnitRetrievalDTO,
         result_limit: int = 10,
         hybrid_factor: float = 0.9,
         top_n_reranked_results: int = 7,
-        rewritten_query_vector=None,
-        hypothetical_answer_vector=None,
+        query_vector=None,
     ) -> list[LectureUnitPageChunkRetrievalDTO]:
         """
-        Retrieve lecture data from the database.
+        Search the lecture unit's slide chunks for the query and rerank them against it.
         """
-
-        # The two searches (embed + hybrid search each) are independent;
-        # run them concurrently.
-        with TracedThreadPoolExecutor(max_workers=2) as executor:
-            basic_future = executor.submit(
-                self.search_in_db,
-                query=rewritten_student_query,
-                hybrid_factor=0.9,
-                result_limit=result_limit,
-                lecture_unit_dto=lecture_unit,
-                query_vector=rewritten_query_vector,
-            )
-            hyde_future = executor.submit(
-                self.search_in_db,
-                query=hypothetical_answer,
-                hybrid_factor=0.9,
-                result_limit=result_limit,
-                lecture_unit_dto=lecture_unit,
-                query_vector=hypothetical_answer_vector,
-            )
-            basic_lecture_chunks = basic_future.result()
-            hyde_lecture_chunks = hyde_future.result()
-
-        unique = {}
-        for segment in basic_lecture_chunks + hyde_lecture_chunks:
-            unique[segment.uuid] = segment
-        results = list(unique.values())
+        results = self.search_in_db(
+            query=query,
+            hybrid_factor=hybrid_factor,
+            result_limit=result_limit,
+            lecture_unit_dto=lecture_unit,
+            query_vector=query_vector,
+        )
 
         page_chunks = [
             dto
@@ -152,13 +88,12 @@ class LecturePageChunkRetrieval(SubPipeline):
             is not None
         ]
 
-        reranked_page_chunks = self.cohere_client.rerank(
-            student_query,
+        return self.cohere_client.rerank(
+            query,
             page_chunks,
             top_n_reranked_results,
             "page_text_content",
         )
-        return reranked_page_chunks
 
     @observe(name="Retrieval: Search in DB")
     def search_in_db(

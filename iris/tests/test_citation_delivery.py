@@ -49,7 +49,7 @@ from tests.test_inline_citations import (  # noqa: E402
 
 def test_a_complete_tool_result_makes_its_sources_citable():
     registry = CitationSourceRegistry(require_delivery=True)
-    output = _lecture_tool({}, registry)()
+    output = _lecture_tool({}, registry)("q")
 
     assert registry.citable(1) is None
     registry.mark_delivered(output)
@@ -60,7 +60,7 @@ def test_a_complete_tool_result_makes_its_sources_citable():
 
 def test_a_result_cut_after_the_id_line_does_not_count():
     registry = CitationSourceRegistry(require_delivery=True)
-    output = _lecture_tool({}, registry)()
+    output = _lecture_tool({}, registry)("q")
     cut = output[: output.index("Source id: [src:1]\n") + 40]
 
     registry.mark_delivered(cut)
@@ -71,7 +71,7 @@ def test_a_result_cut_after_the_id_line_does_not_count():
 
 def test_an_faq_cut_inside_its_answer_does_not_count():
     registry = CitationSourceRegistry(require_delivery=True)
-    output = _faq_tool(registry)()
+    output = _faq_tool(registry)("q")
     cut = output[: output.index("On 18 Feb") + len("On 18 Feb")]
 
     registry.mark_delivered(cut)
@@ -111,7 +111,7 @@ def _chat_pipeline() -> ChatPipeline:
 def _run_with_tool(tool, registry):
     model = ScriptedModel(
         [
-            tool_turn("", name=tool.__name__, arguments="{}"),
+            tool_turn("", name=tool.__name__, arguments='{"query": "q"}'),
             answer("The exam is on 18 February. [src:1]"),
         ]
     )
@@ -132,7 +132,7 @@ def test_the_agent_loop_marks_what_the_model_read():
 
 def test_the_agent_loop_ignores_sources_an_output_limit_cut_off():
     registry = CitationSourceRegistry(require_delivery=True)
-    full = _faq_tool(registry)()
+    full = _faq_tool(registry)("q")
     budget = ToolOutputBudget(full.index("On 18 Feb"), 10_000)
     tool = budget.wrap(_faq_tool(registry))
 
@@ -197,8 +197,8 @@ def test_a_source_containing_an_id_line_counts_when_delivered_completely():
         )
     )
     output = create_tool_lecture_content_retrieval(
-        retriever, 1, "", MagicMock(), "q", [], {}, citation_sources=registry
-    )()
+        retriever, 1, "", MagicMock(), {}, citation_sources=registry
+    )("q")
 
     registry.mark_delivered(output)
 
@@ -226,8 +226,8 @@ def _short_lecture_output(registry):
         )
     )
     return create_tool_lecture_content_retrieval(
-        retriever, 1, "", MagicMock(), "q", [], {}, citation_sources=registry
-    )()
+        retriever, 1, "", MagicMock(), {}, citation_sources=registry
+    )("q")
 
 
 def test_a_cut_right_after_the_lecture_frame_does_not_count_for_short_content():
@@ -257,8 +257,8 @@ def _lecture_output(registry, text):
         )
     )
     return create_tool_lecture_content_retrieval(
-        retriever, 1, "", MagicMock(), "q", [], {}, citation_sources=registry
-    )()
+        retriever, 1, "", MagicMock(), {}, citation_sources=registry
+    )("q")
 
 
 @pytest.mark.parametrize("text", ["Content", "Content:", "Content:\n---", "---"])

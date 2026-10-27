@@ -169,33 +169,21 @@ llm_configuration:
 
   lecture_retrieval_pipeline:
     default:
-      chat:
-        local: qwen3.8-27b-low
-        cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
       reranker: cohere
 
   lecture_unit_segment_retrieval_pipeline:
     default:
-      chat:
-        local: qwen3.8-27b
-        cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
       reranker: cohere
 
   lecture_transcriptions_retrieval_pipeline:
     default:
-      chat:
-        local: qwen3.8-27b
-        cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
       reranker: cohere
 
   faq_retrieval_pipeline:
     default:
-      chat:
-        local: qwen3.8-27b-low
-        cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
 
   citation_pipeline:

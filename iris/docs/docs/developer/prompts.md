@@ -27,9 +27,7 @@ prompts/
 ├── competency_extraction.py                   # Python prompt builder
 ├── environment.py                             # Shared Jinja2 environment (no escaping, as_data filter)
 ├── faq_consistency_prompt.py                  # FAQ consistency check prompts
-├── faq_retrieval_prompts.py                   # FAQ retrieval query rewriting
 ├── inconsistency_check_prompts.py             # Inconsistency check prompts
-├── lecture_retrieval_prompts.py               # Lecture RAG query rewriting
 ├── lecture_unit_summary_prompt.py             # Lecture unit summarization
 ├── lecture_unit_segment_summary_prompt.py     # Lecture segment summarization
 ├── rewriting_prompts.py                       # Content rewriting prompts
@@ -142,16 +140,7 @@ Text that comes from students or instructors goes through the `as_data` filter i
 
 Some prompts are constructed in Python files, typically as functions that return prompt strings or `ChatPromptTemplate` objects. These are used for sub-pipelines and retrieval operations.
 
-For example, `lecture_retrieval_prompts.py` defines prompt strings for query rewriting during RAG:
-
-```python
-# From lecture_retrieval_prompts.py
-lecture_retriever_initial_prompt_lecture_pages = """
-You write good and performant vector database queries, in particular for Weaviate,
-from chat histories between an AI tutor and a student.
-The query should be designed to retrieve context information from indexed lecture slides...
-"""
-```
+For example, `faq_consistency_prompt.py` defines the prompt strings of the FAQ consistency check.
 
 ## Plain Text Prompts
 

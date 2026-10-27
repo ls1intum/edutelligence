@@ -74,7 +74,7 @@ class RewritingPipeline(Pipeline):
         self.rewriting_handler = LlmRequestHandler(model_id=rewriting_model)
         self.consistency_handler = LlmRequestHandler(model_id=consistency_model)
         self.tokens = []
-        self.faq_retriever = FaqRetrieval(self.db.client, local=local)
+        self.faq_retriever = FaqRetrieval(self.db.client)
 
     @observe(name="Rewriting Pipeline")
     def __call__(

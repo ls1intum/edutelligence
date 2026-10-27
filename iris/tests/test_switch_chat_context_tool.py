@@ -250,7 +250,7 @@ def test_retrieval_follows_the_switch_from_lecture_a_to_lecture_b():
     switch = provide_switch_chat_context(state)
     assert "Successfully registered" in switch("LECTURE_CHAT", 42)
 
-    provide_lecture_retrieval(state)()
+    provide_lecture_retrieval(state)("hash tables")
 
     call = state.lecture_retriever.calls[-1]
     assert call["lecture_id"] == 42
@@ -268,7 +268,7 @@ def test_retrieval_stays_on_the_active_lecture_without_a_switch():
         )
     )
 
-    provide_lecture_retrieval(state)()
+    provide_lecture_retrieval(state)("hash tables")
 
     call = state.lecture_retriever.calls[-1]
     assert call["lecture_id"] == 41
@@ -491,7 +491,7 @@ def test_cancelling_a_switch_clears_the_content_of_the_cancelled_target():
     retrieval = provide_lecture_retrieval(state)
 
     switch("LECTURE_CHAT", 42)
-    retrieval()
+    retrieval("hash tables")
     assert state.lecture_retriever.calls[-1]["lecture_id"] == 42
     assert "content" in state.lecture_content_storage
 
@@ -499,7 +499,7 @@ def test_cancelling_a_switch_clears_the_content_of_the_cancelled_target():
 
     assert state.pending_context_switch is None
     assert "content" not in state.lecture_content_storage
-    retrieval()
+    retrieval("hash tables")
     assert state.lecture_retriever.calls[-1]["lecture_id"] == 41
 
 

@@ -1,4 +1,3 @@
-from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -7,11 +6,6 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureUnitRetrievalDTO,
     LectureUnitSegmentRetrievalDTO,
 )
-from iris.llm import (
-    EMERGENCY_MAX_TOKENS,
-    CompletionArguments,
-)
-from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
 from iris.llm.request_handler.llm_request_handler import (
     LlmRequestHandler,
@@ -24,7 +18,7 @@ from iris.retrieval.lecture.lecture_visibility import (
     is_segment_visible,
     is_unit_released,
 )
-from iris.tracing import TracedThreadPoolExecutor, observe
+from iris.tracing import observe
 from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -51,22 +45,13 @@ class LectureUnitSegmentRetrieval(SubPipeline):
     """LectureUnitSegmentRetrieval retrieves lecture unit segments based on search queries and returns the matching
     results."""
 
-    def __init__(self, client: WeaviateClient, local: bool = False):
+    def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_unit_segment_retrieval_pipeline")
         pipeline_id = "lecture_unit_segment_retrieval_pipeline"
-        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
         embedding_model = resolve_model(
             pipeline_id, "default", "embedding", local=False
         )
-        request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(
-            temperature=0, max_tokens=EMERGENCY_MAX_TOKENS
-        )
-        self.llm = IrisLangchainChatModel(
-            request_handler=request_handler, completion_args=completion_args
-        )
         self.llm_embedding = LlmRequestHandler(embedding_model)
-        self.pipeline = self.llm | StrOutputParser()
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
@@ -80,61 +65,33 @@ class LectureUnitSegmentRetrieval(SubPipeline):
     @observe(name="Lecture Unit Segment Retrieval")
     def __call__(
         self,
-        student_query: str,
-        rewritten_query: str,
-        hypothetical_answer: str,
+        query: str,
         lecture_unit_dto: LectureUnitRetrievalDTO,
         result_limit: int = 10,
         hybrid_factor: float = 0.9,
         top_n_reranked_results: int = 7,
-        rewritten_query_vector=None,
-        hypothetical_answer_vector=None,
+        query_vector=None,
     ):
-        # The two searches (embed + hybrid search each) are independent;
-        # run them concurrently.
-        with TracedThreadPoolExecutor(max_workers=2) as executor:
-            rewritten_future = executor.submit(
-                self.search_in_db,
-                lecture_unit_dto,
-                rewritten_query,
-                hybrid_factor,
-                result_limit,
-                query_vector=rewritten_query_vector,
-            )
-            hypothetical_future = executor.submit(
-                self.search_in_db,
-                lecture_unit_dto,
-                hypothetical_answer,
-                hybrid_factor,
-                result_limit,
-                query_vector=hypothetical_answer_vector,
-            )
-            results_rewritten_query = rewritten_future.result()
-            results_hypothetical_answer = hypothetical_future.result()
-        unique = {}
-        for segment in results_hypothetical_answer + results_rewritten_query:
-            unique[segment.uuid] = segment
-        results = list(unique.values())
-        lecture_unit_segment_retrieval_dtos = []
-        for lecture_unit_segment in results:
-            lecture_unit_segment_retrieval_dto = self.generate_retrieval_dtos(
-                lecture_unit_segment.properties, str(lecture_unit_segment.uuid)
-            )
-            if lecture_unit_segment_retrieval_dto is None:
-                continue
+        results = self.search_in_db(
+            lecture_unit_dto,
+            query,
+            hybrid_factor,
+            result_limit,
+            query_vector=query_vector,
+        )
+        lecture_unit_segment_retrieval_dtos = [
+            dto
+            for item in results
+            if (dto := self.generate_retrieval_dtos(item.properties, str(item.uuid)))
+            is not None
+        ]
 
-            lecture_unit_segment_retrieval_dtos.append(
-                lecture_unit_segment_retrieval_dto
-            )
-
-        reranked_answers = self.cohere_client.rerank(
-            query=student_query,
+        return self.cohere_client.rerank(
+            query=query,
             documents=lecture_unit_segment_retrieval_dtos,
             top_n=top_n_reranked_results,
             content_field_name="segment_summary",
         )
-
-        return reranked_answers
 
     @observe(name="Lecture Unit Segment: Search in DB")
     def search_in_db(

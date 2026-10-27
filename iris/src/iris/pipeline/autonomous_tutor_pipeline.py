@@ -23,7 +23,6 @@ from iris.pipeline.shared.uncertainty_scoring import (
 )
 from iris.pipeline.shared.utils import (
     REDACTED_ANSWER_PLACEHOLDER,
-    format_post_discussion,
     get_current_utc_datetime_string,
 )
 from iris.retrieval.faq_retrieval import FaqRetrieval
@@ -103,14 +102,10 @@ class AutonomousTutorPipeline(
 
         if not hasattr(state, "lecture_content_storage"):
             setattr(state, "lecture_content_storage", {})
-        if not hasattr(state, "faq_storage"):
-            setattr(state, "faq_storage", {})
 
         callback = state.callback
         if not isinstance(callback, AutonomousTutorCallback):
             callback = cast(AutonomousTutorCallback, state.callback)
-        discussion = format_post_discussion(state.dto.post)
-
         tool_list: List[Callable] = []
         if is_programming_exercise:
             tool_list.extend(
@@ -134,40 +129,25 @@ class AutonomousTutorPipeline(
                 ]
             )
 
-        query_text = self._generate_retrieval_query_text(discussion)
-
         if allow_lecture_tool:
-            self.lecture_retriever = LectureRetrieval(
-                state.db.client,
-                local=state.dto.settings is not None and state.dto.settings.is_local(),
-            )
+            self.lecture_retriever = LectureRetrieval(state.db.client)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
                     state.dto.course.id,
                     (state.dto.settings.artemis_base_url if state.dto.settings else ""),
                     callback,
-                    query_text,
-                    state.message_history,
                     getattr(state, "lecture_content_storage", {}),
                 )
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(
-                state.db.client,
-                local=state.dto.settings is not None and state.dto.settings.is_local(),
-            )
+            self.faq_retriever = FaqRetrieval(state.db.client)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
                     state.dto.course.id,
-                    state.dto.course.name,
-                    (state.dto.settings.artemis_base_url if state.dto.settings else ""),
                     callback,
-                    query_text,
-                    state.message_history,
-                    getattr(state, "faq_storage", {}),
                 )
             )
 
@@ -342,10 +322,6 @@ class AutonomousTutorPipeline(
         state.result = answer_text
         logger.info("Confidence strategy: verbalized | confidence=%.4f", confidence)
         return confidence
-
-    def _generate_retrieval_query_text(self, discussion: str) -> str:
-        """Generate query text for retrieval tools."""
-        return f"Find relevant content for the following discussion: {discussion}"
 
     def _format_discussion_responses(self, post) -> str:
         """Format the discussion responses (answers) from a post."""

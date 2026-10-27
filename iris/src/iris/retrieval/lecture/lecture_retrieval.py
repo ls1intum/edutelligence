@@ -1,20 +1,9 @@
-from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import (
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
-)
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
-from iris.common.message_converters import (
-    convert_iris_message_to_langchain_message,
-)
-from iris.common.pipeline_enum import PipelineEnum
-from iris.common.pyris_message import PyrisMessage
 from iris.common.timing import timed_span
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
@@ -23,27 +12,12 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureUnitRetrievalDTO,
     LectureUnitSegmentRetrievalDTO,
 )
-from iris.llm import (
-    EMERGENCY_MAX_TOKENS,
-    CompletionArguments,
-)
-from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import LlmConfigurationError, resolve_model
 from iris.llm.request_handler.llm_request_handler import (
     LlmRequestHandler,
 )
 from iris.llm.request_handler.rerank_request_handler import (
     RerankRequestHandler,
-)
-from iris.pipeline.prompts.lecture_retrieval_prompts import (
-    lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context,
-    lecture_retrieval_initial_prompt_lecture_transcriptions_with_exercise_context,
-    lecture_retriever_initial_prompt_lecture_pages,
-    lecture_retriever_initial_prompt_lecture_transcriptions,
-    rewrite_student_query_prompt,
-    rewrite_student_query_prompt_with_exercise_context,
-    write_hypothetical_lecture_pages_answer_prompt,
-    write_hypothetical_lecture_transcriptions_answer_prompt,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
@@ -77,11 +51,6 @@ from iris.vector_database.lecture_unit_schema import (
 logger = get_logger(__name__)
 
 
-class QueryRewriteMode(Enum):
-    LECTURE_PAGES = "lecture_pages"
-    LECTURE_TRANSCRIPTIONS = "lecture_transcriptions"
-
-
 class LectureRetrieval(SubPipeline):
     """LectureRetrieval retrieves lecture data from the vector database by processing lecture units, transcriptions,
      and page chunks.
@@ -89,22 +58,13 @@ class LectureRetrieval(SubPipeline):
     It combines various sources of lecture-related data and formats them into a single DTO for further processing.
     """
 
-    def __init__(self, client: WeaviateClient, local: bool = False):
+    def __init__(self, client: WeaviateClient):
         super().__init__(implementation_id="lecture_retrieval_pipeline")
         pipeline_id = "lecture_retrieval_pipeline"
-        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
         embedding_model = resolve_model(
             pipeline_id, "default", "embedding", local=False
         )
-        request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(
-            temperature=0, max_tokens=EMERGENCY_MAX_TOKENS
-        )
-        self.llm = IrisLangchainChatModel(
-            request_handler=request_handler, completion_args=completion_args
-        )
         self.llm_embedding = LlmRequestHandler(embedding_model)
-        self.pipeline = self.llm | StrOutputParser()
 
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.lecture_transcription_collection = init_lecture_transcription_schema(
@@ -118,15 +78,9 @@ class LectureRetrieval(SubPipeline):
         self._transcription_presence_cache: dict = {}
         self._release_cache: dict[tuple[int, int, Optional[str]], bool] = {}
 
-        self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(
-            client, local=local
-        )
-        self.lecture_transcription_pipeline = LectureTranscriptionRetrieval(
-            client, local=local
-        )
-        self.lecture_unit_page_chunk_pipeline = LecturePageChunkRetrieval(
-            client, local=local
-        )
+        self.lecture_unit_segment_pipeline = LectureUnitSegmentRetrieval(client)
+        self.lecture_transcription_pipeline = LectureTranscriptionRetrieval(client)
+        self.lecture_unit_page_chunk_pipeline = LecturePageChunkRetrieval(client)
 
         reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
         self.cohere_client = RerankRequestHandler(reranker_id)
@@ -138,8 +92,8 @@ class LectureRetrieval(SubPipeline):
     def _assert_shared_embedding_model(self) -> None:
         """Guard the shared-embedding optimization against misconfiguration.
 
-        ``call_lecture_pipelines`` embeds every query exactly once (with this
-        orchestrator's embedding model) and reuses those vectors across the
+        ``__call__`` embeds the search query once (with this orchestrator's
+        embedding model) and reuses that vector across the
         segment, transcription, and page-chunk sub-pipelines. A hybrid search
         only returns meaningful results when the query vector comes from the
         same embedding model — hence the same vector space and dimension — the
@@ -184,15 +138,19 @@ class LectureRetrieval(SubPipeline):
     @observe(name="Lecture Retrieval")
     def __call__(
         self,
-        query: str,
+        search_query: str,
         course_id: int,
-        chat_history: List[PyrisMessage],
-        problem_statement: str = None,
-        exercise_title: str = None,
         lecture_id: int = None,
         lecture_unit_id: int = None,
         base_url: str = None,
     ) -> LectureRetrievalDTO:
+        """Retrieve the lecture content that matches a search query.
+
+        The agent writes ``search_query`` itself: a self-contained query in the
+        language of the course material. It is embedded once, searched in the
+        slides, transcriptions and segment summaries, and the results are
+        reranked against it.
+        """
         with timed_span("LectureRetrieval", "get_lecture_unit"):
             with TracedThreadPoolExecutor(max_workers=2) as executor:
                 lecture_unit_future = executor.submit(
@@ -222,35 +180,8 @@ class LectureRetrieval(SubPipeline):
                 "Lecture retrieval: no transcriptions for unit — skipping transcription domain"
             )
 
-        with timed_span("LectureRetrieval", "query_rewrites"):
-            (
-                rewritten_lecture_pages_query,
-                rewritten_lecture_transcriptions_query,
-                hypothetical_lecture_pages_answer_query,
-                hypothetical_lecture_transcriptions_answer_query,
-            ) = self.run_parallel_rewrite_tasks(
-                chat_history,
-                query,
-                lecture_unit.course_language,
-                lecture_unit.course_name,
-                problem_statement,
-                exercise_title,
-                include_transcriptions=transcriptions_exist,
-            )
-
         with timed_span("LectureRetrieval", "query_embeddings"):
-            queries_to_embed = [
-                rewritten_lecture_pages_query,
-                hypothetical_lecture_pages_answer_query,
-            ]
-            if transcriptions_exist:
-                queries_to_embed.extend(
-                    [
-                        rewritten_lecture_transcriptions_query,
-                        hypothetical_lecture_transcriptions_answer_query,
-                    ]
-                )
-            query_vectors = self.embed_distinct_queries(queries_to_embed)
+            query_vector = self.llm_embedding.embed(search_query)
 
         with timed_span("LectureRetrieval", "search_pipelines"):
             (
@@ -258,14 +189,7 @@ class LectureRetrieval(SubPipeline):
                 lecture_transcriptions,
                 lecture_unit_page_chunks,
             ) = self.call_lecture_pipelines(
-                lecture_unit,
-                query,
-                rewritten_lecture_pages_query,
-                rewritten_lecture_transcriptions_query,
-                hypothetical_lecture_pages_answer_query,
-                hypothetical_lecture_transcriptions_answer_query,
-                transcriptions_exist,
-                query_vectors,
+                lecture_unit, search_query, transcriptions_exist, query_vector
             )
 
         # Fetch the segments' surrounding transcriptions/page chunks
@@ -310,14 +234,14 @@ class LectureRetrieval(SubPipeline):
             with TracedThreadPoolExecutor(max_workers=2) as executor:
                 transcriptions_future = executor.submit(
                     self.rerank_or_empty,
-                    query,
+                    search_query,
                     lecture_transcriptions,
                     7,
                     "segment_text",
                 )
                 page_chunks_future = executor.submit(
                     self.rerank_or_empty,
-                    query,
+                    search_query,
                     lecture_unit_page_chunks,
                     7,
                     "page_text_content",
@@ -330,6 +254,24 @@ class LectureRetrieval(SubPipeline):
             lecture_transcriptions=lecture_transcriptions,
             lecture_unit_page_chunks=lecture_unit_page_chunks,
         )
+
+    def course_material_language(
+        self, course_id: int, base_url: Optional[str] = None
+    ) -> Optional[str]:
+        """The stored language of the course's lecture material, from one unit."""
+        course_filter = Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+            course_id
+        )
+        if base_url is not None:
+            course_filter &= artemis_instance_filter(LectureUnitSchema, base_url)
+        result = self.lecture_unit_collection.query.fetch_objects(
+            filters=course_filter,
+            limit=1,
+            return_properties=[LectureUnitSchema.COURSE_LANGUAGE.value],
+        )
+        if not result.objects:
+            return None
+        return result.objects[0].properties.get(LectureUnitSchema.COURSE_LANGUAGE.value)
 
     def lecture_unit_has_transcriptions(
         self,
@@ -369,18 +311,6 @@ class LectureRetrieval(SubPipeline):
         transcriptions_exist = len(transcriptions) > 0
         self._transcription_presence_cache[cache_key] = transcriptions_exist
         return transcriptions_exist
-
-    def embed_distinct_queries(self, queries: List[str]) -> Dict[str, List[float]]:
-        distinct_queries = list(dict.fromkeys(query for query in queries if query))
-        if not distinct_queries:
-            return {}
-
-        with TracedThreadPoolExecutor(max_workers=len(distinct_queries)) as executor:
-            futures = {
-                query: executor.submit(self.llm_embedding.embed, query)
-                for query in distinct_queries
-            }
-            return {query: future.result() for query, future in futures.items()}
 
     def rerank_or_empty(
         self,
@@ -693,422 +623,37 @@ class LectureRetrieval(SubPipeline):
                 ],
             )
 
-    @observe(name="Retrieval: Run Parallel Rewrite Tasks")
-    def run_parallel_rewrite_tasks(
-        self,
-        chat_history: list[PyrisMessage],
-        student_query: str,
-        course_language: str,
-        course_name: str = None,
-        problem_statement: str = None,
-        exercise_title: str = None,
-        include_transcriptions: bool = True,
-    ):
-        """
-        Run the rewrite tasks in parallel.
-        """
-        if problem_statement:
-            with TracedThreadPoolExecutor() as executor:
-                rewritten_lecture_pages_query_future = executor.submit(
-                    self.rewrite_student_query_with_exercise_context,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    exercise_title,
-                    problem_statement,
-                    QueryRewriteMode.LECTURE_PAGES,
-                )
-                hypothetical_lecture_pages_answer_query_future = executor.submit(
-                    self.rewrite_elaborated_query_with_exercise_context,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    exercise_title,
-                    problem_statement,
-                    QueryRewriteMode.LECTURE_PAGES,
-                )
-                rewritten_lecture_transcriptions_query_future = None
-                hypothetical_lecture_transcriptions_answer_query_future = None
-                if include_transcriptions:
-                    rewritten_lecture_transcriptions_query_future = executor.submit(
-                        self.rewrite_student_query_with_exercise_context,
-                        chat_history,
-                        student_query,
-                        course_language,
-                        course_name,
-                        exercise_title,
-                        problem_statement,
-                        QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
-                    )
-                    hypothetical_lecture_transcriptions_answer_query_future = (
-                        executor.submit(
-                            self.rewrite_elaborated_query_with_exercise_context,
-                            chat_history,
-                            student_query,
-                            course_language,
-                            course_name,
-                            exercise_title,
-                            problem_statement,
-                            QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
-                        )
-                    )
-
-                rewritten_lecture_pages_query: str = (
-                    rewritten_lecture_pages_query_future.result()
-                )
-                hypothetical_lecture_pages_answer_query: str = (
-                    hypothetical_lecture_pages_answer_query_future.result()
-                )
-                if include_transcriptions:
-                    rewritten_lecture_transcriptions_query: str = (
-                        rewritten_lecture_transcriptions_query_future.result()
-                    )
-                    hypothetical_lecture_transcriptions_answer_query: str = (
-                        hypothetical_lecture_transcriptions_answer_query_future.result()
-                    )
-                else:
-                    rewritten_lecture_transcriptions_query = None
-                    hypothetical_lecture_transcriptions_answer_query = None
-        else:
-            with TracedThreadPoolExecutor() as executor:
-                rewritten_lecture_pages_query_future = executor.submit(
-                    self.rewrite_student_query,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    QueryRewriteMode.LECTURE_PAGES,
-                )
-                hypothetical_lecture_pages_answer_query_future = executor.submit(
-                    self.rewrite_elaborated_query,
-                    chat_history,
-                    student_query,
-                    course_language,
-                    course_name,
-                    QueryRewriteMode.LECTURE_PAGES,
-                )
-                rewritten_lecture_transcriptions_query_future = None
-                hypothetical_lecture_transcriptions_answer_query_future = None
-                if include_transcriptions:
-                    rewritten_lecture_transcriptions_query_future = executor.submit(
-                        self.rewrite_student_query,
-                        chat_history,
-                        student_query,
-                        course_language,
-                        course_name,
-                        QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
-                    )
-                    hypothetical_lecture_transcriptions_answer_query_future = (
-                        executor.submit(
-                            self.rewrite_elaborated_query,
-                            chat_history,
-                            student_query,
-                            course_language,
-                            course_name,
-                            QueryRewriteMode.LECTURE_TRANSCRIPTIONS,
-                        )
-                    )
-
-                rewritten_lecture_pages_query: str = (
-                    rewritten_lecture_pages_query_future.result()
-                )
-                hypothetical_lecture_pages_answer_query: str = (
-                    hypothetical_lecture_pages_answer_query_future.result()
-                )
-                if include_transcriptions:
-                    rewritten_lecture_transcriptions_query: str = (
-                        rewritten_lecture_transcriptions_query_future.result()
-                    )
-                    hypothetical_lecture_transcriptions_answer_query: str = (
-                        hypothetical_lecture_transcriptions_answer_query_future.result()
-                    )
-                else:
-                    rewritten_lecture_transcriptions_query = None
-                    hypothetical_lecture_transcriptions_answer_query = None
-
-        return (
-            rewritten_lecture_pages_query,
-            rewritten_lecture_transcriptions_query,
-            hypothetical_lecture_pages_answer_query,
-            hypothetical_lecture_transcriptions_answer_query,
-        )
-
-    @observe(name="Retrieval: Rewrite Student Query")
-    def rewrite_student_query(
-        self,
-        chat_history: List[PyrisMessage],
-        student_query: str,
-        course_language: str,
-        course_name: str,
-        rewrite_mode: QueryRewriteMode,
-    ) -> str:
-        """
-        Rewrite the student query.
-        """
-        if rewrite_mode == QueryRewriteMode.LECTURE_TRANSCRIPTIONS:
-            initial_prompt = lecture_retriever_initial_prompt_lecture_transcriptions
-        else:
-            initial_prompt = lecture_retriever_initial_prompt_lecture_pages
-
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", initial_prompt),
-            ]
-        )
-        prompt = self._add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt += SystemMessagePromptTemplate.from_template(
-            rewrite_student_query_prompt
-        )
-        prompt_val = prompt.format_messages(
-            course_language=course_language,
-            course_name=course_name,
-            student_query=student_query,
-        )
-        prompt = ChatPromptTemplate.from_messages(prompt_val)
-        try:
-            response = (prompt | self.pipeline).invoke({})
-            token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
-            logger.debug("Query rewrite completed | response_length=%d", len(response))
-            return response
-        except Exception as e:
-            raise e
-
-    @observe(name="Retrieval: Rewrite Student Query with Exercise Context")
-    def rewrite_student_query_with_exercise_context(
-        self,
-        chat_history: List[PyrisMessage],
-        student_query: str,
-        course_language: str,
-        course_name: str,
-        exercise_name: str,
-        problem_statement: str,
-        rewrite_mode: QueryRewriteMode,
-    ) -> str:
-        """
-        Rewrite the student query to generate fitting lecture content and embed it.
-        """
-        if rewrite_mode == QueryRewriteMode.LECTURE_TRANSCRIPTIONS:
-            initial_prompt = lecture_retrieval_initial_prompt_lecture_transcriptions_with_exercise_context
-        else:
-            initial_prompt = (
-                lecture_retrieval_initial_prompt_lecture_pages_with_exercise_context
-            )
-
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", initial_prompt),
-            ]
-        )
-        prompt = self._add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt += SystemMessagePromptTemplate.from_template(
-            rewrite_student_query_prompt_with_exercise_context
-        )
-        prompt_val = prompt.format_messages(
-            course_language=course_language,
-            course_name=course_name,
-            exercise_name=exercise_name,
-            problem_statement=problem_statement,
-            student_query=student_query,
-        )
-        prompt = ChatPromptTemplate.from_messages(prompt_val)
-        try:
-            response = (prompt | self.pipeline).invoke({})
-            token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
-            logger.debug("Query rewrite completed | response_length=%d", len(response))
-            return response
-        except Exception as e:
-            raise e
-
-    @observe(name="Retrieval: Rewrite Elaborated Query")
-    def rewrite_elaborated_query(
-        self,
-        chat_history: list[PyrisMessage],
-        student_query: str,
-        course_language: str,
-        course_name: str,
-        rewrite_mode: QueryRewriteMode,
-    ) -> str:
-        """
-        Rewrite the student query to generate fitting lecture content and embed it.
-        To extract more relevant content from the vector database.
-        """
-        if rewrite_mode == QueryRewriteMode.LECTURE_TRANSCRIPTIONS:
-            write_hypothetical_answer_prompt = (
-                write_hypothetical_lecture_transcriptions_answer_prompt
-            )
-        else:
-            write_hypothetical_answer_prompt = (
-                write_hypothetical_lecture_pages_answer_prompt
-            )
-
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", write_hypothetical_answer_prompt),
-            ]
-        )
-        prompt = self._add_last_four_messages_to_prompt(prompt, chat_history)
-        # Escape curly braces in student_query for LangChain template compatibility
-        safe_query = student_query.replace("{", "{{").replace("}", "}}")
-        prompt += ChatPromptTemplate.from_messages(
-            [
-                ("user", safe_query),
-            ]
-        )
-        prompt_val = prompt.format_messages(
-            course_language=course_language,
-            course_name=course_name,
-        )
-        prompt = ChatPromptTemplate.from_messages(prompt_val)
-        try:
-            response = (prompt | self.pipeline).invoke({})
-            token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
-            logger.debug("Query rewrite completed | response_length=%d", len(response))
-            return response
-        except Exception as e:
-            raise e
-
-    @observe(name="Retrieval: Rewrite Elaborated Query with Exercise Context")
-    def rewrite_elaborated_query_with_exercise_context(
-        self,
-        chat_history: list[PyrisMessage],
-        student_query: str,
-        course_language: str,
-        course_name: str,
-        exercise_name: str,
-        problem_statement: str,
-        rewrite_mode: QueryRewriteMode,
-    ) -> str:
-        """
-        Rewrite the student query to generate fitting lecture content and embed it.
-        To extract more relevant content from the vector database.
-        """
-
-        if rewrite_mode == QueryRewriteMode.LECTURE_TRANSCRIPTIONS:
-            write_hypothetical_answer_prompt = (
-                write_hypothetical_lecture_transcriptions_answer_prompt
-            )
-        else:
-            write_hypothetical_answer_prompt = (
-                write_hypothetical_lecture_pages_answer_prompt
-            )
-
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", write_hypothetical_answer_prompt),
-            ]
-        )
-        prompt = self._add_last_four_messages_to_prompt(prompt, chat_history)
-        prompt_val = prompt.format_messages(
-            course_language=course_language,
-            course_name=course_name,
-            exercise_name=exercise_name,
-            problem_statement=problem_statement,
-        )
-        prompt = ChatPromptTemplate.from_messages(prompt_val)
-        # Escape curly braces in student_query for LangChain template compatibility
-        safe_query = student_query.replace("{", "{{").replace("}", "}}")
-        prompt += ChatPromptTemplate.from_messages(
-            [
-                ("user", safe_query),
-            ]
-        )
-        try:
-            response = (prompt | self.pipeline).invoke({})
-            token_usage = self.llm.tokens
-            token_usage.pipeline = PipelineEnum.IRIS_LECTURE_RETRIEVAL_PIPELINE
-            self.tokens.append(self.llm.tokens)
-            logger.debug("Query rewrite completed | response_length=%d", len(response))
-            return response
-        except Exception as e:
-            raise e
-
-    def _add_last_four_messages_to_prompt(
-        self,
-        prompt,
-        chat_history: List[PyrisMessage],
-    ):
-        """
-        Adds the chat history and user question to the prompt
-            :param chat_history: The chat history
-            :param user_question: The user question
-            :return: The prompt with the chat history
-        """
-        if chat_history is not None and len(chat_history) > 0:
-            num_messages_to_take = min(len(chat_history), 4)
-            last_messages = chat_history[-num_messages_to_take:]
-            chat_history_messages = [
-                convert_iris_message_to_langchain_message(message)
-                for message in last_messages
-            ]
-            prompt += chat_history_messages
-        return prompt
-
     def call_lecture_pipelines(
         self,
         lecture_unit: LectureUnitRetrievalDTO,
-        student_query: str,
-        lecture_pages_query: str,
-        lecture_transcriptions_query: str,
-        hypothetical_lecture_pages_answer_query: str,
-        hypothetical_lecture_transcriptions_answer_query: str,
+        search_query: str,
         transcriptions_exist: bool,
-        query_vectors: Dict[str, List[float]],
+        query_vector: List[float],
     ):
         """
-        Call the different pipelines for lecture content retrieval.
+        Search segments, transcriptions and slide chunks for the query in parallel.
         """
-        segment_query = lecture_transcriptions_query
-        segment_hypothetical_answer = hypothetical_lecture_transcriptions_answer_query
-        if not transcriptions_exist:
-            segment_query = lecture_pages_query
-            segment_hypothetical_answer = hypothetical_lecture_pages_answer_query
-
         worker_count = 3 if transcriptions_exist else 2
         with TracedThreadPoolExecutor(max_workers=worker_count) as executor:
             lecture_unit_segments_future = executor.submit(
                 self.lecture_unit_segment_pipeline,
-                student_query,
-                segment_query,
-                segment_hypothetical_answer,
+                search_query,
                 lecture_unit,
-                rewritten_query_vector=query_vectors.get(segment_query),
-                hypothetical_answer_vector=query_vectors.get(
-                    segment_hypothetical_answer
-                ),
+                query_vector=query_vector,
             )
             lecture_transcriptions_future = None
             if transcriptions_exist:
                 lecture_transcriptions_future = executor.submit(
                     self.lecture_transcription_pipeline,
-                    student_query,
-                    lecture_transcriptions_query,
-                    hypothetical_lecture_transcriptions_answer_query,
+                    search_query,
                     lecture_unit,
-                    rewritten_query_vector=query_vectors.get(
-                        lecture_transcriptions_query
-                    ),
-                    hypothetical_answer_vector=query_vectors.get(
-                        hypothetical_lecture_transcriptions_answer_query
-                    ),
+                    query_vector=query_vector,
                 )
             lecture_unit_page_chunks_future = executor.submit(
                 self.lecture_unit_page_chunk_pipeline,
-                student_query,
-                lecture_pages_query,
-                hypothetical_lecture_pages_answer_query,
+                search_query,
                 lecture_unit,
-                rewritten_query_vector=query_vectors.get(lecture_pages_query),
-                hypothetical_answer_vector=query_vectors.get(
-                    hypothetical_lecture_pages_answer_query
-                ),
+                query_vector=query_vector,
             )
 
             lecture_unit_segments: List[LectureUnitSegmentRetrievalDTO] = (

@@ -99,14 +99,10 @@ class TutorSuggestionPipeline(
 
         if not hasattr(state, "lecture_content_storage"):
             setattr(state, "lecture_content_storage", {})
-        if not hasattr(state, "faq_storage"):
-            setattr(state, "faq_storage", {})
 
         callback = state.callback
         if not isinstance(callback, TutorSuggestionCallback):
             callback = cast(TutorSuggestionCallback, state.callback)
-        discussion = format_post_discussion(state.dto.post, include_user_ids=True)
-
         tool_list: List[Callable] = []
         if is_programming_exercise:
             programming_exercise_tools: list[Callable] = [
@@ -140,47 +136,30 @@ class TutorSuggestionPipeline(
                 ),
             ]
             tool_list.extend(text_exercise_tools)
-        query_text = self._generate_retrieval_query_text(
-            discussion,
-            self.get_text_of_latest_user_message(state),
-        )
 
         if len(state.dto.chat_history) > 0:
             tool_list.append(
                 create_tool_get_last_artifact(state.dto.chat_history, callback)
             )
         if allow_lecture_tools:
-            self.lecture_retriever = LectureRetrieval(
-                state.db.client,
-                local=state.dto.settings is not None and state.dto.settings.is_local(),
-            )
+            self.lecture_retriever = LectureRetrieval(state.db.client)
             tool_list.append(
                 create_tool_lecture_content_retrieval(
                     self.lecture_retriever,
                     state.dto.course.id,
                     (state.dto.settings.artemis_base_url if state.dto.settings else ""),
                     callback,
-                    query_text,
-                    state.message_history,
                     getattr(state, "lecture_content_storage", {}),
                 )
             )
 
         if allow_faq_tool:
-            self.faq_retriever = FaqRetrieval(
-                state.db.client,
-                local=state.dto.settings is not None and state.dto.settings.is_local(),
-            )
+            self.faq_retriever = FaqRetrieval(state.db.client)
             tool_list.append(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
                     state.dto.course.id,
-                    state.dto.course.name,
-                    (state.dto.settings.artemis_base_url if state.dto.settings else ""),
                     callback,
-                    query_text,
-                    state.message_history,
-                    getattr(state, "faq_storage", {}),
                 )
             )
 
@@ -289,26 +268,6 @@ class TutorSuggestionPipeline(
             len(state.message_history) > 0
             and state.message_history[-1].sender == IrisMessageRole.ARTIFACT
         )
-
-    def _generate_retrieval_query_text(
-        self,
-        discussion: str,
-        user_query: str,
-    ) -> str:
-        """
-        Generate the query text for the retrieval tools based on the discussion and user query.
-
-        Args:
-            discussion (str): The discussion of the post.
-            user_query (str): The latest user message.
-
-        Returns:
-            str: The generated query text.
-        """
-        query = f"Find me relevant contents for the following discussion: {discussion}"
-        if user_query:
-            query += f"The user also asked specifically for: {user_query}"
-        return query
 
     @observe(name="Tutor Suggestion Pipeline")
     def __call__(

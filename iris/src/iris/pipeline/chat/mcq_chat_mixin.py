@@ -160,8 +160,8 @@ def retrieve_lecture_content_for_mcq(
 ) -> tuple[Optional[str], list[dict]]:
     """Fetch lecture unit page text directly from Weaviate for MCQ generation.
 
-    Uses a simple filtered fetch instead of the full RAG pipeline
-    (query rewriting, HyDE, reranking) to keep MCQ generation fast.
+    Uses a simple filtered fetch instead of a search with reranking to keep
+    MCQ generation fast.
 
     Args:
         db: The Weaviate database client wrapper.

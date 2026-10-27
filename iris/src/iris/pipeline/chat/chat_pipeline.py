@@ -688,7 +688,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
         retriever = getattr(state, "lecture_retriever", None)
         if retriever is None:
-            retriever = LectureRetrieval(state.db.client, local=state.local)
+            retriever = LectureRetrieval(state.db.client)
             state.lecture_retriever = retriever
         return retriever
 

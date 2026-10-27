@@ -189,13 +189,13 @@ def _lecture_tool(storage, registry=None):
         )
     )
     return create_tool_lecture_content_retrieval(
-        retriever, 1, "", MagicMock(), "q", [], storage, citation_sources=registry
+        retriever, 1, "", MagicMock(), storage, citation_sources=registry
     )
 
 
 def test_lecture_tool_prints_source_ids_when_given_a_registry():
     registry = CitationSourceRegistry()
-    output = _lecture_tool({}, registry)()
+    output = _lecture_tool({}, registry)("q")
 
     assert "Source id: [src:1]\nContent:\n---Composition" in output
     assert "Source id: [src:2]\nContent:\n---Bei der Komposition" in output
@@ -205,7 +205,7 @@ def test_lecture_tool_prints_source_ids_when_given_a_registry():
 
 def test_lecture_tool_output_is_unchanged_without_a_registry():
     storage = {}
-    output = _lecture_tool(storage)()
+    output = _lecture_tool(storage)("q")
 
     assert "[src:" not in output
     assert "Page: 14, point-out id: 13\nContent:\n---Composition" in output
@@ -217,13 +217,13 @@ def test_lecture_tool_output_is_unchanged_without_a_registry():
 def _faq_tool(registry=None):
     retriever = MagicMock(return_value=[_faq(), _faq(302, "Aids?", "One A4 sheet.")])
     return create_tool_faq_content_retrieval(
-        retriever, 1, "SE", "", MagicMock(), "q", [], {}, citation_sources=registry
+        retriever, 1, MagicMock(), citation_sources=registry
     )
 
 
 def test_faq_tool_prints_source_ids_when_given_a_registry():
     registry = CitationSourceRegistry()
-    output = _faq_tool(registry)()
+    output = _faq_tool(registry)("q")
 
     assert output.startswith("Source id: [src:1]\n[FAQ ID: 301,")
     assert "Source id: [src:2]\n[FAQ ID: 302," in output
@@ -231,7 +231,7 @@ def test_faq_tool_prints_source_ids_when_given_a_registry():
 
 
 def test_faq_tool_output_is_unchanged_without_a_registry():
-    assert _faq_tool()() == (
+    assert _faq_tool()("q") == (
         "[FAQ ID: 301, FAQ Question: When is the exam?, FAQ Answer: On 18 February.]"
         "[FAQ ID: 302, FAQ Question: Aids?, FAQ Answer: One A4 sheet.]"
     )
@@ -752,9 +752,9 @@ def test_a_source_from_before_a_switch_stays_citable():
     retrieval = provide_lecture_retrieval(state)
     switch = provide_switch_chat_context(state)
 
-    first = retrieval()
+    first = retrieval("composition")
     switch("LECTURE_CHAT", 42)
-    second = retrieval()
+    second = retrieval("composition")
 
     assert "Source id: [src:1]" in first and "Source id: [src:2]" in second
     result = render_citations("A [src:1]. B [src:2].", state.citation_sources)
