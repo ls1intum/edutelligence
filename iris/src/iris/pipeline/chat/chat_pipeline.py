@@ -873,8 +873,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             ]
         )
 
-        guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
-        self._track_tokens(state, llm_small.tokens)
+        try:
+            guide_response = (prompt | llm_small | StrOutputParser()).invoke({})
+        finally:
+            # Also a call that stopped early is billed: its usage is on the wrapper.
+            self._track_tokens(state, llm_small.tokens)
 
         if _guide_response_is_ok(guide_response):
             return guide_response, response

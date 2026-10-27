@@ -81,12 +81,22 @@ class McqGenerationPipeline(SubPipeline):
         if callback:
             callback.update()
 
-        response = self.pipeline.invoke([SystemMessage(content=rendered_prompt)])
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE)
+        response = self._invoke(rendered_prompt)
 
         # Validate JSON
         result = self._extract_and_validate_json(response)
         return result
+
+    def _invoke(self, prompt: str) -> str:
+        """Run one model call and record its usage, also when the call stops early."""
+        self.llm.tokens = None  # so a call that reports nothing bills nothing
+        try:
+            return self.pipeline.invoke([SystemMessage(content=prompt)])
+        finally:
+            if self.llm.tokens is not None:
+                self._append_tokens(
+                    self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE
+                )
 
     def generate_set(
         self,
@@ -270,8 +280,7 @@ class McqGenerationPipeline(SubPipeline):
             f'"application of Z"]\n'
         )
 
-        response = self.pipeline.invoke([SystemMessage(content=prompt)])
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE)
+        response = self._invoke(prompt)
 
         # Parse response
         cleaned = response.strip()
