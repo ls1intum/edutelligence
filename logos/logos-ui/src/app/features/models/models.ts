@@ -189,11 +189,14 @@ export class Models implements OnInit {
     const models = await this.modelService.getModels();
     this.models.set(models);
 
-    const capabilities = await this.modelService.getModelCapabilities(
-      models.map((model) => model.id),
+    // The capabilities endpoint rejects empty id lists with a 400, so an
+    // empty catalogue must not trigger the call — and must not read as a
+    // failed load.
+    this.capabilities.set(
+      models.length > 0
+        ? await this.modelService.getModelCapabilities(models.map((model) => model.id))
+        : {},
     );
-
-    this.capabilities.set(capabilities);
   } catch {
     this.loadError.set(true);
   } finally {
