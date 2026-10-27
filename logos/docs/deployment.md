@@ -121,6 +121,11 @@ ends, the node manager removes the image that is two versions old. It also
 removes the image of a release that does not run. If the rollback fails, the node
 manager removes no image.
 
+The node manager does not remove its own image. When the new node manager
+answers, the workflow removes the image of the previous node manager. If the new
+node manager does not start, the old image stays on the host. A host without the
+workflow keeps its old node manager images. Remove them with `docker rmi`.
+
 The node manager writes the record of each deployment to the directory
 `node-manager/` in the worker directory. The image `logos-node-manager` is in the
 deployment registry and, for builds of `main`, in the public mirror.

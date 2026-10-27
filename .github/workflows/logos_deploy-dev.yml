@@ -179,12 +179,21 @@ jobs:
             compose() {
               docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env "$@"
             }
+            # The pull moves the tag to the new image, so the image of the node manager that runs now is only known
+            # by its ID. The ID is empty when no node manager runs yet.
+            old_image=$(docker inspect --type container --format '{{.Image}}' logos-node-manager 2>/dev/null || true)
             compose pull logos-node-manager
             # Recreated on every run: `docker login` replaces config.json with a new file, and the node manager
             # mounts that one file, so a container that is kept would go on with the old login.
             compose up -d --force-recreate logos-node-manager
             for attempt in $(seq 1 30); do
               if docker exec logos-node-manager node-manager ping; then
+                # Only now, when the new node manager answers: if it did not start, the old image would still be on
+                # the host. A problem here does not fail the step.
+                new_image=$(docker inspect --type container --format '{{.Image}}' logos-node-manager 2>/dev/null || true)
+                if [ -n "$old_image" ] && [ -n "$new_image" ] && [ "$old_image" != "$new_image" ]; then
+                  docker rmi "$old_image" || echo "The previous node manager image was not removed." >&2
+                fi
                 exit 0
               fi
               sleep 2
