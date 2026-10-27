@@ -448,3 +448,24 @@ def test_failed_suggestions_still_report_the_finished_compaction():
     # Collected once: a later finish() must not record the usage again.
     assert pipeline._collect_compaction(state) is None
     assert state.tokens == [usage]
+
+
+def test_compaction_request_quotes_and_sends_answers_without_citations():
+    _FakeChatModel.instances = []
+    state = _compaction_state(prompt_tokens=2_000)
+    cited = "Parts die with the whole. [cite:L:7:13:::C:S] [src:1] Then the rest."
+    state.message_history[1] = _answer(2, cited)
+
+    with (
+        patch.object(abstract_agent_pipeline, "IrisChatModel", _FakeChatModel),
+        patch.object(abstract_agent_pipeline, "LlmRequestHandler", MagicMock()),
+    ):
+        _pipeline()._start_compaction(state, {}).join()
+
+    messages = _FakeChatModel.instances[0].messages
+    texts = [m.contents[0].text_content for m in messages if m.contents]
+    note = texts[-1]
+    assert "«Parts die with the whole. Then the rest.»" in note
+    assert all("[cite:" not in t and "[src:" not in t for t in texts)
+    # The stored history keeps the answer as Artemis stored it.
+    assert state.message_history[1].contents[0].text_content == cited

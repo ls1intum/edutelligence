@@ -610,8 +610,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             return None
 
         covers_through_message_id = messages[boundary - 1].id
+        # Quoted from the answer as the model reads it in the history, cleaned the same way.
         instruction = compaction_instruction(
-            last_covered_excerpt(messages[boundary - 1])
+            last_covered_excerpt(self._history_message(messages[boundary - 1]))
         )
         model_id = state.llm.request_handler.model_id
 
