@@ -39,9 +39,13 @@ function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function signature(run: ModelProviderBenchmark, parameter: ComparisonParameter): string {
+function signature(run: ModelProviderBenchmark, parameter: ComparisonParameter | 'batching'): string {
   const settings = comparisonSettings(run);
   delete settings[parameter];
+  if (parameter === 'batching') {
+    delete settings['max_num_seqs'];
+    delete settings['max_num_batched_tokens'];
+  }
   delete settings['hf_overrides'];
   if (parameter === 'max_concurrency') {
     // Synchronous is the one-stream case. GuideLLM worker count is derived from load.
@@ -59,6 +63,11 @@ function signature(run: ModelProviderBenchmark, parameter: ComparisonParameter):
     warmup: spec['warmup'], cooldown: spec['cooldown'], constraints: spec['constraints'],
     hfOverrides: serving['hf_overrides'],
   });
+}
+
+/** Compare batching trials only when the captured workload and other settings match. */
+export function batchingSignature(run: ModelProviderBenchmark): string | null {
+  return canCompare(run) ? signature(run, 'batching') : null;
 }
 
 export function isolatedRuns(runs: readonly ModelProviderBenchmark[], baseline: ModelProviderBenchmark,

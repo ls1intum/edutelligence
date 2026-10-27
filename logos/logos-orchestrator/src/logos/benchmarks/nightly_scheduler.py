@@ -202,18 +202,21 @@ class NightlyScheduler:
         if not ready:
             raise RuntimeError("Restored production model is not ready")
 
-    def target_lane(self, pair_id):
+    def target_lane(self, pair_id, *, disable_missing=True):
         """Resolve and validate a currently usable model/worker pair."""
         with DBManager() as db:
             target = db.get_model_provider_benchmark_target(pair_id)
         if not target:
-            store.disable_missing_target(pair_id)
+            if disable_missing:
+                store.disable_missing_target(pair_id)
             raise RuntimeError("The scheduled model/worker deployment no longer exists")
         if target["provider_type"] != "logosnode":
             raise RuntimeError("Nightly benchmarks require a Logos worker")
         pid, model = int(target["provider_id"]), str(target["model_name"])
         if not self.healthy(pid):
             raise RuntimeError("The selected worker must be online and healthy")
+        if self.planner.is_worker_locked(pid):
+            raise RuntimeError("The selected worker is locked")
         snapshot = self.registry.peek_runtime_snapshot(pid)
         if not (snapshot.get("runtime") or {}).get("supports_benchmark_restart"):
             raise RuntimeError("Update this worker before enabling nightly benchmarks")
@@ -382,6 +385,22 @@ class NightlyScheduler:
                         store.save(pair_id, "running", report, recovery)
                         job_id, task = await self.submit(pair_id, settings)
                         result = await task
+                        if result:
+                            baseline_id = (
+                                result
+                                if index == 0
+                                else next(
+                                    (
+                                        item["benchmark_id"]
+                                        for item in report
+                                        if item.get("configuration") == 1 and item.get("status") == "success"
+                                    ),
+                                    None,
+                                )
+                            )
+                            store.record_comparison(
+                                result, baseline_id, settings.serving_overrides.model_dump(exclude_none=True), current
+                            )
                         outcome = {
                             "configuration": index + 1,
                             "attempt": attempt + 1,

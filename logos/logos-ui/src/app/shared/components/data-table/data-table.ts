@@ -18,10 +18,11 @@ export class DataTableComponent {
 
   /** Index of the column whose header toggles sorting (-1: no sortable column). */
   @Input() sortableColumn = -1;
+  @Input() sortableColumns: number[] = [];
   /** Current sort direction of the sortable column (null: unsorted). */
   @Input() sortDirection: 'asc' | 'desc' | null = null;
   /** Emitted when the sortable column header is clicked. */
-  @Output() sortToggle = new EventEmitter<void>();
+  @Output() sortToggle = new EventEmitter<number>();
 
   get sortIcon(): string {
     if (this.sortDirection === 'asc') return 'pi-sort-up';

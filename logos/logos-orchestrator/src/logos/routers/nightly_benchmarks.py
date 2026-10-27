@@ -5,7 +5,8 @@ from fastapi import APIRouter, HTTPException, Request
 import logos.main as main
 from logos.benchmarks import nightly_store as store
 from logos.benchmarks.guidellm_runner import extract_serving_configuration
-from logos.benchmarks.nightly import parameter_plan
+from logos.benchmarks.nightly import local_now, parameter_plan
+from logos.benchmarks.nightly_overview import overview
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import NightlyStatusRequest, NightlyUpdateRequest
 from logos.maintenance_window import MaintenanceWindow, maintenance_node_limit
@@ -52,3 +53,18 @@ async def configure_nightly(data: NightlyUpdateRequest, request: Request):
         return result
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/overview")
+async def nightly_overview(request: Request):
+    _require_internal_secret(request)
+    if main._nightly_scheduler is None:
+        raise HTTPException(status_code=503, detail="Nightly scheduler is starting")
+    now = local_now()
+    return overview(
+        store.overview_rows(),
+        main._nightly_scheduler,
+        now,
+        recovery_pending=store.has_recovery(),
+        claimed_count=store.claimed_today(now.date()),
+    )

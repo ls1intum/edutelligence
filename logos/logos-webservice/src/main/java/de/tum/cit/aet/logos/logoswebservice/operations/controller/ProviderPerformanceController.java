@@ -167,6 +167,12 @@ public class ProviderPerformanceController {
         }
     }
 
+    @PostMapping("/model_benchmarks/nightly/overview")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> nightlyOverview() {
+        return nightlyResponse("overview", Map.of());
+    }
+
     @PostMapping("/model_benchmarks/nightly/status")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> nightlyStatus(@RequestBody Map<String, Object> body) {

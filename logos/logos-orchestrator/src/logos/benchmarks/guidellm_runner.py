@@ -356,10 +356,21 @@ def successful_summary(
             if end_time is not None
             else datetime.now(timezone.utc)
         )
+        start_time = benchmark.get("start_time")
+        if start_time is None:
+            start_time = benchmark.get("scheduler_metrics", {}).get("measure_start_time")
         return {
             "model_provider_id": model_provider_id,
             "configuration": {
                 "tool": "guidellm",
+                "measurement": {
+                    "started_at": (
+                        datetime.fromtimestamp(float(start_time), timezone.utc).isoformat()
+                        if start_time is not None
+                        else None
+                    ),
+                    "ended_at": recorded_at.isoformat() if end_time is not None else None,
+                },
                 "metadata": redact_secrets(report.get("metadata", {})),
                 "scenario": redact_secrets(report.get("config", {})),
                 "benchmark": redact_secrets(benchmark.get("config", {})),
@@ -519,6 +530,9 @@ async def run_benchmark_job(
                 dataset=settings.dataset,
             )
 
+        summary["configuration"]["requested_overrides"] = redact_secrets(
+            settings.serving_overrides.model_dump(exclude_none=True)
+        )
         with DBManager() as db:
             benchmark_id = db.insert_model_provider_benchmark(**summary)
             db.update_job_status(

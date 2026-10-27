@@ -1,0 +1,94 @@
+@if (topRuns().length) {
+  <section class="top-configurations" aria-label="Top configurations so far">
+    <h3><i class="pi pi-trophy" aria-hidden="true"></i> Top configuration so far</h3>
+    <p class="results-note">Best recorded run. Workloads may differ.</p>
+    @for (top of topRuns(); track top.run.model_provider_id) {
+      <article class="top-configuration">
+        <div class="results-heading">
+          <div><strong>{{ top.run.provider_name }}</strong><small>Run #{{ top.run.id }} · {{ top.run.recorded_at | date:'dd MMM yyyy, HH:mm Z' }}</small></div>
+          <strong class="top-configuration__rate">{{ top.rate | number:'1.1-1' }} <small>tok/s</small></strong>
+        </div>
+        <p class="results-note">{{ top.run.dataset }} · {{ top.run.sample_size }} requests
+          @for (setting of top.workload; track setting.key) {
+            @if (setting.captured && (setting.key === 'profile' || setting.key === 'max_concurrency' || setting.key === 'max_output_tokens')) { · {{ setting.label }}: {{ setting.value }} }
+          }
+        </p>
+        <div class="top-configuration__parameters">
+          @for (parameter of top.parameters; track parameter.key) {
+            @if (parameter.captured && ['max_num_seqs', 'max_num_batched_tokens', 'tensor_parallel_size', 'kv_cache_dtype'].includes(parameter.key)) { <span>{{ parameter.label }} <strong>{{ parameter.value }}</strong></span> }
+          }
+        </div>
+        <details>
+          <summary>Measured configuration</summary>
+          <div class="top-configuration__details">
+            <div><h4>Benchmark settings</h4><dl>@for (item of top.workload; track item.key) { <dt>{{ item.label }}</dt><dd>{{ item.value }}</dd> }</dl></div>
+            <div><h4>Serving parameters</h4><dl>@for (item of top.parameters; track item.key) { <dt>{{ item.label }}</dt><dd>{{ item.value }}</dd> }</dl></div>
+          </div>
+        </details>
+      </article>
+    }
+  </section>
+}
+@if (activeProgress(); as chart) {
+  <section class="benchmark-progress" aria-label="Nightly progress">
+    <div class="results-heading">
+      <h3>Nightly progress <small>Best variant vs. baseline</small></h3>
+      @if (progress().length > 1) {
+        <select aria-label="Progress workload" [value]="chart.key" (change)="progressKey.set($any($event.target).value)">
+          @for (group of progress(); track group.key) { <option [value]="group.key">{{ group.label }}</option> }
+        </select>
+      }
+    </div>
+    <p class="results-note">{{ chart.context }}</p>
+    <div class="progress-plot" role="group" aria-label="Throughput change over time; each point is the best successful variant against its own baseline">
+      <span class="progress-axis progress-axis--top">{{ chart.max | number:'1.0-1' }}%</span>
+      <span class="progress-axis progress-axis--zero" [style.top.%]="chart.zero">0%</span>
+      <span class="progress-axis progress-axis--bottom">{{ chart.min | number:'1.0-1' }}%</span>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <line x1="0" x2="100" [attr.y1]="chart.zero" [attr.y2]="chart.zero" class="progress-zero" />
+        @if (chart.points.length > 1) { <polyline [attr.points]="chart.line" class="progress-line" /> }
+      </svg>
+      @for (point of chart.points; track point.run.id) {
+        <button type="button" class="progress-point" [class.progress-point--last]="point.x > 80" [class.progress-point--first]="point.x < 20" [style.left.%]="point.x" [style.top.%]="point.y"
+          [attr.aria-label]="'Run #' + point.run.id + ', ' + (point.time | date:'dd MMM yyyy, HH:mm') + ': ' + (point.gain | number:'1.1-1') + '% vs. baseline'"
+          ><span class="progress-tooltip">#{{ point.run.id }} · {{ point.gain > 0 ? '+' : '' }}{{ point.gain | number:'1.1-1' }}%<small>{{ point.time | date:'dd MMM yyyy, HH:mm' }}</small></span></button>
+      }
+    </div>
+    <div class="progress-dates"><span>{{ chart.first | date:'dd MMM yyyy, HH:mm' }}</span>@if (chart.first !== chart.last) { <span>{{ chart.last | date:'dd MMM yyyy, HH:mm' }}</span> }</div>
+  </section>
+}
+<details class="run-history">
+  <summary><h3>Benchmark runs <small>{{ rows().length }} results · output tok/s</small></h3></summary>
+  <p class="results-note">Each variant compared with its nightly baseline.</p>
+  <table>
+    <thead><tr><th>Run</th><th>Changed parameters</th><th>Measured from → to</th>
+      @for (column of columns; track column.key) {
+        <th class="sortable" [attr.aria-sort]="sort()?.key === column.key ? sort()!.direction : 'none'">
+          <button type="button" (click)="sortBy(column.key)">{{ column.label }} <span aria-hidden="true">{{ sort()?.key === column.key ? (sort()!.direction === 'ascending' ? '↑' : '↓') : '↕' }}</span></button>
+        </th>
+      }
+    </tr></thead>
+    <tbody>
+      @for (row of visibleRows(); track row.run.id) {
+        <tr>
+          <td data-label="Run"><strong>#{{ row.run.id }} · {{ row.kind }}</strong><small>{{ row.run.provider_name }}</small></td>
+          <td data-label="Changed parameters">
+            @if (row.isBaseline || row.currentSettings) { Current settings }
+            @else { @for (change of row.changes; track change) { <span>{{ change }}</span> } @empty { — } }
+          </td>
+          <td data-label="Measured from → to" class="dates">
+            <span>{{ (row.measurement?.started_at | date:'dd MMM yyyy, HH:mm:ss.SSS Z') ?? '—' }}</span>
+            <span>→ {{ (row.measurement?.ended_at | date:'dd MMM yyyy, HH:mm:ss.SSS Z') ?? '—' }}</span>
+            @if (!row.measurement?.ended_at) { <small>Recorded {{ row.run.recorded_at | date:'dd MMM yyyy, HH:mm:ss Z' }}</small> }
+          </td>
+          <td data-label="Before (tok/s)" class="numeric">{{ row.before === null ? '—' : (row.before | number:'1.1-1') }}</td>
+          <td data-label="After (tok/s)" class="numeric"><strong>{{ row.after === null ? '—' : (row.after | number:'1.1-1') }}</strong></td>
+          <td data-label="Change" class="numeric">{{ row.delta === null ? '—' : ((row.delta > 0 ? '+' : '') + (row.delta | number:'1.1-1') + '%') }}</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+  @if (rows().length > 5) {
+    <button type="button" class="btn-secondary results-more" (click)="showAll.set(!showAll())">{{ showAll() ? 'Show fewer' : 'Show all ' + rows().length + ' runs' }}</button>
+  }
+</details>

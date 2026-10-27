@@ -9,14 +9,14 @@
   } @else {
     <div class="table-header" role="row">
       @for (col of columns; track $index) {
-        @if ($index === sortableColumn) {
+        @if ($index === sortableColumn || sortableColumns.includes($index)) {
           <div
             role="columnheader"
-            [attr.aria-sort]="sortDirection === 'asc' ? 'ascending' : sortDirection === 'desc' ? 'descending' : 'none'"
+            [attr.aria-sort]="$index === sortableColumn && sortDirection === 'asc' ? 'ascending' : $index === sortableColumn && sortDirection === 'desc' ? 'descending' : 'none'"
           >
-            <button type="button" class="th-sort" (click)="sortToggle.emit()">
+            <button type="button" class="th-sort" (click)="sortToggle.emit($index)">
               {{ col }}
-              <i class="pi {{ sortIcon }}" aria-hidden="true"></i>
+              <i class="pi {{ $index === sortableColumn ? sortIcon : 'pi-sort' }}" aria-hidden="true"></i>
             </button>
           </div>
         } @else {
