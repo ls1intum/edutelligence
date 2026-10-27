@@ -39,3 +39,7 @@
   .benchmark-basics { grid-template-columns: 1fr; gap: 16px; }
   .benchmark-setup-footer { flex-direction: column; align-items: stretch; button { width: 100%; justify-content: center; } }
 }
+
+.performance-detail-section { border-top: 1px solid rgb(var(--color-outline-200)); padding: 1rem 0; }
+.performance-detail-section > summary { cursor: pointer; font-size: .875rem; color: rgb(var(--color-typography-100)); }
+.performance-detail-section[open] > summary { margin-bottom: 1.25rem; }

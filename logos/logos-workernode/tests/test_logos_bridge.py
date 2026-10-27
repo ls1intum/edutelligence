@@ -3434,6 +3434,105 @@ async def test_cancelling_a_stream_closes_the_upstream_and_frees_the_lane(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_phase", ["decrement", "close"])
+async def test_repeated_cancellation_during_cleanup_waits_for_release(monkeypatch, cancel_phase):
+    upstream = _FakeUpstream(200, [b"data: [DONE]\n\n"])
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+    lock = asyncio.Lock()
+    await lock.acquire()
+    cleanup_entered = asyncio.Event()
+    active = 1
+    closed = False
+
+    async def decrement(lane_id):
+        nonlocal active
+        if cancel_phase == "decrement":
+            cleanup_entered.set()
+            async with lock:
+                active -= 1
+        else:
+            active -= 1
+
+    async def close():
+        nonlocal closed
+        if cancel_phase == "close":
+            cleanup_entered.set()
+            async with lock:
+                closed = True
+        else:
+            closed = True
+
+    lane_manager.decrement_active_requests = AsyncMock(side_effect=decrement)
+    upstream.aclose = close
+    task = asyncio.create_task(client._execute_stream_command(ws, "cmd-1", {"lane_id": "lane-a", "payload": {}}))
+    client._command_tasks["cmd-1"] = task
+    try:
+        await asyncio.wait_for(cleanup_entered.wait(), timeout=1)
+        for _ in range(2):
+            assert client.cancel_command("cmd-1")
+            await asyncio.sleep(0)
+            assert not task.done(), "Cancellation must await cleanup, not leave it running in the background"
+        assert not any(frame["type"] == "stream_end" for frame in ws.frames)
+    finally:
+        lock.release()
+        result = await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1)
+    assert isinstance(result[0], asyncio.CancelledError)
+    assert active == 0
+    assert closed
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+    assert not any(frame["type"] == "stream_end" for frame in ws.frames)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_releases_count_and_upstream_while_lane_is_locked(monkeypatch):
+    from logos_worker_node.lane_manager import LaneManager
+    from logos_worker_node.models import WorkerConfig
+
+    upstream = _BlockingUpstream()
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15400, lane_port_end=15410)
+    manager._handles["lane-a"] = object()
+    manager._active_requests["lane-a"] = 1
+    lane_manager.decrement_active_requests = manager.decrement_active_requests
+    task = asyncio.create_task(
+        client._execute_stream_command(_CollectWS(), "cmd-1", {"lane_id": "lane-a", "payload": {}})
+    )
+    await upstream.first_chunk_sent.wait()
+    async with manager._lock.scoped(["lane-a"]):
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+        assert upstream.closed
+        assert manager._active_requests["lane-a"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,chunks", [(200, [b"data: [DONE]\n\n"]), (200, []), (500, [b"error"])])
+async def test_stream_end_is_sent_only_after_cleanup(monkeypatch, status, chunks):
+    upstream = _FakeUpstream(status, chunks)
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    events = []
+
+    async def decrement(lane_id):
+        events.append("decrement")
+
+    async def close():
+        events.append("close")
+
+    class ObservedWS(_CollectWS):
+        async def send(self, raw):
+            if json.loads(raw)["type"] == "stream_end":
+                events.append("stream_end")
+            await super().send(raw)
+
+    lane_manager.decrement_active_requests = AsyncMock(side_effect=decrement)
+    upstream.aclose = close
+    await client._execute_stream_command(ObservedWS(), "cmd-1", {"lane_id": "lane-a", "payload": {}})
+    assert events == ["decrement", "close", "stream_end"]
+
+
+@pytest.mark.asyncio
 async def test_cancelled_stream_sends_no_terminal_frame(monkeypatch):
     """Nobody is reading: the server already dropped the queue for this
     cmd_id. Emitting a stream_end failure would only be noise."""

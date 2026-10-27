@@ -11,6 +11,7 @@ import {
 import { NgClass } from '@angular/common';
 import { NightlyBenchmarks } from './nightly-benchmarks';
 import { BenchmarkRunFailure } from './benchmark-run-failure';
+import { BenchmarkResults } from './benchmark-results';
 import { BenchmarkComparison } from './benchmark-comparison';
 import { BenchmarkBatchEditor } from './benchmark-batch-editor';
 import { BenchmarkBatch } from './benchmark-batch';
@@ -635,6 +636,7 @@ const GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80;
     BenchmarkSettingsEditor,
     BenchmarkBatchEditor,
     BenchmarkComparison,
+    BenchmarkResults,
     BenchmarkRunFailure,
     NightlyBenchmarks,
 

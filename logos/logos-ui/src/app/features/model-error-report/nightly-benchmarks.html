@@ -1,34 +1,44 @@
 <section class="nightly" [class.nightly--active]="state()?.enabled" aria-label="Nightly benchmarks">
   <div class="nightly__heading">
-    <div>
+    <div class="nightly__title">
       <strong><i class="pi pi-moon" aria-hidden="true"></i> Nightly benchmarks · {{ providerName }}</strong>
-      <p role="status">{{ state() ? (state()!.enabled ? 'Nightly runs activated' : 'Nightly runs deactivated') : 'Loading nightly status…' }}</p>
+      <p class="nightly__status" role="status" [class.nightly__status--enabled]="state()?.enabled && !state()?.recovery_required"
+        [class.nightly__status--blocked]="state()?.recovery_required">
+        <i [class]="!state() ? 'pi pi-spin pi-spinner' : state()!.recovery_required ? 'pi pi-exclamation-circle' : state()!.enabled ? 'pi pi-calendar' : 'pi pi-pause-circle'" aria-hidden="true"></i>
+        {{ !state() ? 'Loading nightly status…' : state()!.recovery_required ? 'Recovery pending' : state()!.enabled ? 'Enabled · in nightly rotation' : 'Disabled · not scheduled' }}
+      </p>
     </div>
     <button type="button" (click)="review()" [disabled]="!state() || saving() || (!state()!.enabled && (!window || state()!.recovery_required))">
       {{ state()?.enabled ? 'Disable nightly runs…' : 'Enable nightly runs…' }}
     </button>
   </div>
-  <dl class="nightly__plan">
-    <div><dt>Model</dt><dd>{{ modelName }}</dd></div>
-    <div>
-      <dt>Parameters to be tested</dt>
-      <dd>
-        @for (parameter of plannedParameters; track parameter.name) {
-          <div><code>{{ parameter.name }}</code>: {{ parameter.values }}</div>
-        } @empty {
-          {{ state()?.plan ? 'Current configuration only' : 'Loading plan…' }}
-        }
-        @if (plannedParameters.length) { <small>Current settings first, then one parameter at a time.</small> }
-      </dd>
+  <div class="nightly__preview">
+    <strong>Current settings → {{ (state()?.plan?.length ?? 1) - 1 }} test configurations</strong>
+    <p>Same workload · 50 requests · 4 concurrent · up to 512 output tokens</p>
+    <div class="nightly__parameters">
+      @for (parameter of plannedParameters; track parameter.name) {
+        <span>{{ parameter.name === 'max_num_seqs' ? 'Sequence limit' : 'Batch token limit' }} <b>{{ parameter.values }}</b></span>
+      }
     </div>
-  </dl>
-  <p>Up to 2 enabled model/worker pairs per night · never tested or oldest run first</p>
-  @if (window; as timing) {
-    <p>{{ timing.start }}–{{ timing.end }} · {{ timing.timezone }} · calibration first, then benchmarks</p>
-    <p>No new benchmark configuration after {{ timing.benchmark_start_cutoff }}. At {{ timing.end }}: finish the current run at ≥50% complete; otherwise stop. Five minutes without progress stops the run.</p>
-  } @else {
-    <p>Waiting for the shared maintenance window…</p>
-  }
+  </div>
+  <details>
+    <summary>Schedule and test plan</summary>
+    @if (window; as timing) {
+      <p>{{ timing.start }}–{{ timing.end }} · {{ timing.timezone }} · up to 2 model/worker pairs per night, oldest first.</p>
+      <p>Calibration runs first. No new test after {{ timing.benchmark_start_cutoff }}. At {{ timing.end }}, runs below 50% stop. Five minutes without progress also stops a run.</p>
+    }
+    <ol>
+      @for (run of state()?.plan ?? []; track $index) {
+        <li>{{ $index === 0 ? 'Current settings' : 'Variant ' + $index }}
+          @if ($index > 0) {
+            · sequences {{ run.serving_overrides['max_num_seqs'] ?? 'auto' }}
+            · batch tokens {{ run.serving_overrides['max_num_batched_tokens'] ?? 'auto' }}
+          }
+        </li>
+      }
+    </ol>
+    <p>The whole worker is reserved during testing. Original settings are restored afterwards.</p>
+  </details>
   @if (state(); as status) {
     <small>Latest state: {{ statusLabel(status.status) }} @if (status.last_run_date) { · {{ status.last_run_date }} }</small>
     @if (status.recovery_required) { <p role="alert">Worker recovery is pending. Further nightly benchmarks are paused.</p> }

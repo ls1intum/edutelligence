@@ -40,6 +40,22 @@ def rows() -> list[dict]:
         ]
 
 
+def overview_rows() -> list[dict]:
+    """Return public schedule metadata in the scheduler's rotation order."""
+    with DBManager() as db:
+        return [
+            dict(row)
+            for row in db.session.execute(
+                text(
+                    "SELECT n.*, mp.model_id, p.name AS provider_name FROM nightly_benchmarks n "
+                    "JOIN model_provider mp ON mp.id = n.model_provider_id "
+                    "JOIN providers p ON p.id = mp.provider_id "
+                    "ORDER BY n.last_run_date NULLS FIRST, n.model_provider_id"
+                )
+            ).mappings()
+        ]
+
+
 def status(pair_id: int) -> dict:
     with DBManager() as db:
         row = (
@@ -403,5 +419,29 @@ def finish_recovery_jobs(job_ids: list[int]) -> None:
                 "AND request_payload->>'recovery_fenced' = 'true'"
             ),
             {"ids": job_ids},
+        )
+        db.session.commit()
+
+
+def record_comparison(benchmark_id, baseline_id, parameters, original):
+    """Attach an explicit same-night baseline; never infer a comparison from dates."""
+    with DBManager() as db:
+        db.session.execute(
+            text(
+                "UPDATE model_provider_benchmarks SET configuration = configuration || CAST(:comparison AS jsonb) "
+                "WHERE id = :id"
+            ),
+            {
+                "id": benchmark_id,
+                "comparison": json.dumps(
+                    {
+                        "nightly": {
+                            "baseline_id": baseline_id,
+                            "parameters": parameters,
+                            "original": {key: original.get(key) for key in parameters},
+                        }
+                    }
+                ),
+            },
         )
         db.session.commit()

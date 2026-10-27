@@ -135,6 +135,15 @@ capabilities and scheduling weights for each model. It also shows the Likert
 model to open its **Model Details** view. This view shows the request history,
 the error reports and the scheduling statistics of the model.
 
+Select the **Nightly benchmark** column header to sort by status.
+Select it again to reverse the order.
+
+The **Nightly benchmark** column shows the planned rotation for each model/worker pair.
+Blue means a candidate for the next window. Yellow means a later place in the rotation.
+Green marks a successful measurement within 7 days. Red means the pair is blocked.
+Point to a status for the worker and date. Select it to open **Performance**.
+The preview depends on current worker availability. It does not reserve a worker.
+
 ![Models page](/img/roles/logos-admin-models.png)
 
 The **Delays** tab of the **Model Details** view shows where the time of a
@@ -170,6 +179,22 @@ Open the model's **Performance** tab to configure and start a benchmark.
 The orchestrator reserves the selected model lanes during a worker benchmark.
 The [Model Benchmarks guide](../admin/model-benchmarks.md) explains the confirmation dialog, single-run charts, batches and failed-model retries.
 
+The **Results** tab shows **Top configuration so far** for each model/provider.
+This is the highest recorded output throughput among fully successful runs.
+Select **Measured configuration** to see the saved benchmark settings and serving parameters.
+Runs can use different workloads. This record does not prove an improvement under identical conditions.
+The application does not apply these parameters automatically.
+
+**Nightly progress** shows the best successful variant against its baseline for each completed test plan.
+The chart separates runs with different captured workloads or other serving settings.
+Select a point to read its run number, time and percentage change.
+The chart does not show automatic parameter adoption or statistical significance.
+Expand **Benchmark runs** to see the latest 5 results. Select **Show all** to read older results.
+Select **Before**, **After** or **Change** to sort all results from highest to lowest.
+Select the same column again to reverse the order. Missing values stay at the end.
+
+![Best recorded benchmark and its saved parameters](../static/img/benchmarks/results-desktop.png)
+
 ### Nightly benchmarks
 
 The **Performance** tab provides nightly benchmarks for each model/worker pair.
@@ -181,32 +206,32 @@ See the [nightly benchmark guide](../admin/nightly-benchmarks.md) for rotation, 
 
 1. Open a model from **Models**.
 2. Select **Performance**.
-3. Find the **Nightly benchmarks** card for the intended worker.
-4. Check **Model** and **Parameters to be tested**.
+3. Select **Run benchmark** and find **Nightly benchmarks** for the intended worker.
+4. Expand **Schedule and test plan**.
 5. Select **Enable nightly runs…**.
 6. Read the dialog and select **Enable nightly runs**.
 
 Select **Cancel** to keep the current schedule state.
-The confirmation dialog shows the time window and the rules for incomplete runs.
+The confirmation dialog shows the time window and the effect on production traffic.
 
 ![Confirmation dialog to enable nightly benchmarks](../static/img/roles/logos-admin-nightly-enable.png)
 
-The card then shows **Nightly runs activated**.
+The card then shows **Enabled · in nightly rotation**.
 The schedule stays active after a page reload.
 Each night, Logos selects up to 2 eligible pairs, with new or older attempts first.
 The card shows possible parameter values for this pair, not a guaranteed place for tonight.
 
-The example shows the state before the first benchmark, so the results section is empty.
-Select **Run benchmark** below the card to open the dataset editor and question previews for manual benchmarks.
+The example uses illustrative measurements and an active nightly schedule.
+Use **Manual benchmark** to configure a run during the day.
 These controls do not change the nightly workload.
 
-![Active schedule with the model, parameter values and dataset previews](../static/img/roles/logos-admin-nightly-benchmarks.png)
+![Manual benchmark controls and active nightly test plan](../static/img/roles/logos-admin-nightly-benchmarks.png)
 
 To remove the pair from the nightly rotation:
 
 1. Select **Disable nightly runs…**.
 2. Read the dialog and select **Disable nightly runs**.
-3. Check that the card shows **Nightly runs deactivated**.
+3. Check that the card shows **Disabled · not scheduled**.
 
 Select **Cancel** to keep the schedule active.
 Deactivation stops an active benchmark and restores the worker configuration before production resumes.

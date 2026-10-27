@@ -63,6 +63,7 @@ def scheduler(monkeypatch):
     planner._facade.reserve_worker_for_drain.side_effect = lambda pid, owner: benchmark_reservations.reserve(
         pid, "*", owner
     )
+    monkeypatch.setattr(module.store, "record_comparison", MagicMock())
     service.saved = []
     monkeypatch.setattr(module.store, "save", lambda *args: service.saved.append(args))
     yield service
@@ -436,6 +437,25 @@ async def test_explicit_single_worker_maintenance_runs_and_restores(scheduler, m
     scheduler.restore.assert_awaited_once()
     assert scheduler.saved[-1][1] == "completed"
     assert benchmark_reservations.owner(20, "other") is None
+
+
+def test_locked_worker_is_excluded_from_preview_without_changing_its_schedule(scheduler):
+    from logos.benchmarks.nightly_overview import overview
+
+    scheduler.planner.is_worker_locked.return_value = True
+    schedule = dict(
+        model_provider_id=31,
+        model_id=1,
+        provider_name="Worker",
+        enabled=True,
+        last_run_date=None,
+        report=[],
+        recovery=None,
+    )
+    result = overview([schedule], scheduler, datetime.fromisoformat("2026-10-26T12:00:00+01:00"))
+    assert result["schedules"][0]["state"] == "blocked"
+    assert result["schedules"][0]["reason"] == "The selected worker is locked"
+    assert scheduler.saved == []
 
 
 @pytest.mark.parametrize("condition", ["offline", "unhealthy", "calibrating"])
