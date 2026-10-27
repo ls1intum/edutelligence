@@ -64,6 +64,6 @@
     <include file="liquibase/changelog/058_central_model_profiles.xml"/>
     <include file="liquibase/changelog/059_notifications.xml"/>
     <include file="liquibase/changelog/060_log_entry_gateway_unfinalized_index.xml"/>
-    <include file="liquibase/changelog/061_requested_model_hf_status.xml"/>
+    <include file="liquibase/changelog/061_requested_model_is_gated.xml"/>
 
 </databaseChangeLog>

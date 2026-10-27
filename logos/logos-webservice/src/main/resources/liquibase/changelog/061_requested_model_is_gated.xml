@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Gating verdict for a requested model.
+
+         The reachable answer of the precheck at submission only gates the
+         submission and is not stored. is_gated is true when the Hub rejects
+         the repository with the model-gated reason, false when a verdict
+         exists and the repository is not gated (reachable, or rejected for
+         another reason), and NULL when no verdict has been recorded yet —
+         the check was never run, or it timed out. A timeout is a statement
+         about the check, not about the model, so it is not stored and the
+         row is checked again on the next sweep at application start
+         (RequestedModelHfStatusSweeper). -->
+    <changeSet id="061-requested-model-is-gated" author="maltebai">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="requested_models" columnName="is_gated"/></not>
+        </preConditions>
+        <addColumn tableName="requested_models">
+            <column name="is_gated" type="BOOLEAN">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="requested_models" columnName="is_gated"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

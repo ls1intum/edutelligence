@@ -215,15 +215,11 @@ class LiquibaseBaselineTest {
     }
 
     @Test
-    void migration061_requestedModelHfStatusColumnExists() {
-        // The decisive Hugging Face verdict (reachable/rejected) a requested
-        // model carries; null until the precheck has produced one, so the
-        // check constraint must allow NULL.
-        assertThat(columnExists("requested_models", "hugging_face_status")).isTrue();
-        Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM pg_constraint WHERE conname='ck_requested_models_hf_status'",
-            Integer.class);
-        assertThat(count).isEqualTo(1);
+    void migration061_requestedModelIsGatedColumnExists() {
+        // The decisive Hugging Face gating verdict a requested model carries
+        // (true when the Hub rejects the repository as gated); null until the
+        // precheck has produced a verdict, so the column must be nullable.
+        assertThat(columnExists("requested_models", "is_gated")).isTrue();
     }
 
     @Test

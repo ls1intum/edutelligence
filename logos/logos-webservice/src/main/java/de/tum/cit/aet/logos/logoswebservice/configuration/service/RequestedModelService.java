@@ -13,6 +13,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import de.tum.cit.aet.logos.logoswebservice.configuration.HfReachabilityUnavailableException;
+import de.tum.cit.aet.logos.logoswebservice.configuration.ModelAlreadyAvailableException;
+import de.tum.cit.aet.logos.logoswebservice.configuration.ModelNotOnHuggingFaceException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.RequestedModelResponse;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.RequestedModel;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.RequestedModelVote;
@@ -41,8 +44,9 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorHfReachabil
  * A submission is only recorded when the name passes the Hugging Face
  * precheck (via the orchestrator): the repository must be visible to the
  * central HF_TOKEN, otherwise the demand signal would point at a model that
- * cannot be pulled. The row then carries the verdict ({@code reachable} or
- * {@code rejected}) in {@code hugging_face_status}; rows that predate the
+ * cannot be pulled. The reachable answer gates the submission only and is not
+ * stored; the row instead carries the gating verdict in {@code is_gated}
+ * (true when the Hub rejects the repository as gated). Rows that predate the
  * precheck are backfilled by {@link RequestedModelHfStatusSweeper} at
  * application start.
  */
@@ -78,35 +82,6 @@ public class RequestedModelService {
      */
     private static final Pattern MODEL_NAME_PATTERN =
         Pattern.compile("[A-Za-z0-9._-]+/[A-Za-z0-9._-]+");
-
-    /** Raised when a vote is cast for a name that is already served by Logos, as a model name or alias. */
-    public static class ModelAlreadyAvailableException extends RuntimeException {
-        public ModelAlreadyAvailableException(String message) {
-            super(message);
-        }
-    }
-
-    /**
-     * Raised when the Hugging Face precheck reports the repository as not
-     * found or not visible to the central HF_TOKEN: it is not a model that
-     * can be requested.
-     */
-    public static class ModelNotOnHuggingFaceException extends RuntimeException {
-        public ModelNotOnHuggingFaceException(String message) {
-            super(message);
-        }
-    }
-
-    /**
-     * Raised when the Hugging Face precheck could not be performed (Hub
-     * timeout, orchestrator unreachable): there is no verdict, so no vote is
-     * recorded and the user is asked to try again.
-     */
-    public static class HfReachabilityUnavailableException extends RuntimeException {
-        public HfReachabilityUnavailableException(String message) {
-            super(message);
-        }
-    }
 
     private final RequestedModelRepository requestedModelRepository;
     private final RequestedModelVoteRepository voteRepository;
@@ -159,7 +134,7 @@ public class RequestedModelService {
                 model.getName(),
                 voteCounts.getOrDefault(model.getId(), 0L).intValue(),
                 myVotedModelIds.contains(model.getId()),
-                model.getHuggingFaceStatus()))
+                model.getIsGated()))
             .sorted(Comparator
                 .comparingInt(RequestedModelResponse::requestCount).reversed()
                 .thenComparing(RequestedModelResponse::name, String.CASE_INSENSITIVE_ORDER))
@@ -237,8 +212,9 @@ public class RequestedModelService {
                 created.setName(normalized);
                 return created;
             });
-            // The precheck just answered reachable: record the verdict with the row.
-            model.setHuggingFaceStatus(HfReachabilityResult.STATUS_REACHABLE);
+            // The precheck just answered reachable: the repository is not
+            // gated, so record that verdict with the row.
+            model.setIsGated(false);
             model = requestedModelRepository.save(model);
 
             if (!voteRepository.existsByRequestedModelIdAndUserId(model.getId(), userId)) {
@@ -280,7 +256,7 @@ public class RequestedModelService {
             .ifPresent(voteRepository::delete);
         if (voteRepository.countByRequestedModelId(model.getId()) == 0) {
             requestedModelRepository.delete(model);
-            return new RequestedModelResponse(model.getId(), model.getName(), 0, false, model.getHuggingFaceStatus());
+            return new RequestedModelResponse(model.getId(), model.getName(), 0, false, model.getIsGated());
         }
         return toResponse(model, (int) voteRepository.countByRequestedModelId(model.getId()), false);
     }
@@ -307,20 +283,20 @@ public class RequestedModelService {
 
     private RequestedModelResponse toResponse(RequestedModel model, int count, boolean hasVoted) {
         return new RequestedModelResponse(
-            model.getId(), model.getName(), count, hasVoted, model.getHuggingFaceStatus());
+            model.getId(), model.getName(), count, hasVoted, model.getIsGated());
     }
 
     /**
-     * Record a decisive Hugging Face verdict on a registry row that has none
-     * yet (the application-start sweep path). A row that already carries a
-     * verdict — for instance one a concurrent vote just wrote — is left
+     * Record a decisive Hugging Face gating verdict on a registry row that has
+     * none yet (the application-start sweep path). A row that already carries
+     * a verdict — for instance one a concurrent vote just wrote — is left
      * untouched.
      *
      * @return the number of rows updated (0 when the row already had a verdict)
      */
     @Transactional
-    public int recordHfVerdictIfAbsent(Integer modelId, String status) {
-        return requestedModelRepository.setHuggingFaceStatusIfNull(modelId, status);
+    public int recordGatedVerdictIfAbsent(Integer modelId, Boolean status) {
+        return requestedModelRepository.setIsGatedIfNull(modelId, status);
     }
 
     /**

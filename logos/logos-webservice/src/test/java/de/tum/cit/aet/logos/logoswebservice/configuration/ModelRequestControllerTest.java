@@ -77,7 +77,8 @@ class ModelRequestControllerTest {
            .andExpect(jsonPath("$.name").value("openai/gpt-5"))
            .andExpect(jsonPath("$.request_count").value(1))
            .andExpect(jsonPath("$.has_voted").value(true))
-           .andExpect(jsonPath("$.hugging_face_status").value("reachable"))
+           // The precheck answered reachable: the repository is not gated.
+           .andExpect(jsonPath("$.is_gated").value(false))
            .andExpect(jsonPath("$.id").isNumber());
     }
 
@@ -328,32 +329,38 @@ class ModelRequestControllerTest {
     }
 
     @Test
-    void sweep_recordsOnlyDecisiveVerdictsOnUnverifiedRows() {
+    void sweep_recordsOnlyDecisiveGatingVerdictsOnUnverifiedRows() {
         // Rows that predate the precheck (no verdict yet) plus one row that
         // already carries one.
-        jdbc.update("INSERT INTO requested_models (name) VALUES ('acme/legacy-a'), ('acme/legacy-b'), ('acme/legacy-c')");
-        jdbc.update("INSERT INTO requested_models (name, hugging_face_status) VALUES ('acme/legacy-d', 'reachable')");
+        jdbc.update("INSERT INTO requested_models (name) VALUES ('acme/legacy-a'), ('acme/legacy-b'), ('acme/legacy-c'), ('acme/legacy-d')");
+        jdbc.update("INSERT INTO requested_models (name, is_gated) VALUES ('acme/legacy-e', true)");
 
         Mockito.when(hfReachabilityClient.check("acme/legacy-a"))
             .thenReturn(new HfReachabilityResult(HfReachabilityResult.STATUS_REACHABLE, null, null));
         Mockito.when(hfReachabilityClient.check("acme/legacy-b"))
+            .thenReturn(new HfReachabilityResult(HfReachabilityResult.STATUS_REJECTED, "model-gated", null));
+        Mockito.when(hfReachabilityClient.check("acme/legacy-c"))
             .thenReturn(new HfReachabilityResult(HfReachabilityResult.STATUS_REJECTED, "model-not-found-or-unauthorized", null));
         // A timeout is no verdict: the row must stay empty.
-        Mockito.when(hfReachabilityClient.check("acme/legacy-c"))
+        Mockito.when(hfReachabilityClient.check("acme/legacy-d"))
             .thenReturn(HfReachabilityResult.unknown("Hugging Face Hub did not answer within 15s."));
 
         hfStatusSweeper.sweepUnverified();
 
-        assertThat(hfStatus("acme/legacy-a")).isEqualTo("reachable");
-        assertThat(hfStatus("acme/legacy-b")).isEqualTo("rejected");
-        assertThat(hfStatus("acme/legacy-c")).isNull();
-        // An existing verdict is never clobbered by the sweep.
-        assertThat(hfStatus("acme/legacy-d")).isEqualTo("reachable");
+        // Reachable and non-gated rejections are not gated ...
+        assertThat(isGated("acme/legacy-a")).isFalse();
+        assertThat(isGated("acme/legacy-c")).isFalse();
+        // ... a model-gated rejection is gated ...
+        assertThat(isGated("acme/legacy-b")).isTrue();
+        // ... a timeout leaves no verdict ...
+        assertThat(isGated("acme/legacy-d")).isNull();
+        // ... and an existing verdict is never clobbered by the sweep.
+        assertThat(isGated("acme/legacy-e")).isTrue();
     }
 
-    private String hfStatus(String name) {
-        return jdbc.queryForObject("SELECT hugging_face_status FROM requested_models WHERE name = ?",
-            String.class, name);
+    private Boolean isGated(String name) {
+        return jdbc.queryForObject("SELECT is_gated FROM requested_models WHERE name = ?",
+            Boolean.class, name);
     }
 
     @Test
