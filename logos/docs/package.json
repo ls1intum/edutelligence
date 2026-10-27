@@ -26,7 +26,7 @@
     "node": ">=20.0"
   },
   "overrides": {
-    "postcss-selector-parser": "7.1.6",
+    "postcss-selector-parser": "7.1.7",
     "serialize-javascript": "7.1.2",
     "shell-quote": "1.12.0",
     "source-map-js": "1.2.2",
