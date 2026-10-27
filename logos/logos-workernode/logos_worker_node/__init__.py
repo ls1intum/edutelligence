@@ -1,1 +1,0 @@
-# LogosWorkerNode runtime package
