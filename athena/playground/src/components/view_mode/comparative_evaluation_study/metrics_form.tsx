@@ -91,7 +91,7 @@ export default function MetricsForm(metricsFormProps: MetricsFormProps) {
         {metrics.map((metric, index) => (
           <div
             key={metric.id}
-            className="flex justify-between items-start border p-4 rounded-md shadow-sm"
+            className="flex justify-between items-start border p-4 rounded-md shadow-xs"
           >
             {editIndex === index ? (
               <div className="space-y-2 flex-1">
@@ -148,9 +148,9 @@ export default function MetricsForm(metricsFormProps: MetricsFormProps) {
                   placeholder="Metric Summary"
                 />
                 <div className="border border-gray-300 rounded-md p-2 w-full">
-                  <ReactMarkdown rehypePlugins={[rehypeRaw]} className="prose-sm">
-                    {metric.description}
-                  </ReactMarkdown>
+                  <div className="prose-sm">
+                    <ReactMarkdown rehypePlugins={[rehypeRaw]}>{metric.description}</ReactMarkdown>
+                  </div>
                 </div>
               </div>
             )}
@@ -161,6 +161,7 @@ export default function MetricsForm(metricsFormProps: MetricsFormProps) {
                 onClick={() => startEditMetric(index)}
                 className={`bg-gray-500 text-white rounded-md p-2 hover:bg-gray-600 flex items-center gap-2 ${buttonDisabledStyle}`}
                 disabled={disabled}
+                aria-label={`Edit ${metric.title}`}
               >
                 <FontAwesomeIcon icon={faEdit} />
               </button>
@@ -168,6 +169,7 @@ export default function MetricsForm(metricsFormProps: MetricsFormProps) {
                 onClick={() => removeMetric(index)}
                 className={`bg-red-500 text-white rounded-md p-2 hover:bg-red-600 flex items-center gap-2 ${buttonDisabledStyle}`}
                 disabled={disabled}
+                aria-label={`Delete ${metric.title}`}
               >
                 <FontAwesomeIcon icon={faTrash} />
               </button>
@@ -177,7 +179,7 @@ export default function MetricsForm(metricsFormProps: MetricsFormProps) {
 
         {/* New Metric Form */}
         {!disabled && (
-          <div className="flex flex-col gap-2 border p-4 rounded-md shadow-sm">
+          <div className="flex flex-col gap-2 border p-4 rounded-md shadow-xs">
             <div>
               <label className="block text-sm">
                 <span className="text-gray-700">Title</span>

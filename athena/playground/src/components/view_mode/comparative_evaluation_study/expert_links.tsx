@@ -84,7 +84,7 @@ export default function ExpertLinks(props: ExpertLinksProps) {
             const progressPercentage = total ? (completed / total) * 100 : 0;
 
             return (
-              <li key={expertId} className="flex flex-col border p-2 rounded-md shadow-sm space-y-1">
+              <li key={expertId} className="flex flex-col border p-2 rounded-md shadow-xs space-y-1">
                 <div className="flex justify-between items-center">
                   <a href={expertLink} target="_blank" rel="noopener noreferrer" className="text-blue-500 underline">
                     {expertLink}
@@ -114,8 +114,8 @@ export default function ExpertLinks(props: ExpertLinksProps) {
                 {/* Progress Bar */}
                 {started && (
                   <>
-                    <div className="relative w-full bg-gray-300 h-2 rounded mt-1">
-                      <div className="bg-blue-500 h-2 rounded" style={{ width: `${progressPercentage}%` }} />
+                    <div className="relative w-full bg-gray-300 h-2 rounded-sm mt-1">
+                      <div className="bg-blue-500 h-2 rounded-sm" style={{ width: `${progressPercentage}%` }} />
                     </div>
                     <span className="text-sm text-gray-700">
                       {completed === 0 ? 'Not started' : completed === total ? 'Finished 🏁' : `${completed} / ${total} completed`}
@@ -126,7 +126,7 @@ export default function ExpertLinks(props: ExpertLinksProps) {
             );
           })
         ) : (
-          <li className="border p-2 rounded-md shadow-sm bg-gray-50 text-center">No expert links added</li>
+          <li className="border p-2 rounded-md shadow-xs bg-gray-50 text-center">No expert links added</li>
         )}
       </ul>
     </section>
