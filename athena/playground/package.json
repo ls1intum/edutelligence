@@ -29,7 +29,6 @@
     "allotment": "1.20.6",
     "archiver": "7.0.1",
     "formidable": "3.5.4",
-    "jszip": "3.10.2",
     "monaco-editor": "0.57.0",
     "next": "15.5.28",
     "react": "18.3.1",
@@ -60,6 +59,7 @@
     "eslint": "8.57.1",
     "eslint-config-next": "15.5.28",
     "inquirer": "9.3.8",
+    "jszip": "3.10.2",
     "mysql2": "3.24.6",
     "typescript": "5.9.3"
   },
@@ -67,6 +67,12 @@
     "postcss": "^8.5.23",
     "@tumaet/apollon": {
       "uuid": "^11.1.1"
+    },
+    "monaco-editor": {
+      "dompurify": "3.4.17"
+    },
+    "@tailwindcss/typography": {
+      "postcss-selector-parser": "6.1.5"
     }
   }
 }
