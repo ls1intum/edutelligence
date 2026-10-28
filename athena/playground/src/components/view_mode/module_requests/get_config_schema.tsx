@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import useConfigSchema from "@/hooks/athena/config_schema";
 import { useModule } from "@/hooks/module_context";
 
@@ -5,15 +6,10 @@ import ModuleResponseView from "@/components/module_response_view";
 
 export default function GetConfigSchema() {
   const { module } = useModule();
-  const { data, error, isLoading, refetch, remove } = useConfigSchema({
-    onError: (error) => {
-      console.error(error);
-      alert(`Failed to get config from Athena: ${error.message}. Is the URL correct?`);
-    },
-    onSuccess: () => {
-      alert(`Config schema received successfully!`);
-    },
-    queryKey: ["config_schema", module.name, "module_requests"],
+  const queryClient = useQueryClient();
+  const queryKey = ["config_schema", module.name, "module_requests"] as const;
+  const { data, error, isLoading, refetch } = useConfigSchema({
+    queryKey,
     retry: false,
     enabled: false
   });
@@ -37,9 +33,15 @@ export default function GetConfigSchema() {
       <ModuleResponseView response={data ?? (error?.asModuleResponse ? error.asModuleResponse() : undefined)} />
       <button
         className="bg-primary-500 text-white rounded-md p-2 mt-4 hover:bg-primary-600 disabled:text-gray-500 disabled:bg-gray-200 disabled:cursor-not-allowed"
-        onClick={() => {
-          remove();
-          refetch();
+        onClick={async () => {
+          await queryClient.resetQueries({ queryKey, exact: true });
+          const result = await refetch();
+          if (result.isError) {
+            console.error(result.error);
+            alert(`Failed to get config from Athena: ${result.error.message}. Is the URL correct?`);
+          } else if (result.isSuccess) {
+            alert("Config schema received successfully!");
+          }
         }}
         disabled={isLoading}
       >

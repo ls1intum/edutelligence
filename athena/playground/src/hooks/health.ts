@@ -1,6 +1,7 @@
 import type { HealthResponse } from "@/model/health_response";
 
-import { UseQueryOptions, useQuery } from "react-query";
+import { useQuery } from "@tanstack/react-query";
+import type { UseQueryOptions } from "@tanstack/react-query";
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
 
@@ -10,13 +11,13 @@ import { useBaseInfo } from "@/hooks/base_info_context";
  * @example
  * const { data, isLoading, error } = useHealth();
  *
- * @param options The react-query options.
+ * @param options The TanStack Query options.
  */
 export default function useHealth(
-  options: Omit<UseQueryOptions<HealthResponse, Error, HealthResponse>, "queryFn"> = {}
+  options: Omit<UseQueryOptions<HealthResponse>, "queryFn" | "queryKey"> = {}
 ) {
   const { athenaUrl } = useBaseInfo();
-  return useQuery<HealthResponse, Error, HealthResponse, any>({
+  return useQuery<HealthResponse, Error>({
     queryKey: ["health", athenaUrl],
     queryFn: async () =>
       fetch(`${baseUrl}/api/health?url=${encodeURIComponent(athenaUrl)}`).then(

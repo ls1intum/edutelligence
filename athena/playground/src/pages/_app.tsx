@@ -11,7 +11,7 @@ import '@tumaet/apollon/dist/assets/style.css';
 import type { AppProps } from "next/app";
 import Head from "next/head";
 import { loader } from "@monaco-editor/react";
-import { QueryClient, QueryClientProvider } from "react-query"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { BaseInfoProvider } from "@/hooks/base_info_context";
 
 // Keep the browser runtime in sync with the monaco-editor dependency.

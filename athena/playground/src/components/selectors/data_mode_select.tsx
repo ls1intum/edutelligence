@@ -1,5 +1,5 @@
 import type { DataMode } from "@/model/data_mode";
-import { useQueryClient } from "react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import useExercises from "@/hooks/playground/exercises";
 import useImportEvaluationData from "@/hooks/playground/evaluation_data/import";
 import useExportEvaluationData from "@/hooks/playground/evaluation_data/export";
@@ -29,16 +29,16 @@ export default function DataModeSelect({
     .map(([type, count]) => `${count} ${type}`)
     .join(", ") || "No exercises available";
 
-  const { mutate, isLoading: isLoadingImport } = useImportEvaluationData({
+  const { mutate, isPending: isLoadingImport } = useImportEvaluationData({
     onSuccess: () => {
       alert("Import successful!");
-      queryClient.invalidateQueries("exercises");
+      queryClient.invalidateQueries({ queryKey: ["exercises"] });
     },
     onError: () => {
       alert("Import failed!");
     }
   });
-  const { mutate: exportData, isLoading: isLoadingExport } = useExportEvaluationData({
+  const { mutate: exportData, isPending: isLoadingExport } = useExportEvaluationData({
     onSuccess: (blob) => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -51,8 +51,8 @@ export default function DataModeSelect({
     }
   });
   
-  const { mutate: deleteData, isLoading: isLoadingDelete } = useDeleteEvaluationData({
-    onSuccess: () => queryClient.invalidateQueries("exercises"),
+  const { mutate: deleteData, isPending: isLoadingDelete } = useDeleteEvaluationData({
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["exercises"] }),
   });
 
   const handleImport = (files: FileList | null) => {
