@@ -59,7 +59,7 @@ export default function ModuleConfigSelect({
 
   useEffect(() => {
     if (data) {
-      const defaultFormData = getDefaultFormState(validator, data, {}, data);
+      const defaultFormData = getDefaultFormState(validator, data.data, {}, data.data);
       if (
         Object.keys(moduleConfig ?? {}).length === 0 &&
         Object.keys(defaultFormData).length !== 0
