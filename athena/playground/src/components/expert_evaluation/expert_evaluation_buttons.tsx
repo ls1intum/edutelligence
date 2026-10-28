@@ -2,7 +2,7 @@ import React from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 
-const buttonBase = "px-4 py-2 rounded focus:outline-none transition-all";
+const buttonBase = "px-4 py-2 rounded-sm focus:outline-hidden transition-all";
 const buttonPrimary = `${buttonBase} bg-blue-500 text-white hover:bg-blue-600`;
 const buttonSecondary = `${buttonBase} bg-gray-300 text-gray-700 hover:bg-gray-400`;
 const buttonFinish = `${buttonBase} bg-green-600 text-white hover:bg-green-700`;

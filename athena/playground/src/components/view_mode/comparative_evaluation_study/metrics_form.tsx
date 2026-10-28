@@ -91,7 +91,7 @@ export default function MetricsForm(metricsFormProps: MetricsFormProps) {
         {metrics.map((metric, index) => (
           <div
             key={metric.id}
-            className="flex justify-between items-start border p-4 rounded-md shadow-sm"
+            className="flex justify-between items-start border p-4 rounded-md shadow-xs"
           >
             {editIndex === index ? (
               <div className="space-y-2 flex-1">
@@ -179,7 +179,7 @@ export default function MetricsForm(metricsFormProps: MetricsFormProps) {
 
         {/* New Metric Form */}
         {!disabled && (
-          <div className="flex flex-col gap-2 border p-4 rounded-md shadow-sm">
+          <div className="flex flex-col gap-2 border p-4 rounded-md shadow-xs">
             <div>
               <label className="block text-sm">
                 <span className="text-gray-700">Title</span>

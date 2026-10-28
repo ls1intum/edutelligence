@@ -93,9 +93,9 @@ export default function SideBySideHeader(sideBySideHeaderProps: SideBySideHeader
             </div>
 
             {/* Progress Bar */}
-            <div className="relative w-full bg-gray-300 h-2 rounded">
+            <div className="relative w-full bg-gray-300 h-2 rounded-sm">
                 <div
-                    className="bg-blue-500 h-2 rounded"
+                    className="bg-blue-500 h-2 rounded-sm"
                     style={{ width: `${(globalSubmissionIndex + 1) / totalSubmissions * 100}%` }}
                 />
             </div>

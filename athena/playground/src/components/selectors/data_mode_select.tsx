@@ -92,7 +92,7 @@ export default function DataModeSelect({
         </button>
       </div>
       <p className="text-gray-500">
-        Data in <code className="bg-gray-100 p-1 rounded-sm">data/{dataMode.split("-", 1)[0]}/
+        Data in <code className="bg-gray-100 p-1 rounded-xs">data/{dataMode.split("-", 1)[0]}/
           {dataMode.startsWith("evaluation") && evaluationDataKey ? evaluationDataKey + "/" : ""}
           </code>{" "}
         directory will be used.

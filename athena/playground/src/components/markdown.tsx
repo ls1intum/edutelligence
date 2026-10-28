@@ -17,7 +17,7 @@ export default function Markdown({
   const [view, setView] = useState<"markdown" | "plaintext">("markdown");
 
   const switcherButton = enablePlainTextSwitcher && (
-    <div className="inline-flex rounded-md shadow-sm mb-2" role="group">
+    <div className="inline-flex rounded-md shadow-xs mb-2" role="group">
       <button
         type="button"
         className={twMerge(
