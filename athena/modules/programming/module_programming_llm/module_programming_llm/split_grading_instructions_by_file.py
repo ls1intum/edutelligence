@@ -15,7 +15,7 @@ from llm_core.utils.llm_utils import (
 )
 from llm_core.core.predict_and_parse import predict_and_parse
 
-from module_programming_llm.helpers.utils import format_grading_instructions, get_diff
+from module_programming_llm.helpers.utils import get_diff
 
 
 class FileGradingInstruction(BaseModel):
@@ -36,7 +36,11 @@ async def split_grading_instructions_by_file(
         config: GradedBasicApproachConfig,
         debug: bool
     ) -> Optional[SplitGradingInstructions]:
-    """Split the general grading instructions by file
+    """Split the free-text grading instructions by file
+
+    The structured grading criteria are not split: rewriting them per file loses the grading instruction ids the
+    model needs to link a suggestion to a criterion, so they are added to the prompt of every file unchanged
+    (see get_grading_instructions_for_file).
 
     Args:
         exercise (Exercise): Exercise to split the grading instructions for (respecting the changed files)
@@ -48,7 +52,7 @@ async def split_grading_instructions_by_file(
         Optional[SplitGradingInstructions]: Split grading instructions, None if it is too short or too long
     """
 
-    grading_instructions = format_grading_instructions(exercise.grading_instructions, exercise.grading_criteria)
+    grading_instructions = exercise.grading_instructions
 
     # Return None if the grading instructions are too short
     if (grading_instructions is None
