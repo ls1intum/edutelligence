@@ -4,7 +4,7 @@ Central LangFuse tracing module for Pyris.
 Provides:
 - @observe decorator for automatic tracing
 - TracingContext for rich metadata propagation
-- LangChain CallbackHandler integration
+- Model name and token counts on model-call generations
 - Proper nesting of sub-pipelines and tool calls
 - TracedThreadPoolExecutor for correct trace nesting in threaded code
 """
@@ -194,15 +194,10 @@ class TracingContext:
         """
         ctx = cls(pipeline_name=pipeline_name, variant=variant)
 
-        # Extract user info
+        # Extract user info. Only the opaque Artemis id: names are personal data
+        # that tracing does not need.
         if hasattr(dto, "user") and dto.user:
             ctx.user_id = str(dto.user.id)
-            first_name = getattr(dto.user, "first_name", None)
-            last_name = getattr(dto.user, "last_name", None)
-            if first_name:
-                ctx.extra_metadata["user_first_name"] = first_name
-            if last_name:
-                ctx.extra_metadata["user_last_name"] = last_name
 
         # Extract session/run ID and Artemis URL
         if hasattr(dto, "settings") and dto.settings:
@@ -358,6 +353,50 @@ def clear_current_context():
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+_SENSITIVE_SCAN_DEPTH = 3
+
+
+def _is_sensitive_here(value: Any) -> bool:
+    settings = getattr(value, "settings", None)
+    if settings is not None and getattr(settings, "authentication_token", None):
+        return True
+    # A status callback: it holds the run's bearer token as run_id.
+    if getattr(value, "run_id", None) and hasattr(value, "url"):
+        return True
+    if getattr(value, "authentication_token", None):
+        return True
+    return bool(getattr(value, "first_name", None) or getattr(value, "last_name", None))
+
+
+def _children(value: Any) -> list[Any]:
+    if isinstance(value, dict):
+        return list(value.values())
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    if isinstance(value, (str, bytes, int, float, bool)) or value is None:
+        return []
+    attributes = getattr(value, "__dict__", None)
+    return list(attributes.values()) if isinstance(attributes, dict) else []
+
+
+def _is_sensitive(value: Any, depth: int = _SENSITIVE_SCAN_DEPTH) -> bool:
+    """Whether an argument holds a callback credential or student names.
+
+    Langfuse serializes object attributes recursively, so execution states that
+    carry the DTO or the callback a few levels down count as well.
+    """
+    if _is_sensitive_here(value):
+        return True
+    if depth <= 0:
+        return False
+    return any(_is_sensitive(child, depth - 1) for child in _children(value))
+
+
+def carries_sensitive_data(args: tuple, kwargs: dict) -> bool:
+    """Whether any argument of an observed call must not be exported as input."""
+    return any(_is_sensitive(value) for value in (*args, *kwargs.values()))
+
+
 def observe(
     name: Optional[str] = None,
     as_type: Optional[str] = None,
@@ -401,7 +440,12 @@ def observe(
             # observed call must propagate without executing the function twice.
             try:
                 langfuse_observe = langfuse_mod.observe
-                observed_func = langfuse_observe(name=name, as_type=as_type)(func)
+                # Arguments that carry the run's callback credential or student
+                # names are not exported as the span input.
+                capture_input = not carries_sensitive_data(args, kwargs)
+                observed_func = langfuse_observe(
+                    name=name, as_type=as_type, capture_input=capture_input
+                )(func)
             except Exception as e:
                 logger.debug(
                     "LangFuse observe failed, executing without tracing: %s", e
@@ -431,143 +475,28 @@ class TracedThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
         return super().submit(ctx.run, fn, *args, **kwargs)
 
 
-# LangChain run names to filter out from traces (internal implementation noise)
-FILTERED_RUN_NAMES = frozenset(
-    {
-        "RunnableLambda",
-        "RunnablePassthrough",
-        "RunnableAssign<agent_scratchpad>",
-        "ChatPromptTemplate",
-        "ToolsAgentOutputParser",
-    }
-)
+def record_generation(model: Optional[str], usage: Any) -> None:
+    """Add the model name and token counts to the current generation.
 
-
-class FilteringCallbackHandler:
-    """
-    Wrapper around Langfuse CallbackHandler that filters out noisy LangChain internals.
-
-    Filters run names like RunnableSequence, RunnableAssign<agent_scratchpad>, etc.
-    that clutter the trace without providing useful observability.
-    """
-
-    def __init__(self, handler: Any):
-        self._handler = handler
-        self._filtered_run_ids: set[str] = set()
-
-    def _should_filter(self, serialized: Optional[dict], name: str) -> bool:
-        """Check if this run should be filtered out."""
-        if serialized is None:
-            return name in FILTERED_RUN_NAMES if name else False
-        run_name = name or serialized.get("name", "")
-        # Also check the id field which sometimes contains the class name
-        run_id = serialized.get("id", [])
-        if run_id and isinstance(run_id, list) and len(run_id) > 0:
-            last_id = run_id[-1]
-            if last_id in FILTERED_RUN_NAMES:
-                return True
-        return run_name in FILTERED_RUN_NAMES
-
-    def on_chain_start(self, serialized, inputs, *, run_id, **kwargs):
-        if self._should_filter(serialized, kwargs.get("name", "")):
-            self._filtered_run_ids.add(str(run_id))
-            return
-        return self._handler.on_chain_start(serialized, inputs, run_id=run_id, **kwargs)
-
-    def on_chain_end(self, outputs, *, run_id, **kwargs):
-        if str(run_id) in self._filtered_run_ids:
-            self._filtered_run_ids.discard(str(run_id))
-            return
-        return self._handler.on_chain_end(outputs, run_id=run_id, **kwargs)
-
-    def on_chain_error(self, error, *, run_id, **kwargs):
-        if str(run_id) in self._filtered_run_ids:
-            self._filtered_run_ids.discard(str(run_id))
-            return
-        return self._handler.on_chain_error(error, run_id=run_id, **kwargs)
-
-    def __getattr__(self, name):
-        """Delegate all other methods to the wrapped handler."""
-        return getattr(self._handler, name)
-
-
-def get_langchain_callback() -> Optional[Any]:
-    """
-    Get a LangFuse CallbackHandler for LangChain integrations.
-
-    The callback handler will automatically inherit the current trace context,
-    ensuring LangChain operations are properly nested within the pipeline trace.
-
-    Note: Trace attributes (user_id, session_id, tags, metadata) should be passed
-    via the chain invoke config metadata using langfuse_ prefixed keys:
-        config={
-            "callbacks": [handler],
-            "metadata": {
-                "langfuse_user_id": "user-123",
-                "langfuse_session_id": "session-456",
-                "langfuse_tags": ["tag1", "tag2"],
-            }
-        }
-
-    Returns:
-        CallbackHandler if LangFuse is enabled, None otherwise.
-        When None is returned, LangChain will work normally without tracing.
+    Call it inside a function observed with ``as_type="generation"``; ``usage``
+    is the call's TokenUsageDTO, or None when the provider sent none. Tracing
+    errors are logged and never reach the model call.
     """
     if not _is_enabled():
-        return None
-
-    langfuse_mod = _get_langfuse_module()
-    if not langfuse_mod:
-        return None
-
-    try:
-        # pylint: disable=import-outside-toplevel
-        from langfuse.langchain import CallbackHandler
-
-        handler = CallbackHandler()
-        return FilteringCallbackHandler(handler)
-    except Exception as e:
-        logger.warning("Failed to create LangFuse CallbackHandler: %s", e)
-        return None
-
-
-def get_langchain_config(ctx: Optional[TracingContext] = None) -> dict[str, Any]:
-    """
-    Get a LangChain config dict with LangFuse callback and trace metadata.
-
-    This is a convenience function that returns a complete config dict
-    that can be passed to chain.invoke() or similar methods.
-
-    Args:
-        ctx: Optional TracingContext. If not provided, uses current thread's context.
-
-    Returns:
-        Config dict with callbacks and metadata for LangFuse tracing.
-        Returns empty dict if LangFuse is disabled.
-
-    Example:
-        config = get_langchain_config(ctx)
-        result = chain.invoke(input, config=config)
-    """
-    handler = get_langchain_callback()
-    if not handler:
-        return {}
-
-    effective_ctx = ctx or get_current_context()
-
-    config: dict[str, Any] = {"callbacks": [handler]}
-
-    if effective_ctx:
-        # LangFuse picks up these prefixed metadata keys automatically
-        config["metadata"] = {
-            "langfuse_user_id": effective_ctx.user_id,
-            "langfuse_session_id": effective_ctx.session_id,
-            "langfuse_tags": effective_ctx.tags,
-            # Add custom metadata (non-prefixed keys are stored as regular metadata)
-            **effective_ctx.to_langfuse_params().get("metadata", {}),
+        return
+    client = get_langfuse_client()
+    if client is None:
+        return
+    usage_details = None
+    if usage is not None:
+        usage_details = {
+            "input": int(usage.num_input_tokens),
+            "output": int(usage.num_output_tokens),
         }
-
-    return config
+    try:
+        client.update_current_generation(model=model, usage_details=usage_details)
+    except Exception as e:
+        logger.debug("Failed to record the generation in LangFuse: %s", e)
 
 
 def flush():

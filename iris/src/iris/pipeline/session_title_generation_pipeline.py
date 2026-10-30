@@ -1,21 +1,36 @@
 import os
-from typing import Optional
+from typing import Literal, Optional
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import Runnable
+from pydantic import BaseModel, Field
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.llm import CompletionArguments, LlmRequestHandler
-from iris.llm.langchain import IrisLangchainChatModel
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.llm import EMERGENCY_MAX_TOKENS, CompletionArguments, LlmRequestHandler
+from iris.llm.iris_chat_model import IrisChatModel
 from iris.llm.llm_configuration import resolve_model
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
 
 logger = get_logger(__name__)
+
+
+class TitleDecision(BaseModel):
+    """Whether to keep the chat title, and the new title when it changes."""
+
+    decision: Literal["keep", "update"]
+    title: Optional[str] = Field(
+        description="The new title (2-5 words) when decision is update, else null"
+    )
+
+
+def _message(sender: IrisMessageRole, text: str) -> PyrisMessage:
+    return PyrisMessage(
+        sender=sender, contents=[TextMessageContentDTO(textContent=text)]
+    )
 
 
 class SessionTitleGenerationPipeline(SubPipeline):
@@ -23,34 +38,27 @@ class SessionTitleGenerationPipeline(SubPipeline):
     Pipeline that generates a session title from the conversation history.
     """
 
-    llm: IrisLangchainChatModel
-    pipeline: Runnable
+    llm: IrisChatModel
     tokens: TokenUsageDTO
     MAX_RECENT_MESSAGES = 10
     MAX_MESSAGE_CHARS = 400
 
     def __init__(self, local: bool = False):
         super().__init__(implementation_id="session_title_generation_pipeline")
+        self.tokens = None
 
         pipeline_id = "session_title_generation_pipeline"
         model = resolve_model(pipeline_id, "default", "chat", local=local)
-        request_handler = LlmRequestHandler(model_id=model)
-        completion_args = CompletionArguments(temperature=0.0, max_tokens=30)
-        self.llm = IrisLangchainChatModel(
-            request_handler=request_handler,
-            completion_args=completion_args,
+        self.llm = IrisChatModel(
+            LlmRequestHandler(model_id=model),
+            CompletionArguments(temperature=0.0, max_tokens=EMERGENCY_MAX_TOKENS),
         )
         # Set up Jinja2 environment and load the prompt template
         template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
-        self.jinja_env = Environment(
-            loader=FileSystemLoader(template_dir),
-            autoescape=select_autoescape(["html", "xml", "j2"]),
-        )
+        self.jinja_env = prompt_environment(template_dir)
         self.prompt_template = self.jinja_env.get_template(
             "session_title_generation_prompt.j2"
         )
-        # Create the pipeline
-        self.pipeline = self.llm | StrOutputParser()
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm})"
@@ -81,44 +89,38 @@ class SessionTitleGenerationPipeline(SubPipeline):
         language: str = "English",
         **kwargs,
     ) -> Optional[str]:
+        """Return "KEEP" or "UPDATE: <title>" (the protocol callers expect)."""
         prompt_text = self.prompt_template.render(language=language)
         formatted_recent_messages = self.format_recent_messages(recent_messages)
         try:
             logger.info("Running Session Title Generation Pipeline")
-            # Keep the rendered text as data so `{}` inside message content is not
-            # interpreted as additional prompt template variables.
-            prompt = ChatPromptTemplate.from_messages(
+            decision = self.llm.structured(
                 [
-                    ("system", "{prompt_text}"),
-                    (
-                        "user",
-                        "Current title: {current_session_title}\n"
+                    _message(IrisMessageRole.SYSTEM, prompt_text),
+                    _message(
+                        IrisMessageRole.USER,
+                        f"Current title: {current_session_title}\n"
                         "Recent messages (oldest first, newest last):\n"
-                        "{recent_messages}\n\n"
-                        "Return EXACTLY one line:\n"
-                        "KEEP\n"
-                        "or\n"
-                        "UPDATE: <new title>",
+                        f"{formatted_recent_messages}",
                     ),
-                ]
+                ],
+                TitleDecision,
             )
-            session_title = (prompt | self.pipeline).invoke(
-                {
-                    "prompt_text": prompt_text,
-                    "current_session_title": current_session_title,
-                    "recent_messages": formatted_recent_messages,
-                }
-            )
-            logger.info(
-                "Session title raw LLM output | output=%r",
-                str(session_title)[:500] if session_title is not None else None,
-            )
+            logger.info("Session title decision | %s", decision.model_dump())
             self.tokens = self.llm.tokens
             self.tokens.pipeline = PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
-            return session_title
+            title = (decision.title or "").strip()
+            if decision.decision == "update" and title:
+                return f"UPDATE: {title}"
+            return "KEEP"
         except Exception as e:
             logger.error(
                 "An error occurred while running the session title generation pipeline",
                 exc_info=e,
             )
+            if self.llm.tokens is not None:
+                self.tokens = self.llm.tokens
+                self.tokens.pipeline = (
+                    PipelineEnum.IRIS_SESSION_TITLE_GENERATION_PIPELINE
+                )
             return None

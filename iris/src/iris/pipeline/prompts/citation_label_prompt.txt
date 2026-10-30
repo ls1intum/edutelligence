@@ -3,12 +3,15 @@ A tutor's answer cites the course sources below. Label each source for a small c
 For every source write:
 - "keyword": the concept the source is about, 1-3 words, like a good slide heading
   (examples: "Composition", "Load Factor", "equals/hashCode", "Exam Registration").
-- "summary": 1-2 sentences with what the source says. Content only; do not mention the source, slide or lecturer.
+- "summary": 1-2 sentences with what the source is about, for example "Defines the merge step and its running time".
+  Name the topics it covers, but do not state results the student may still be working out (solutions, computed
+  values, conclusions of a derivation); organizational facts such as dates may be stated. Content only; do not
+  mention the source, slide or lecturer.
 
 Language: write keywords and summaries in {language}. Keep established technical terms and code names
 as they are (for example "hashCode", "Load Factor"), but write every other word in {language}.
 Do not use ":" "[" or "]".
 
-Answer with JSON only. Use the plain source numbers as keys, for example {{"3": {{"keyword": "...", "summary": "..."}}}}.
+Answer with JSON: {{"labels": [{{"source": 3, "keyword": "...", "summary": "..."}}]}}, one entry per source.
 
 {sources}

@@ -11,7 +11,7 @@ from functools import wraps
 from typing import Callable, Optional
 
 from iris.common.logging_config import get_logger
-from iris.common.reply_language import previous_reply_language
+from iris.common.reply_language import course_language_name, previous_reply_language
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.variant.variant import Variant
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
@@ -208,12 +208,25 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         course_id,
         base_url,
         state.callback,
-        state.query_text,
-        state.message_history,
         state.lecture_content_storage,
         scope_supplier=lambda: _resolve_lecture_scope(state),
         citation_sources=getattr(state, "citation_sources", None),
+        material_language=_material_language(lecture_retriever, course_id, base_url),
     )
+
+
+def _material_language(lecture_retriever, course_id, base_url) -> Optional[str]:
+    """Name of the language of the course's lecture material, so the agent searches in it.
+
+    One Weaviate query for a single property of one lecture unit. Without an answer
+    the tool asks for the material's language without naming it.
+    """
+    try:
+        stored = lecture_retriever.course_material_language(course_id, base_url or None)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.warning("Lecture material language unknown: %s", e)
+        return None
+    return course_language_name(stored)
 
 
 def provide_lecture_list(state: State) -> Optional[Callable]:
@@ -275,8 +288,6 @@ def provide_current_view_content(state: State) -> Optional[Callable]:
 
 
 def provide_faq_retrieval(state: State) -> Optional[Callable]:
-    if not state.dto.course.name:
-        return None
     if not state.allow_faq_tool:
         return None
     course_id = state.dto.course.id
@@ -285,12 +296,7 @@ def provide_faq_retrieval(state: State) -> Optional[Callable]:
     return create_tool_faq_content_retrieval(
         faq_retriever,
         course_id,
-        state.dto.course.name,
-        state.dto.settings.artemis_base_url if state.dto.settings else "",
         state.callback,
-        state.query_text,
-        state.message_history,
-        state.faq_storage,
         citation_sources=getattr(state, "citation_sources", None),
     )
 

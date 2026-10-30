@@ -24,13 +24,42 @@ For configuration rather than control flow, use [LLM configuration](../admin/llm
 
 `AbstractAgentPipeline` carries one `AgentPipelineExecutionState` through the run. The state keeps the request DTO and selected variant together with the callback, filtered message history, resolved model, prompt, tools, partial-result sender, retrieval results, token usage, tracing context, and a pending context switch. This lets hooks enrich one execution without introducing another top-level request contract.
 
-| Extension category                       | Methods                                                                                                                      | Responsibility                                                                                                                                    |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Required                                 | `get_tools()`, `build_system_message()`                                                                                      | Define the agent's callable tools and system prompt.                                                                                              |
-| Optional run customization               | `prepare_state()`, `pre_agent_hook()`, `post_agent_hook()`, `on_agent_step()`                                                | Resolve state that both the prompt and the tools depend on, or add behavior before execution, after execution, or after an individual agent step. |
-| Optional context/execution customization | `create_tracing_context()`, `get_agent_params()`, `get_history_limit()`, `should_stream_agent_response()`, `execute_agent()` | Customize metadata, executor arguments, retained history, streaming, or the execution strategy.                                                   |
+| Extension category                       | Methods                                                                                                                         | Responsibility                                                                                                                                  |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Required                                 | `get_tools()`, `build_system_message()`                                                                                         | Define the agent's callable tools and system prompt.                                                                                            |
+| Optional run customization               | `prepare_state()`, `pre_agent_hook()`, `post_agent_hook()`, `build_turn_context_message()`                                      | Resolve state that both the prompt and the tools depend on, add per-turn context after the history, or add behavior before and after execution. |
+| Optional context/execution customization | `create_tracing_context()`, `get_max_agent_steps()`, `get_history_limit()`, `should_stream_agent_response()`, `execute_agent()` | Customize metadata, the step limit, retained history, streaming, or the execution strategy.                                                     |
 
 Private helper methods implement the shared loop and should remain centralized in `AbstractAgentPipeline` rather than being copied into individual agents.
+
+### The agent loop
+
+Iris runs its own agent loop (`llm/agent/loop.py`) instead of LangChain's `AgentExecutor`. The loop and its tool adapter (`llm/agent/tools.py`) are about 400 lines together and do exactly what the chat needs:
+
+1. Call the model with the prompt messages and the tool schemas.
+2. If the answer has no tool calls, it is the final answer.
+3. Otherwise send any text the model wrote next to its tool calls to the student once (as an intermediate message), run the tools, append their results, and go back to step 1.
+4. After `get_max_agent_steps()` model calls with tools (15 by default), ask once more without tools for a final answer.
+
+Design decisions and their reasons:
+
+| Decision                                                                                                                                          | Reason                                                                                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A tool error becomes text the model reads, like any tool result                                                                                   | One failing tool must not abort the whole chat. The model can retry or answer without it.                                                          |
+| The model's provider items (for example OpenAI reasoning items with `encrypted_content`) are kept on the assistant message and sent back verbatim | Reasoning models keep their chain of thought between tool calls. Without it they plan again after every tool call, which costs tokens and quality. |
+| Tool schemas are strict (`strict: true`, all fields required, no extra fields) where the model supports it                                        | The provider then guarantees valid arguments. `OpenAIChatModel.strict_tools` controls it; it defaults to on for the Responses API.                 |
+| The forced final answer uses `tool_choice: "none"`, or no tools for models that ignore `tool_choice` (Ollama)                                     | The model cannot call a tool again at the step limit.                                                                                              |
+| Usage is recorded after each model call, not only at the end                                                                                      | A run that fails in step 4 still reports the cost of steps 1 to 3.                                                                                 |
+
+`IrisChatModel` (`llm/iris_chat_model.py`) is the small adapter between the loop and `LlmRequestHandler`. It also offers `structured(schema)` for side pipelines that need JSON instead of prose (see [Structured outputs](#structured-outputs)).
+
+### Structured outputs
+
+Side pipelines that need data pass a Pydantic model as `CompletionArguments.response_schema`. OpenAI and Azure models enforce the schema while decoding (`json_schema` with `strict: true`), Ollama gets it as `format`, and models that do not support schemas fall back to JSON mode (`supports_structured_output: false`). The answer is validated with the same Pydantic model (`llm/structured_output.py`). Session titles (`TitleDecision`), interaction suggestions (`Questions`) and citation labels (`CitationLabels`) use this instead of parsing free text such as `KEEP` or `UPDATE: <title>`.
+
+### Retries
+
+`llm/retry.py` decides retries for every OpenAI-compatible call. It retries rate limits, server errors and connection errors up to five attempts with exponential backoff and jitter, honours the provider's `retry-after-ms` and `retry-after` headers (up to 30 seconds), retries a timeout only once, and never retries other client errors such as 400. A caller can pass `CompletionArguments.cancel_event` to stop a retry wait at once; no pipeline sets it yet, because chat cancellation is still open.
 
 ## Externally triggered pipelines
 
@@ -56,7 +85,7 @@ The FAQ ingestion/deletion and lecture-deletion routes deliberately do **not** u
 
 `ChatPipeline` is the shared top-level chat entry. Its `chat_mode` selects the appropriate course, exercise, lecture, text-exercise, or programming-exercise behavior; the selected mode determines prompts and tools rather than creating a second HTTP route. Code feedback is an internal helper used by applicable chat behavior, not another top-level callback pipeline.
 
-`IrisChatMode` distinguishes `COURSE_CHAT`, `LECTURE_CHAT`, `PROGRAMMING_EXERCISE_CHAT`, and `TEXT_EXERCISE_CHAT`. The mode describes the **active context** of the chat, and three mechanisms consume it: `chat_system_prompt.j2` renders mode-specific blocks from a shared base (see [Prompts](./prompts.md)), `chat_tool_providers.py` decides per tool whether the current mode and the data Artemis sent make that tool useful (see [Tools](./tools.md)), and feature gating limits MCQ intent detection to `COURSE` and `LECTURE` mode. One `ChatPipeline` serves all modes on purpose: a pipeline per mode would duplicate the agent setup, the retrieval wiring, and the citation handling, and it would make context switching impossible, since a running pipeline cannot hand a chat to a different one. `IrisChatMode` mirrors the Artemis enum, so both sides must agree on the string values.
+`IrisChatMode` distinguishes `COURSE_CHAT`, `LECTURE_CHAT`, `PROGRAMMING_EXERCISE_CHAT`, and `TEXT_EXERCISE_CHAT`. The mode describes the **active context** of the chat, and three mechanisms consume it: `chat_system_prompt.j2` renders mode-specific blocks from a shared base (see [Prompts](./prompts.md)), `chat_tool_providers.py` decides per tool whether the current mode and the data Artemis sent make that tool useful (see [Tools](./tools.md)), and the quiz tool (`generate_mcq_questions`) is offered only in `COURSE` and `LECTURE` mode. One `ChatPipeline` serves all modes on purpose: a pipeline per mode would duplicate the agent setup, the retrieval wiring, and the citation handling, and it would make context switching impossible, since a running pipeline cannot hand a chat to a different one. `IrisChatMode` mirrors the Artemis enum, so both sides must agree on the string values.
 
 ### Context switching
 
@@ -65,7 +94,7 @@ Because the mode lives on the request rather than in the pipeline choice, a chat
 - **The student switches it.** Artemis validates the target, persists a `CTXSWAP` marker message, and sends subsequent requests with the new `chat_mode` and the matching entity fields. Iris only has to interpret the marker it finds in the history.
 - **The agent switches it.** The agent calls the `switch_chat_context` tool, which validates the target against the course data on the DTO and records it in `state.pending_context_switch`. Tools never mutate the session themselves. `post_agent_hook()` attaches the recorded switch to the final result as `suggestedContext`, and Artemis validates it again, applies it, and writes the `CTXSWAP` marker. The session context changes from the next message onwards, but lecture retrieval already follows the pending switch inside the same run, so the agent can answer about the new lecture immediately.
 
-Both paths converge on the same marker, so the history stays uniform regardless of who initiated the switch. `AbstractAgentPipeline` treats markers in two places: `convert_iris_message_to_langchain_message()` renders them as a `[context_switch]` system message so the agent knows the topic changed, and `_collect_recent_messages()` drops everything up to and including the most recent marker so session-title generation reflects the current context instead of the previous one.
+Both paths converge on the same marker, so the history stays uniform regardless of who initiated the switch. `AbstractAgentPipeline` treats markers in two places: `normalize_history_message()` renders them as a `[context_switch]` system message so the agent knows the topic changed, and `_collect_recent_messages()` drops everything up to and including the most recent marker so session-title generation reflects the current context instead of the previous one.
 
 ## Nested and internal pipelines
 

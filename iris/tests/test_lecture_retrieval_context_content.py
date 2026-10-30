@@ -163,10 +163,10 @@ def test_current_view_content_gets_source_ids():
     assert state.current_view_storage[CONTENT_BLOCKS_KEY] == [
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
-        "\n---\nSource id: [src:1]\nPage 3 content\n---",
+        "\n---\nSource id: [src:1]\nContent:\n---Page 3 content---\n---",
         "The student is currently at 50.0 seconds in the lecture video of the "
         "lecture unit Test Unit (lecture unit ID: 1). The transcript at this "
-        "point:\n---\nSource id: [src:2]\nTranscript 45-55\n---",
+        "point:\n---\nSource id: [src:2]\nContent:\n---Transcript 45-55---\n---",
     ]
     slide = state.citation_sources.get(1)
     assert slide.cite_block() == "[cite:L:1:3::::]"

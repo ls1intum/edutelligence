@@ -3,10 +3,8 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
-from threading import Thread
 from typing import List, Optional
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 
@@ -16,6 +14,7 @@ from iris.common.pyris_message import PyrisMessage
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.web.status.status_update import StatusCallback
 
@@ -34,10 +33,7 @@ class McqGenerationPipeline(SubPipeline):
         template_dir = os.path.join(
             os.path.dirname(__file__), "..", "prompts", "templates"
         )
-        jinja_env = Environment(
-            loader=FileSystemLoader(template_dir),
-            autoescape=select_autoescape(["html", "xml", "j2"]),
-        )
+        jinja_env = prompt_environment(template_dir)
         self.prompt_template = jinja_env.get_template("mcq_generation_prompt.j2")
 
         # Create LLM
@@ -85,80 +81,54 @@ class McqGenerationPipeline(SubPipeline):
         if callback:
             callback.update()
 
-        response = self.pipeline.invoke([SystemMessage(content=rendered_prompt)])
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE)
+        response = self._invoke(rendered_prompt)
 
         # Validate JSON
         result = self._extract_and_validate_json(response)
         return result
 
-    def run_in_thread(
+    def _invoke(self, prompt: str) -> str:
+        """Run one model call and record its usage, also when the call stops early."""
+        self.llm.tokens = None  # so a call that reports nothing bills nothing
+        try:
+            return self.pipeline.invoke([SystemMessage(content=prompt)])
+        finally:
+            if self.llm.tokens is not None:
+                self._append_tokens(
+                    self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE
+                )
+
+    def generate_set(
         self,
         command: str,
-        chat_history: Optional[List[PyrisMessage]],
-        language: str,
-        result_storage: dict,
-        count: int = 1,
+        count: int,
+        chat_history: Optional[List[PyrisMessage]] = None,
+        language: str = "English",
         lecture_content: Optional[str] = None,
-    ) -> Thread:
+    ) -> str:
         """
-        Run MCQ generation in a background thread.
+        Generate ``count`` questions on distinct subtopics, in parallel.
 
-        Uses contextvars.copy_context() to preserve the Langfuse observation
-        stack across the thread boundary.
-
-        Results are communicated via a Queue stored in result_storage["queue"].
-        Each item is a tuple of ("mcq", json_str), ("error", msg), or ("done", None).
-        For single-question mode, also stores the result under "mcq_json" for
-        backward compatibility.
-
-        :param command: Free-text instruction describing what to generate
-        :param chat_history: Recent chat history for context
-        :param language: Name of the language to write in, such as "German"
-        :param result_storage: Mutable dict for inter-thread communication
-        :param count: Number of questions to generate (1 = single, >1 = one-by-one)
-        :param lecture_content: Pre-retrieved lecture content to base questions on
-        :return: The started Thread handle
+        :return: JSON string of an ``mcq-set`` with up to ``count`` questions
+        :raises ValueError: when no question could be generated
         """
         q: Queue = Queue()
-        result_storage["queue"] = q
-        result_storage["count"] = count
-        ctx = contextvars.copy_context()
-
-        def _generate():
-            try:
-                if count > 1:
-                    self._generate_multiple(
-                        command,
-                        chat_history,
-                        language,
-                        count,
-                        q,
-                        lecture_content=lecture_content,
-                    )
-                else:
-                    result = self(
-                        command=command,
-                        chat_history=chat_history,
-                        language=language,
-                        callback=None,  # pre_agent_hook already sent status
-                        lecture_content=lecture_content,
-                    )
-                    result_storage["mcq_json"] = result
-                    q.put(("mcq", result))
-            except Exception as e:
-                logger.error("MCQ generation failed in thread", exc_info=e)
-                result_storage["error"] = str(e)
-                q.put(("error", str(e)))
-            finally:
-                q.put(("done", None))
-
-        thread = Thread(
-            name="McqGenerationThread",
-            target=lambda: ctx.run(_generate),
+        self._generate_multiple(
+            command, chat_history, language, count, q, lecture_content=lecture_content
         )
-        thread.start()
-        return thread
+        questions: list[dict] = []
+        while not q.empty():
+            kind, data = q.get_nowait()
+            if kind != "mcq":
+                continue
+            parsed = json.loads(data)
+            if parsed.get("type") == "mcq-set":
+                questions.extend(parsed.get("questions", []))
+            else:
+                questions.append(parsed)
+        if not questions:
+            raise ValueError("No MCQ question could be generated")
+        return json.dumps({"type": "mcq-set", "questions": questions[:count]})
 
     def _generate_multiple(
         self,
@@ -310,8 +280,7 @@ class McqGenerationPipeline(SubPipeline):
             f'"application of Z"]\n'
         )
 
-        response = self.pipeline.invoke([SystemMessage(content=prompt)])
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE)
+        response = self._invoke(prompt)
 
         # Parse response
         cleaned = response.strip()

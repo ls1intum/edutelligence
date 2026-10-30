@@ -892,7 +892,7 @@ def _run_stubbed_pipeline_details(
             "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
             return_value=None,
         ),
-        patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel", FakeLlm),
+        patch("iris.pipeline.abstract_agent_pipeline.IrisChatModel", FakeLlm),
         patch("iris.pipeline.abstract_agent_pipeline.PartialResultSender", FakeSender),
     ):
         pipeline(_make_dto(stream_response_marker, chat_mode), variant, callback)

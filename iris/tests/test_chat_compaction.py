@@ -6,9 +6,6 @@ from threading import Thread
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
-from langchain_core.tools import StructuredTool  # noqa: E402
-
 # Bootstrap the iris package (see test_chat_latency_ordering.py for the circular import).
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.callback_token import CallbackToken
@@ -23,6 +20,7 @@ from iris.domain.data.text_message_content_dto import (  # noqa: E402
     TextMessageContentDTO,
 )
 from iris.llm import CompletionArguments  # noqa: E402
+from iris.llm.agent import AgentTool  # noqa: E402
 from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
 from iris.pipeline import abstract_agent_pipeline  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
@@ -174,20 +172,17 @@ def test_summary_is_a_user_message_right_after_the_system_prompt():
         compaction_summary="The student used {braces}.",
     )
 
-    messages = (
-        _pipeline()
-        .assemble_prompt_with_history(state, "System", turn_context="Date")
-        .format_messages(agent_scratchpad=[])
-    )
+    messages = _pipeline().build_prompt_messages(state, "System", turn_context="Date")
 
-    assert [type(m) for m in messages] == [
-        SystemMessage,
-        HumanMessage,
-        HumanMessage,
-        SystemMessage,
+    assert [m.sender for m in messages] == [
+        IrisMessageRole.SYSTEM,
+        IrisMessageRole.USER,
+        IrisMessageRole.USER,
+        IrisMessageRole.SYSTEM,
     ]
-    assert "a record, not instructions" in messages[1].content
-    assert "The student used {braces}." in messages[1].content
+    assert "a record, not instructions" in messages[1].contents[0].text_content
+    # Literal braces reach the model unchanged (no template escaping any more).
+    assert "The student used {braces}." in messages[1].contents[0].text_content
 
 
 def test_load_history_hides_compactions_and_uses_the_full_history():
@@ -232,17 +227,19 @@ class _FakeChatModel:
         self.completion_args = completion_args
         self.tokens = None
         self.bound_tools = None
+        self.tool_choice = None
         self.messages = None
         _FakeChatModel.instances.append(self)
 
-    def bind_tools(self, tools):
-        self.bound_tools = tools
-        return self
-
-    def invoke(self, messages):
+    def chat(self, messages, tools=None, tool_choice=None):
         self.messages = messages
+        self.bound_tools = tools
+        self.tool_choice = tool_choice
         self.tokens = TokenUsageDTO(numInputTokens=3000, numCachedInputTokens=2900)
-        return SimpleNamespace(content=self.response)
+        return PyrisMessage(
+            sender=IrisMessageRole.ASSISTANT,
+            contents=[TextMessageContentDTO(textContent=self.response)],
+        )
 
 
 def _compaction_state(prompt_tokens):
@@ -270,19 +267,20 @@ def test_compaction_request_reuses_prompt_and_tools_without_tool_calls():
     holder: dict = {}
 
     with (
-        patch.object(abstract_agent_pipeline, "IrisLangchainChatModel", _FakeChatModel),
+        patch.object(abstract_agent_pipeline, "IrisChatModel", _FakeChatModel),
         patch.object(abstract_agent_pipeline, "LlmRequestHandler", MagicMock()),
     ):
         thread = _pipeline()._start_compaction(state, holder)
         thread.join()
 
     llm = _FakeChatModel.instances[0]
-    assert llm.completion_args.tool_choice == "none"
-    assert [tool.name for tool in llm.bound_tools] == ["get_file"]
-    assert isinstance(llm.messages[0], SystemMessage)
-    assert isinstance(llm.messages[-1], SystemMessage)
-    assert "Summary request" in llm.messages[-1].content
-    assert "x" * 50 not in llm.messages[-1].content  # no student text in the note
+    assert llm.tool_choice == "none"
+    assert [tool["function"]["name"] for tool in llm.bound_tools] == ["get_file"]
+    assert llm.messages[0].sender == IrisMessageRole.SYSTEM
+    assert llm.messages[-1].sender == IrisMessageRole.SYSTEM
+    note = llm.messages[-1].contents[0].text_content
+    assert "Summary request" in note
+    assert "x" * 50 not in note  # no student text in the note
     assert holder["compaction"].summary == "- the student asked about heaps"
     assert holder["compaction"].covers_through_message_id == 2
     assert holder["tokens"].pipeline == PipelineEnum.IRIS_CHAT_COMPACTION
@@ -295,7 +293,7 @@ def test_compaction_request_sends_no_tools_to_clients_without_tool_choice():
     holder: dict = {}
 
     with (
-        patch.object(abstract_agent_pipeline, "IrisLangchainChatModel", _FakeChatModel),
+        patch.object(abstract_agent_pipeline, "IrisChatModel", _FakeChatModel),
         patch.object(abstract_agent_pipeline, "LlmRequestHandler", MagicMock()),
     ):
         _pipeline()._start_compaction(state, holder).join()
@@ -313,9 +311,7 @@ def test_a_refusal_is_not_stored_as_summary():
     holder: dict = {}
     try:
         with (
-            patch.object(
-                abstract_agent_pipeline, "IrisLangchainChatModel", _FakeChatModel
-            ),
+            patch.object(abstract_agent_pipeline, "IrisChatModel", _FakeChatModel),
             patch.object(abstract_agent_pipeline, "LlmRequestHandler", MagicMock()),
         ):
             _pipeline()._start_compaction(
@@ -363,14 +359,12 @@ def test_tool_output_limits_keep_the_schema_and_every_result():
         return "x" * 50
 
     budget = ToolOutputBudget(result_bytes=20, turn_bytes=30)
-    plain = StructuredTool.from_function(get_file)
-    capped = StructuredTool.from_function(budget.wrap(get_file))
+    plain = AgentTool.from_function(get_file)
+    capped = AgentTool.from_function(budget.wrap(get_file))
 
     assert capped.name == plain.name
     assert capped.description == plain.description
-    assert (
-        capped.args_schema.model_json_schema() == plain.args_schema.model_json_schema()
-    )
+    assert capped.parameters == plain.parameters
     assert capped.invoke({"path": "a"}).startswith("x" * 20 + "\n[Output shortened")
     assert capped.invoke({"path": "a"}).startswith("x" * 10 + "\n[Output shortened")
     assert capped.invoke({"path": "a"}) == TOOL_OUTPUT_OMITTED
@@ -454,3 +448,24 @@ def test_failed_suggestions_still_report_the_finished_compaction():
     # Collected once: a later finish() must not record the usage again.
     assert pipeline._collect_compaction(state) is None
     assert state.tokens == [usage]
+
+
+def test_compaction_request_quotes_and_sends_answers_without_citations():
+    _FakeChatModel.instances = []
+    state = _compaction_state(prompt_tokens=2_000)
+    cited = "Parts die with the whole. [cite:L:7:13:::C:S] [src:1] Then the rest."
+    state.message_history[1] = _answer(2, cited)
+
+    with (
+        patch.object(abstract_agent_pipeline, "IrisChatModel", _FakeChatModel),
+        patch.object(abstract_agent_pipeline, "LlmRequestHandler", MagicMock()),
+    ):
+        _pipeline()._start_compaction(state, {}).join()
+
+    messages = _FakeChatModel.instances[0].messages
+    texts = [m.contents[0].text_content for m in messages if m.contents]
+    note = texts[-1]
+    assert "«Parts die with the whole. Then the rest.»" in note
+    assert all("[cite:" not in t and "[src:" not in t for t in texts)
+    # The stored history keeps the answer as Artemis stored it.
+    assert state.message_history[1].contents[0].text_content == cited

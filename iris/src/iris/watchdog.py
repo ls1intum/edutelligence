@@ -59,12 +59,26 @@ def model_pool_locks() -> dict[str, Any]:
 
     locks = {}
     for entry in LlmManager().entries:
-        http_client = getattr(getattr(entry, "_client", None), "_client", None)
-        pool = getattr(getattr(http_client, "_transport", None), "_pool", None)
-        lock = getattr(getattr(pool, "_optional_thread_lock", None), "_lock", None)
+        lock = _pool_lock(getattr(entry, "_client", None))
         if lock is not None:
             locks[entry.id] = lock
     return locks
+
+
+def _pool_lock(client: Any) -> Any:
+    """The pool lock of an OpenAI client, also one inside a LangChain embeddings wrapper."""
+    # A chat entry holds the OpenAI client itself; an embedding entry holds LangChain's
+    # OpenAIEmbeddings, whose ``client`` is the embeddings resource of an OpenAI client.
+    for openai_client in (
+        client,
+        getattr(getattr(client, "client", None), "_client", None),
+    ):
+        http_client = getattr(openai_client, "_client", None)
+        pool = getattr(getattr(http_client, "_transport", None), "_pool", None)
+        lock = getattr(getattr(pool, "_optional_thread_lock", None), "_lock", None)
+        if lock is not None:
+            return lock
+    return None
 
 
 def format_thread_dump() -> str:

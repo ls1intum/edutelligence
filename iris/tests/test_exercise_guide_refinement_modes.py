@@ -12,6 +12,7 @@ import pytest
 
 from iris.config import Settings, settings as iris_settings  # noqa: E402
 from iris.domain.status.suggested_context_dto import SuggestedContextDTO  # noqa: E402
+from iris.llm import EMERGENCY_MAX_TOKENS  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import (  # noqa: E402
     ChatPipeline,
     _guide_problem_statement,
@@ -120,7 +121,7 @@ def _run_pipeline(pipeline: ChatPipeline, callback: MagicMock) -> None:
             "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
             return_value=None,
         ),
-        patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel"),
+        patch("iris.pipeline.abstract_agent_pipeline.IrisChatModel"),
         patch("iris.pipeline.chat.chat_pipeline.mcq_post_agent_hook"),
     ):
         pipeline(_make_dto(), variant, callback)
@@ -158,7 +159,7 @@ def test_guide_role_configured_uses_guide_model(monkeypatch):
     def fake_chat_model(request_handler, completion_args):
         assert request_handler is not None
         assert completion_args.temperature == 0.5
-        assert completion_args.max_tokens == 2000
+        assert completion_args.max_tokens == EMERGENCY_MAX_TOKENS
         return SimpleNamespace(tokens=["guide-token"])
 
     with (

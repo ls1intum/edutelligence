@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -43,6 +43,15 @@ class PyrisMessage(BaseModel):
     token_logprob_entries: Optional[List[TokenLogprobEntry]] = Field(
         default=None, exclude=True
     )
+    # The provider's own output items of this response (Responses API: reasoning
+    # items with encrypted content, assistant message items and function calls),
+    # in their original order. Kept only within one agent run, so the next request
+    # of the tool loop can send them back unchanged; never serialized to Artemis.
+    provider_items: Optional[List[dict[str, Any]]] = Field(default=None, exclude=True)
+    # Reasoning text an OpenAI-compatible server (vLLM: gpt-oss, Qwen) returned
+    # next to a tool call; sent back within the same tool loop when the model
+    # entry enables it. Never serialized to Artemis.
+    reasoning_content: Optional[str] = Field(default=None, exclude=True)
 
     def __str__(self):
         return f"{self.sender.lower()}: {self.contents}"

@@ -6,14 +6,11 @@ import copy
 import json
 import re
 from contextlib import contextmanager
-from queue import Queue
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from langchain_core.agents import AgentActionMessageLog
-from langchain_core.messages import AIMessage
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.callback_token import CallbackToken  # noqa: E402
@@ -22,6 +19,7 @@ from iris.common.reply_language import (  # noqa: E402
     detect_language_name,
     reply_language,
 )
+from iris.common.token_usage_dto import TokenUsageDTO  # noqa: E402
 from iris.config import settings as iris_settings  # noqa: E402
 from iris.domain.data.lecture_dto import PyrisLectureDTO  # noqa: E402
 from iris.domain.data.text_message_content_dto import (  # noqa: E402
@@ -33,16 +31,17 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (  # noqa: E402
     LectureUnitPageChunkRetrievalDTO,
 )
 from iris.llm.llm_configuration import validate_llm_configuration  # noqa: E402
+from iris.llm.structured_output import parse_structured_output  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
 from iris.pipeline.chat.mcq_chat_mixin import (  # noqa: E402
     _strip_stray_citations,
     mcq_post_agent_hook,
 )
-from iris.pipeline.shared.activity_tracker import ActivityTracker  # noqa: E402
 from iris.pipeline.shared.citation_pipeline import (  # noqa: E402
+    MAX_EXCERPT_CHARS,
+    CitationLabels,
     CitationPipeline,
-    parse_labels,
 )
 from iris.pipeline.shared.citation_sources import (  # noqa: E402
     CitationSourceRegistry,
@@ -189,13 +188,13 @@ def _lecture_tool(storage, registry=None):
         )
     )
     return create_tool_lecture_content_retrieval(
-        retriever, 1, "", MagicMock(), "q", [], storage, citation_sources=registry
+        retriever, 1, "", MagicMock(), storage, citation_sources=registry
     )
 
 
 def test_lecture_tool_prints_source_ids_when_given_a_registry():
     registry = CitationSourceRegistry()
-    output = _lecture_tool({}, registry)()
+    output = _lecture_tool({}, registry)("q")
 
     assert "Source id: [src:1]\nContent:\n---Composition" in output
     assert "Source id: [src:2]\nContent:\n---Bei der Komposition" in output
@@ -205,7 +204,7 @@ def test_lecture_tool_prints_source_ids_when_given_a_registry():
 
 def test_lecture_tool_output_is_unchanged_without_a_registry():
     storage = {}
-    output = _lecture_tool(storage)()
+    output = _lecture_tool(storage)("q")
 
     assert "[src:" not in output
     assert "Page: 14, point-out id: 13\nContent:\n---Composition" in output
@@ -217,13 +216,13 @@ def test_lecture_tool_output_is_unchanged_without_a_registry():
 def _faq_tool(registry=None):
     retriever = MagicMock(return_value=[_faq(), _faq(302, "Aids?", "One A4 sheet.")])
     return create_tool_faq_content_retrieval(
-        retriever, 1, "SE", "", MagicMock(), "q", [], {}, citation_sources=registry
+        retriever, 1, MagicMock(), citation_sources=registry
     )
 
 
 def test_faq_tool_prints_source_ids_when_given_a_registry():
     registry = CitationSourceRegistry()
-    output = _faq_tool(registry)()
+    output = _faq_tool(registry)("q")
 
     assert output.startswith("Source id: [src:1]\n[FAQ ID: 301,")
     assert "Source id: [src:2]\n[FAQ ID: 302," in output
@@ -231,7 +230,7 @@ def test_faq_tool_prints_source_ids_when_given_a_registry():
 
 
 def test_faq_tool_output_is_unchanged_without_a_registry():
-    assert _faq_tool()() == (
+    assert _faq_tool()("q") == (
         "[FAQ ID: 301, FAQ Question: When is the exam?, FAQ Answer: On 18 February.]"
         "[FAQ ID: 302, FAQ Question: Aids?, FAQ Answer: One A4 sheet.]"
     )
@@ -339,59 +338,54 @@ def test_final_cite_blocks_match_the_artemis_patterns(answer):
 # --------------------------------------------------------------------------- labels
 
 
-def test_parse_labels_accepts_plain_and_source_keys_and_fences():
-    raw = (
-        '```json\n{"1": {"keyword": "A:B", "summary": "x [y]"}, '
-        '"Source 3": {"keyword": "Exam", "summary": "Feb"}}\n```'
-    )
-
-    assert parse_labels(raw) == {1: ("A -B", "x (y)"), 3: ("Exam", "Feb")}
-
-
-@pytest.mark.parametrize("raw", ["not json", "[1, 2]", '{"x": {"keyword": "a"}}', ""])
-def test_parse_labels_returns_no_labels_for_unusable_output(raw):
-    assert not parse_labels(raw)
-
-
 class _FakeLlm:
-    """Stands in for IrisLangchainChatModel inside the citation pipeline."""
+    """Stands in for IrisChatModel inside the citation pipeline."""
 
     responses: list = []
     prompts: list = []
+    schemas: list = []
 
     def __init__(self, request_handler, completion_args):
         del request_handler, completion_args
-        self.tokens = SimpleNamespace(pipeline=None)
+        self.tokens = None
 
-    def __or__(self, parser):
-        del parser
-        return self
-
-    def invoke(self, messages):
-        _FakeLlm.prompts.append(messages[0].content)
+    def structured(self, messages, schema):
+        _FakeLlm.prompts.append(messages[0].contents[0].text_content)
+        _FakeLlm.schemas.append(schema)
+        self.tokens = TokenUsageDTO(numInputTokens=10, numOutputTokens=5)
         response = _FakeLlm.responses.pop(0)
         if isinstance(response, Exception):
             raise response
-        return response
+        return parse_structured_output(schema, response)
 
 
 @contextmanager
 def _citation_pipeline(responses):
     _FakeLlm.responses = list(responses)
     _FakeLlm.prompts = []
+    _FakeLlm.schemas = []
     with (
         patch("iris.pipeline.shared.citation_pipeline.resolve_model", return_value="m"),
         patch("iris.pipeline.shared.citation_pipeline.LlmRequestHandler"),
-        patch(
-            "iris.pipeline.shared.citation_pipeline.IrisLangchainChatModel", _FakeLlm
-        ),
+        patch("iris.pipeline.shared.citation_pipeline.IrisChatModel", _FakeLlm),
     ):
         pipeline = CitationPipeline(local=True)
         yield pipeline
 
 
+def _labels(*items) -> str:
+    return json.dumps(
+        {
+            "labels": [
+                {"source": source, "keyword": keyword, "summary": summary}
+                for source, keyword, summary in items
+            ]
+        }
+    )
+
+
 def test_citation_pipeline_labels_all_cited_sources_in_one_call():
-    labels = json.dumps({"1": {"keyword": "Composition", "summary": "Parts die"}})
+    labels = _labels((1, "Composition", "Parts die"))
     with _citation_pipeline([labels]) as pipeline:
         result = pipeline(
             "Parts die. [src:1] Unused id. [src:9]",
@@ -406,7 +400,26 @@ def test_citation_pipeline_labels_all_cited_sources_in_one_call():
     )
     assert "Source 9" not in _FakeLlm.prompts[0]
     assert "write keywords and summaries in German" in _FakeLlm.prompts[0]
+    assert _FakeLlm.schemas == [CitationLabels]
     assert len(pipeline.tokens) == 1
+
+
+def test_citation_labels_are_made_safe_for_the_cite_block_and_unasked_ones_dropped():
+    labels = _labels((1, "A:B", "x [y]"), (5, "Other", "Not cited"))
+    with _citation_pipeline([labels]) as pipeline:
+        result = pipeline("Parts die. [src:1]", _registry_with_sources())
+
+    assert result == "Parts die. [cite:L:7:13:::A -B:x (y)]"
+
+
+def test_citation_label_call_sends_at_most_the_excerpt_cap_per_source():
+    registry = CitationSourceRegistry()
+    registry.register_page_chunk(_page_chunk("x" * (MAX_EXCERPT_CHARS + 500)))
+    with _citation_pipeline([_labels((1, "K", "S"))]) as pipeline:
+        pipeline("Long. [src:1]", registry)
+
+    assert "x" * MAX_EXCERPT_CHARS in _FakeLlm.prompts[0]
+    assert "x" * (MAX_EXCERPT_CHARS + 1) not in _FakeLlm.prompts[0]
 
 
 def test_citation_pipeline_sends_citations_without_labels_when_the_call_fails():
@@ -523,6 +536,10 @@ def _user(text):
     )
 
 
+def _texts(messages) -> list[str]:
+    return [m.contents[0].text_content for m in messages]
+
+
 def test_chat_history_and_summary_reach_the_agent_without_citations():
     pipeline = ChatPipeline.__new__(ChatPipeline)
     state = SimpleNamespace(
@@ -535,15 +552,15 @@ def test_chat_history_and_summary_reach_the_agent_without_citations():
         ],
     )
 
-    prompt = pipeline.assemble_prompt_with_history(state, "system")
-    messages = prompt.format_messages(agent_scratchpad=[])
+    texts = _texts(pipeline.build_prompt_messages(state, "system"))
 
-    texts = [m.content for m in messages]
     assert "Parts die with the whole." in texts
     assert all("[cite:" not in t for t in texts)
     assert any("Earlier: composition." in t and "[src:" not in t for t in texts)
     # Student text is not touched.
     assert "What is composition? [src:2]" in texts
+    # The stored history stays as it was.
+    assert "[src:1]" in state.message_history[1].contents[0].text_content
 
 
 def test_history_stays_unchanged_in_pipelines_without_citations():
@@ -556,42 +573,33 @@ def test_history_stays_unchanged_in_pipelines_without_citations():
         message_history=[_assistant("Kept. [cite:L:7:13:::C:S]")],
     )
 
-    messages = (
-        MinimalAgentPipeline()
-        .assemble_prompt_with_history(state, "s")
-        .format_messages(agent_scratchpad=[])
-    )
+    texts = _texts(MinimalAgentPipeline().build_prompt_messages(state, "s"))
 
-    assert messages[-1].content == "Kept. [cite:L:7:13:::C:S]"
+    assert texts[-1] == "Kept. [cite:L:7:13:::C:S]"
 
 
 def test_narration_between_tool_calls_is_sent_without_markers():
+    from tests.test_agent_intermediate_messages import (  # pylint: disable=import-outside-toplevel
+        ScriptedModel,
+        answer,
+        make_state,
+        tool_turn,
+    )
+
     pipeline = ChatPipeline.__new__(ChatPipeline)
+    pipeline.chat_mode = IrisChatMode.COURSE
     sent = []
     callback = SimpleNamespace(send_intermediate=sent.append)
-    message = AIMessage(
-        content="Slide 13 says parts die with the whole. [src:1] Let me check the FAQ.",
-        tool_calls=[{"name": "faq", "args": {}, "id": "c1"}],
-    )
-    action = AgentActionMessageLog(
-        tool="faq", tool_input={}, log="", message_log=[message]
+    model = ScriptedModel(
+        [
+            tool_turn(
+                "Slide 13 says parts die with the whole. [src:1] Let me check the FAQ."
+            ),
+            answer("Final. [src:1]"),
+        ]
     )
 
-    class Executor:
-        def iter(self, params, callbacks=None):  # pylint: disable=unused-argument
-            yield {"intermediate_step": [(action, "faq result")]}
-            yield {"output": "Final. [src:1]"}
-
-    state = SimpleNamespace(
-        activity_tracker=ActivityTracker(lambda items, seq: None),
-        callback=callback,
-        llm=None,
-        tokens=[],
-        tracing_context=None,
-    )
-    pipeline.on_agent_step = lambda state, step: None
-
-    output = pipeline._run_agent_iterations(state, Executor(), {})
+    output = pipeline._run_agent_loop(make_state(callback, model))
 
     assert sent == ["Slide 13 says parts die with the whole. Let me check the FAQ."]
     # The final answer keeps its markers; they become cite blocks afterwards.
@@ -743,9 +751,9 @@ def test_a_source_from_before_a_switch_stays_citable():
     retrieval = provide_lecture_retrieval(state)
     switch = provide_switch_chat_context(state)
 
-    first = retrieval()
+    first = retrieval("composition")
     switch("LECTURE_CHAT", 42)
-    second = retrieval()
+    second = retrieval("composition")
 
     assert "Source id: [src:1]" in first and "Source id: [src:2]" in second
     result = render_citations("A [src:1]. B [src:2].", state.citation_sources)
@@ -830,30 +838,9 @@ def _assert_mcq_clean(result):
 
 def test_mcq_tool_path_inserts_clean_json():
     state = SimpleNamespace(
-        mcq_parallel=False,
         result="Here is a question:\n[MCQ_RESULT]",
         mcq_result_storage={"mcq_json": json.dumps(_MCQ_WITH_MARKERS)},
     )
     mcq_post_agent_hook(state, SimpleNamespace(tokens=[]), lambda state, token: None)
 
     _assert_mcq_clean(state.result)
-
-
-@pytest.mark.parametrize("count", [1, 3])
-def test_mcq_parallel_paths_insert_clean_json(count):
-    queue = Queue()
-    for _ in range(count):
-        queue.put(("mcq", json.dumps(_MCQ_WITH_MARKERS)))
-    state = SimpleNamespace(
-        mcq_parallel=True,
-        mcq_count=count,
-        mcq_thread=SimpleNamespace(
-            join=lambda timeout=None: None, is_alive=lambda: False
-        ),
-        result="Here you go.",
-        mcq_result_storage={"queue": queue},
-    )
-    mcq_post_agent_hook(state, SimpleNamespace(tokens=[]), lambda state, token: None)
-
-    _assert_mcq_clean(state.result)
-    assert ('"mcq-set"' in state.result) == (count > 1)

@@ -1,20 +1,20 @@
 import json
 import os
-import threading
-from queue import Queue
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import SystemMessage
 from langchain_core.runnables import RunnableLambda
 
-from iris.domain.status.activity_dto import ActivityState
-from iris.pipeline.chat.mcq_chat_mixin import mcq_post_agent_hook, mcq_pre_agent_hook
-from iris.pipeline.shared.activity_tracker import ActivityTracker
+from iris.pipeline.chat.mcq_chat_mixin import mcq_post_agent_hook
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.shared.mcq_generation_pipeline import (
     McqGenerationPipeline,
+)
+from iris.tools.mcq_generation import (
+    MAX_QUESTIONS,
+    create_tool_generate_mcq_questions,
 )
 
 # ---------------------------------------------------------------------------
@@ -79,10 +79,7 @@ def _make_pipeline(llm_return: str) -> McqGenerationPipeline:
         "prompts",
         "templates",
     )
-    jinja_env = Environment(
-        loader=FileSystemLoader(template_dir),
-        autoescape=select_autoescape(["html", "xml", "j2"]),
-    )
+    jinja_env = prompt_environment(template_dir)
     pipeline.prompt_template = jinja_env.get_template("mcq_generation_prompt.j2")
     pipeline.llm = SimpleNamespace(
         tokens=SimpleNamespace(pipeline=None),
@@ -163,68 +160,68 @@ def test_multiple_correct_answers_raises():
         pipeline(command="Generate a question")
 
 
-def test_mcq_parallel_thread_reports_activity():
-    emitted = []
-    release_generation = threading.Event()
-    generation_started = threading.Event()
+class _FakeToolPipeline:
+    """Records how the MCQ tool calls the pipeline."""
 
-    class FakeMcqPipeline:
-        """Stub MCQ pipeline that signals generation start and blocks until released."""
+    def __init__(self):
+        self.tokens = []
+        self.calls = []
 
-        def __init__(self):
-            self.tokens = []
+    def __call__(self, **kwargs):
+        self.calls.append(("single", kwargs))
+        return VALID_SINGLE_MCQ
 
-        @staticmethod
-        def run_in_thread(**kwargs):
-            result_storage = kwargs["result_storage"]
-            result_storage["queue"] = Queue()
+    def generate_set(self, command, count, **kwargs):
+        self.calls.append(("set", {"command": command, "count": count, **kwargs}))
+        return VALID_MCQ_SET
 
-            def generate():
-                generation_started.set()
-                release_generation.wait(2)
-                result_storage["mcq_json"] = VALID_SINGLE_MCQ
-                result_storage["queue"].put(("mcq", VALID_SINGLE_MCQ))
-                result_storage["queue"].put(("done", None))
 
-            thread = threading.Thread(target=generate)
-            thread.start()
-            return thread
+def test_the_mcq_tool_generates_the_number_of_questions_the_agent_asks_for():
+    pipeline = _FakeToolPipeline()
+    storage = {}
+    tool = create_tool_generate_mcq_questions(
+        pipeline, [], MagicMock(), storage, language="German"
+    )
 
+    assert tool("Recursion") == "[MCQ_RESULT]"
+    assert pipeline.calls[-1][0] == "single"
+    assert storage["mcq_json"] == VALID_SINGLE_MCQ
+
+    tool("Sorting", count=3)
+    assert pipeline.calls[-1] == (
+        "set",
+        {
+            "command": "Sorting",
+            "count": 3,
+            "chat_history": [],
+            "language": "German",
+            "lecture_content": None,
+        },
+    )
+    assert storage["mcq_json"] == VALID_MCQ_SET
+
+    tool("Graphs", count=50)
+    assert pipeline.calls[-1][1]["count"] == MAX_QUESTIONS
+
+
+def test_the_quiz_replaces_the_placeholder_and_its_usage_is_billed():
+    pipeline = _FakeToolPipeline()
+    pipeline.tokens = ["usage"]
+    billed = []
     state = SimpleNamespace(
-        mcq_parallel=True,
-        mcq_count=1,
-        dto=SimpleNamespace(user=SimpleNamespace(lang_key="en")),
-        callback=MagicMock(),
-        activity_tracker=ActivityTracker(
-            lambda items, seq: emitted.append((seq, items))
-        ),
-        result="intro",
-        allow_lecture_tool=False,
+        result="Here is your quiz. [MCQ_RESULT]",
+        mcq_result_storage={"mcq_json": VALID_SINGLE_MCQ},
     )
 
-    mcq_pre_agent_hook(
-        state=state,
-        mcq_pipeline=FakeMcqPipeline(),
-        get_text_of_latest_user_message=lambda _state: "generate a question",
-        db=MagicMock(),
-        course_id=1,
-        chat_history=[],
-    )
-    assert generation_started.wait(2)
-    assert emitted[-1][1][0].name == "generate_mcq_questions"
-    assert emitted[-1][1][0].state == ActivityState.RUNNING
-
-    release_generation.set()
     mcq_post_agent_hook(
         state=state,
-        mcq_pipeline=FakeMcqPipeline(),
-        track_tokens=lambda _state, _token: None,
-        timeout=2,
+        mcq_pipeline=pipeline,
+        track_tokens=lambda _state, token: billed.append(token),
     )
 
-    assert emitted[-1][1][0].state == ActivityState.FINISHED
-    assert emitted[-1][1][0].duration_millis is not None
-    assert VALID_SINGLE_MCQ in state.result
+    assert state.result == "Here is your quiz. " + VALID_SINGLE_MCQ
+    assert billed == ["usage"]
+    assert not pipeline.tokens
 
 
 def test_prompt_curly_braces_not_parsed_as_variables():
@@ -252,81 +249,21 @@ def test_prompt_curly_braces_not_parsed_as_variables():
 
 
 # ---------------------------------------------------------------------------
-# run_in_thread tests
+# generate_set tests
 # ---------------------------------------------------------------------------
 
 
-def test_run_in_thread_single_question():
-    """run_in_thread with count=1 should store result and put it in queue."""
+def test_generate_set_returns_one_mcq_set_with_the_requested_questions():
     pipeline = _make_pipeline(VALID_SINGLE_MCQ)
-    storage = {}
-    thread = pipeline.run_in_thread(
-        command="Generate a question about math",
-        chat_history=None,
-        language="English",
-        result_storage=storage,
-        count=1,
-    )
-    thread.join(timeout=10)
 
-    # Should store in mcq_json for backward compat
-    assert "mcq_json" in storage
-    parsed = json.loads(storage["mcq_json"])
-    assert parsed["type"] == "mcq"
+    result = json.loads(pipeline.generate_set("Generate questions about math", 3))
 
-    # Queue should have mcq + done
-    q = storage["queue"]
-    items = []
-    while not q.empty():
-        items.append(q.get_nowait())
-    assert any(t == "mcq" for t, _ in items)
-    assert items[-1] == ("done", None)
+    assert result["type"] == "mcq-set"
+    assert len(result["questions"]) == 3
 
 
-def test_run_in_thread_error_on_failure():
-    """run_in_thread should put error in queue on failure."""
+def test_generate_set_raises_when_no_question_could_be_generated():
     pipeline = _make_pipeline("not valid json")
-    storage = {}
-    thread = pipeline.run_in_thread(
-        command="Generate a question",
-        chat_history=None,
-        language="English",
-        result_storage=storage,
-        count=1,
-    )
-    thread.join(timeout=10)
 
-    assert "error" in storage
-    q = storage["queue"]
-    items = []
-    while not q.empty():
-        items.append(q.get_nowait())
-    assert any(t == "error" for t, _ in items)
-    assert items[-1] == ("done", None)
-
-
-def test_run_in_thread_multiple_questions():
-    """run_in_thread with count>1 should generate multiple questions via queue."""
-    pipeline = _make_pipeline(VALID_SINGLE_MCQ)
-    storage = {}
-    thread = pipeline.run_in_thread(
-        command="Generate 3 questions about math",
-        chat_history=None,
-        language="English",
-        result_storage=storage,
-        count=3,
-    )
-    thread.join(timeout=30)
-
-    q = storage["queue"]
-    mcq_items = []
-    while not q.empty():
-        msg_type, data = q.get_nowait()
-        if msg_type == "mcq":
-            mcq_items.append(data)
-        elif msg_type == "done":
-            break
-    assert len(mcq_items) == 3
-    for item in mcq_items:
-        parsed = json.loads(item)
-        assert parsed["type"] == "mcq"
+    with pytest.raises(ValueError):
+        pipeline.generate_set("Generate questions", 2)

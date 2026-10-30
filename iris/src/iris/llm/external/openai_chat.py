@@ -1,7 +1,6 @@
 import copy
 import json
 import re
-import time
 from datetime import datetime
 from typing import (
     Any,
@@ -19,14 +18,7 @@ from typing import (
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langfuse.openai import AzureOpenAI, OpenAI
-from openai import (
-    APIConnectionError,
-    APIError,
-    APIStatusError,
-    ContentFilterFinishReasonError,
-    InternalServerError,
-    RateLimitError,
-)
+from openai import APIError, APIStatusError, ContentFilterFinishReasonError
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_message_function_tool_call import (
@@ -50,7 +42,14 @@ from ...domain.data.json_message_content_dto import JsonMessageContentDTO
 from ...domain.data.tool_call_dto import ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
 from ...llm import CompletionArguments
+from ...llm.errors import IncompleteModelResponse
 from ...llm.external.model import ChatModel
+from ...llm.retry import RetryState
+from ...llm.structured_output import (
+    json_schema_instruction,
+    schema_name,
+    strict_json_schema,
+)
 
 logger = get_logger(__name__)
 
@@ -64,26 +63,6 @@ ReasoningEffortValue = Literal["none", "minimal", "low", "medium", "high", "xhig
 _REASONING_EFFORT_INDEX = {
     effort: index for index, effort in enumerate(_REASONING_EFFORT_ORDER)
 }
-_RETRYABLE_OPENAI_ERRORS = (RateLimitError, APIConnectionError, InternalServerError)
-
-
-def _retry_after_openai_error(
-    attempt: int,
-    initial_delay: int,
-    backoff_factor: int,
-) -> None:
-    wait_time = initial_delay * (backoff_factor**attempt)
-    logger.exception("OpenAI error on attempt %s:", attempt + 1)
-    logger.info("Retrying in %s seconds...", wait_time)
-    time.sleep(wait_time)
-
-
-def _is_retryable_openai_error(error: Exception) -> bool:
-    if isinstance(error, _RETRYABLE_OPENAI_ERRORS):
-        return True
-    if isinstance(error, APIStatusError):
-        return error.status_code >= 500 or error.status_code in (408, 409)
-    return False
 
 
 def _close_stream(stream: Any) -> None:
@@ -170,12 +149,15 @@ def create_openai_tool_calls(tool_calls):
 
 def convert_to_open_ai_messages(
     messages: list[PyrisMessage],
+    replay_reasoning_content: bool = False,
 ) -> list[ChatCompletionMessageParam]:
     """
     Convert a list of PyrisMessage to a list of ChatCompletionMessageParam.
 
     Args:
         messages: List of PyrisMessage objects to convert
+        replay_reasoning_content: Send the reasoning text a tool-call turn
+            returned back with that turn (vLLM-served reasoning models)
 
     Returns:
         List of messages in OpenAI's format
@@ -207,6 +189,8 @@ def convert_to_open_ai_messages(
         # Add tool calls if present
         if isinstance(message, PyrisAIMessage) and message.tool_calls:
             openai_message["tool_calls"] = create_openai_tool_calls(message.tool_calls)
+            if replay_reasoning_content and message.reasoning_content:
+                openai_message["reasoning_content"] = message.reasoning_content
 
         openai_messages.append(openai_message)
 
@@ -354,12 +338,16 @@ def handle_responses_tool_message(content):
     return None
 
 
-def convert_to_responses_input(messages: list[PyrisMessage]) -> list[dict[str, Any]]:
+def convert_to_responses_input(
+    messages: list[PyrisMessage], replay_provider_items: bool = False
+) -> list[dict[str, Any]]:
     """
     Convert a list of PyrisMessage to a Responses API input array.
 
     Args:
         messages: List of PyrisMessage objects to convert
+        replay_provider_items: Send an assistant message's original output items
+            (with reasoning) instead of rebuilding it from text and tool calls
 
     Returns:
         List of Responses input items
@@ -372,6 +360,12 @@ def convert_to_responses_input(messages: list[PyrisMessage]) -> list[dict[str, A
                 tool_message = handle_responses_tool_message(content)
                 if tool_message:
                     responses_input.append(tool_message)
+            continue
+
+        if replay_provider_items and message.provider_items:
+            # The response this message came from, item by item and in order
+            # (reasoning, preamble text, function calls), exactly once.
+            responses_input.extend(copy.deepcopy(message.provider_items))
             continue
 
         message_content = create_responses_message_content(message.contents)
@@ -655,6 +649,31 @@ def extract_response_output_text(response) -> str:
     return "".join(texts)
 
 
+def _completed_answer_text(output_items) -> Optional[str]:
+    """The answer of a response that did not complete, if it was fully written.
+
+    Returns the text only when the response has message items and every one of
+    them was written completely; otherwise None. Streamed text alone is no proof
+    that the answer was complete, so a response without message items is
+    rejected.
+    """
+    messages = [
+        item for item in output_items if getattr(item, "type", None) == "message"
+    ]
+    if not messages or any(
+        getattr(item, "status", None) != "completed" for item in messages
+    ):
+        return None
+    texts = [
+        getattr(content, "text", "") or ""
+        for item in messages
+        for content in getattr(item, "content", []) or []
+        if getattr(content, "type", None) == "output_text"
+    ]
+    text = "".join(texts)
+    return text or None
+
+
 def raise_for_failed_responses_status(response) -> None:
     """Raise if a Responses API response ended with a failed status."""
     status = getattr(response, "status", None)
@@ -664,6 +683,22 @@ def raise_for_failed_responses_status(response) -> None:
     error = getattr(response, "error", None)
     logger.error("Responses API returned failed status: %s", error)
     raise RuntimeError(f"Responses API returned failed status: {error}")
+
+
+def reasoning_text(message_or_delta: Any) -> Optional[str]:
+    """The reasoning text an OpenAI-compatible server returned, if any.
+
+    vLLM reports it as ``reasoning_content`` (older) or ``reasoning`` (newer);
+    the OpenAI SDK keeps such unknown fields as extra attributes.
+    """
+    for name in ("reasoning_content", "reasoning"):
+        value = getattr(message_or_delta, name, None)
+        if value is None:
+            extra = getattr(message_or_delta, "model_extra", None) or {}
+            value = extra.get(name)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def convert_to_iris_message(
@@ -695,6 +730,7 @@ def convert_to_iris_message(
             contents=[TextMessageContentDTO(textContent=content)],
             sendAt=current_time,
             token_usage=token_usage,
+            reasoning_content=reasoning_text(message),
         )
 
     return PyrisMessage(
@@ -707,8 +743,25 @@ def convert_to_iris_message(
     )
 
 
+def _item_dict(item: Any) -> Any:
+    """A JSON-ready copy of a Responses output item (SDK model or plain object)."""
+    if hasattr(item, "model_dump"):
+        return item.model_dump(exclude_none=True)
+    if isinstance(item, dict):
+        return {key: _item_dict(value) for key, value in item.items()}
+    if isinstance(item, (list, tuple)):
+        return [_item_dict(value) for value in item]
+    if hasattr(item, "__dict__"):
+        return {
+            key: _item_dict(value)
+            for key, value in vars(item).items()
+            if value is not None
+        }
+    return item
+
+
 def convert_responses_to_iris_message(
-    response, model: str, fallback_output_text: str = ""
+    response, model: str, fallback_output_text: str = "", keep_items: bool = False
 ) -> PyrisMessage:
     """
     Convert a Responses API response to a PyrisMessage.
@@ -716,20 +769,66 @@ def convert_responses_to_iris_message(
     Args:
         response: The Responses API response to convert
         model: The model name used for the completion
+        keep_items: Keep the output items on a tool-call message, so the next
+            request of the tool loop can replay them (reasoning continuity)
 
     Returns:
         PyrisMessage or PyrisAIMessage depending on presence of function calls
+
+    Raises:
+        IncompleteModelResponse: The response stopped before it was complete and
+            contains function calls (which may be truncated; no tool may run) or
+            no completely written answer.
     """
-    output_items = getattr(response, "output", [])
+    output_items = getattr(response, "output", []) or []
     if response_has_refusal(output_items):
         raise ContentFilterFinishReasonError()
 
     status = getattr(response, "status", None)
     raise_for_failed_responses_status(response)
-    if status is not None and status != "completed":
-        logger.warning("Responses API returned non-completed status: %s", status)
-
     token_usage = create_token_usage(getattr(response, "usage", None), model)
+    function_calls = [
+        item for item in output_items if getattr(item, "type", None) == "function_call"
+    ]
+    unfinished_calls = [
+        item
+        for item in function_calls
+        if getattr(item, "status", None) not in (None, "completed")
+    ]
+    # Tools run only from a completed response (a missing status, which some
+    # gateways leave out, counts as completed) with completed call items.
+    if function_calls and (status not in (None, "completed") or unfinished_calls):
+        reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+        raise IncompleteModelResponse(
+            f"Responses API stopped before its tool calls were complete "
+            f"(status={status}, reason={reason})",
+            token_usage,
+        )
+    if status is not None and status != "completed":
+        # Only a fully written answer is usable from a response that stopped
+        # early; a cut during reasoning or inside the answer is a failure, not
+        # an empty or half answer.
+        completed_text = _completed_answer_text(output_items)
+        if completed_text is None:
+            reason = getattr(
+                getattr(response, "incomplete_details", None), "reason", None
+            )
+            raise IncompleteModelResponse(
+                f"Responses API stopped before the answer was complete "
+                f"(status={status}, reason={reason})",
+                token_usage,
+            )
+        logger.warning(
+            "Responses API returned non-completed status %s with a complete answer",
+            status,
+        )
+        return PyrisMessage(
+            sender=map_str_to_role("assistant"),
+            contents=[TextMessageContentDTO(textContent=completed_text)],
+            sendAt=datetime.now(),
+            token_usage=token_usage,
+        )
+
     current_time = datetime.now()
     output_text = extract_response_output_text(response) or fallback_output_text
     tool_calls = create_iris_tool_calls_from_responses(output_items)
@@ -740,6 +839,9 @@ def convert_responses_to_iris_message(
             contents=[TextMessageContentDTO(textContent=output_text)],
             sendAt=current_time,
             token_usage=token_usage,
+            provider_items=(
+                [_item_dict(item) for item in output_items] if keep_items else None
+            ),
         )
 
     return PyrisMessage(
@@ -783,6 +885,32 @@ class OpenAIChatModel(ChatModel):
     # limit also covers reasoning, so a reasoning model would otherwise spend a
     # tight budget (e.g. 30 tokens for a session title) before answering.
     reasoning_token_allowance: int = Field(default=0, ge=0)
+    # Client timeout of one request, in seconds. A timed-out request is retried
+    # once, so a call can wait about twice this long. Keep it below the Artemis
+    # job timeout for models that answer students live.
+    request_timeout_seconds: float = Field(default=REQUEST_TIMEOUT_SECONDS, gt=0)
+    # Send agent tool schemas with strict: true, so the provider enforces them.
+    # Unset: on for the Responses API path (OpenAI/Azure), off for Chat
+    # Completions, where OpenAI-compatible gateways may not support it.
+    strict_tools: Optional[bool] = None
+    supports_tool_choice: bool = True
+    # Responses API only: request the encrypted reasoning items and send them back
+    # within the same tool loop, so the model keeps its reasoning across tool
+    # calls. Probed on gpt-6-luna and gpt-6.1-sol through Logos (store=false).
+    replay_reasoning_items: bool = True
+    # Chat Completions only (vLLM-served gpt-oss/Qwen): send the reasoning text a
+    # tool-call turn returned back with that turn. Off until verified per server.
+    replay_reasoning_content: bool = False
+    # Whether the endpoint enforces a JSON schema (OpenAI/Azure json_schema with
+    # strict, vLLM guided decoding). Without it a schema request falls back to
+    # JSON mode and the answer is validated afterwards.
+    supports_structured_output: bool = True
+
+    @property
+    def effective_strict_tools(self) -> bool:
+        if self.strict_tools is None:
+            return self.use_responses_api
+        return self.strict_tools
 
     @model_validator(mode="after")
     def validate_logprobs_config(self):
@@ -948,10 +1076,12 @@ class OpenAIChatModel(ChatModel):
         stream_handler: Callable[[Optional[str]], None],
     ) -> PyrisMessage:
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_call_fragments: dict[int, dict[str, Any]] = {}
         usage: Optional[CompletionUsage] = None
         tool_call_turn = False
         reset_sent = False
+        stopped_at_limit = False
 
         for chunk in response:
             chunk_usage = getattr(chunk, "usage", None)
@@ -961,10 +1091,16 @@ class OpenAIChatModel(ChatModel):
             for choice in getattr(chunk, "choices", []) or []:
                 if getattr(choice, "finish_reason", None) == "content_filter":
                     raise ContentFilterFinishReasonError()
+                if getattr(choice, "finish_reason", None) == "length":
+                    stopped_at_limit = True
 
                 delta = getattr(choice, "delta", None)
                 if delta is None:
                     continue
+
+                reasoning_delta = reasoning_text(delta)
+                if reasoning_delta:
+                    reasoning_parts.append(reasoning_delta)
 
                 tool_calls = getattr(delta, "tool_calls", None)
                 if tool_calls:
@@ -988,6 +1124,12 @@ class OpenAIChatModel(ChatModel):
                 self.model,
             )
 
+        if stopped_at_limit and tool_call_fragments:
+            raise IncompleteModelResponse(
+                "Chat completion stopped at the output limit inside a tool call",
+                create_token_usage(usage, self.model),
+            )
+
         message = ChatCompletionMessage(
             role="assistant",
             content="".join(content_parts),
@@ -997,7 +1139,10 @@ class OpenAIChatModel(ChatModel):
                 else None
             ),
         )
-        return convert_to_iris_message(message, usage, self.model)
+        converted = convert_to_iris_message(message, usage, self.model)
+        if isinstance(converted, PyrisAIMessage) and reasoning_parts:
+            converted.reasoning_content = "".join(reasoning_parts)
+        return converted
 
     def _responses_model_name(self) -> str:
         return self.model
@@ -1015,6 +1160,8 @@ class OpenAIChatModel(ChatModel):
             "input": responses_input,
             "store": False,
         }
+        if self.replay_reasoning_items:
+            params["include"] = ["reasoning.encrypted_content"]
 
         if arguments.temperature is not None and self.supports_temperature:
             params["temperature"] = arguments.temperature
@@ -1026,7 +1173,16 @@ class OpenAIChatModel(ChatModel):
         if arguments.max_tokens is not None:
             params["max_output_tokens"] = self._output_token_limit(arguments.max_tokens)
 
-        if arguments.response_format == "JSON":
+        if arguments.response_schema is not None and self.supports_structured_output:
+            params["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": schema_name(arguments.response_schema),
+                    "schema": strict_json_schema(arguments.response_schema),
+                    "strict": True,
+                }
+            }
+        elif arguments.response_format == "JSON" or arguments.response_schema:
             params["text"] = {"format": {"type": "json_object"}}
 
         if tools:
@@ -1109,6 +1265,7 @@ class OpenAIChatModel(ChatModel):
                     fallback_output_text=(
                         "" if tool_call_turn else "".join(content_parts)
                     ),
+                    keep_items=self.replay_reasoning_items,
                 )
 
             if event_type == "response.incomplete":
@@ -1121,6 +1278,7 @@ class OpenAIChatModel(ChatModel):
                     fallback_output_text=(
                         "" if tool_call_turn else "".join(content_parts)
                     ),
+                    keep_items=self.replay_reasoning_items,
                 )
 
             if event_type == "response.failed":
@@ -1139,6 +1297,8 @@ class OpenAIChatModel(ChatModel):
         )
         raise RuntimeError("Responses stream ended without a final response")
 
+    # A span, not a generation: the langfuse.openai client already records each
+    # provider request as a generation with model and usage.
     @observe(name="OpenAI Chat Completion")
     def chat(
         self,
@@ -1148,21 +1308,39 @@ class OpenAIChatModel(ChatModel):
             Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ) -> PyrisMessage:
-        # noinspection PyTypeChecker
-        retries = 5
-        backoff_factor = 2
-        initial_delay = 1
+        retry_state = RetryState(cancel_event=arguments.cancel_event)
         client = self.get_client()
-        # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
+
+        if (
+            arguments.response_schema is not None
+            and not self.supports_structured_output
+        ):
+            # JSON mode only: the schema reaches the model as an instruction.
+            messages = list(messages) + [
+                PyrisMessage(
+                    sender=map_str_to_role("system"),
+                    contents=[
+                        TextMessageContentDTO(
+                            textContent=json_schema_instruction(
+                                arguments.response_schema
+                            )
+                        )
+                    ],
+                )
+            ]
 
         if self.use_responses_api:
-            responses_input = convert_to_responses_input(messages)
+            responses_input = convert_to_responses_input(
+                messages, replay_provider_items=self.replay_reasoning_items
+            )
         else:
-            messages = convert_to_open_ai_messages(messages)
+            messages = convert_to_open_ai_messages(
+                messages, replay_reasoning_content=self.replay_reasoning_content
+            )
             if self.leading_system_message_only:
                 messages = keep_system_messages_leading(messages)
 
-        for attempt in range(retries):
+        for attempt in range(retry_state.max_attempts):
             try:
                 if self.use_responses_api:
                     if arguments.stream_handler is not None:
@@ -1182,6 +1360,7 @@ class OpenAIChatModel(ChatModel):
                     return convert_responses_to_iris_message(
                         response,
                         self._responses_model_name(),
+                        keep_items=self.replay_reasoning_items,
                     )
 
                 params: dict[str, Any] = {"model": self.model, "messages": messages}
@@ -1223,7 +1402,19 @@ class OpenAIChatModel(ChatModel):
                             1, min(int(arguments.top_logprobs), 20)
                         )
 
-                if arguments.response_format == "JSON":
+                if (
+                    arguments.response_schema is not None
+                    and self.supports_structured_output
+                ):
+                    params["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": schema_name(arguments.response_schema),
+                            "schema": strict_json_schema(arguments.response_schema),
+                            "strict": True,
+                        },
+                    }
+                elif arguments.response_format == "JSON" or arguments.response_schema:
                     params["response_format"] = ResponseFormatJSONObject(
                         type="json_object"
                     )
@@ -1253,6 +1444,13 @@ class OpenAIChatModel(ChatModel):
                     # We don't want to retry because the same message will likely be rejected again.
                     # Raise an exception to trigger the global error handler and report a fatal error to the client.
                     raise ContentFilterFinishReasonError()
+                if choice.finish_reason == "length" and choice.message.tool_calls:
+                    # The output limit cut the tool call arguments; running the
+                    # tool with them would act on truncated input.
+                    raise IncompleteModelResponse(
+                        "Chat completion stopped at the output limit inside a tool call",
+                        create_token_usage(usage, self.model),
+                    )
 
                 if choice.message is None or (
                     (choice.message.content is None or len(choice.message.content) == 0)
@@ -1272,36 +1470,31 @@ class OpenAIChatModel(ChatModel):
                     self.model,
                     getattr(choice, "logprobs", None),
                 )
-            except (RateLimitError, APIConnectionError, InternalServerError):
-                if arguments.stream_handler is not None:
-                    arguments.stream_handler(None)
-                _retry_after_openai_error(attempt, initial_delay, backoff_factor)
-            except APIStatusError as error:
-                # 408/409 are transient (the SDK's own retry predicate retries
-                # them); since the client runs with max_retries=0, this loop is
-                # the only retry layer.
-                if _is_retryable_openai_error(error):
-                    if arguments.stream_handler is not None:
-                        arguments.stream_handler(None)
-                    _retry_after_openai_error(attempt, initial_delay, backoff_factor)
-                else:
+            except APIError as error:
+                # The client runs with max_retries=0, so this loop is the only
+                # retry layer (see iris.llm.retry for the policy).
+                if not retry_state.should_retry(error, attempt):
                     logger.exception(
-                        "Non-retryable OpenAI API status error for model id=%s "
-                        "(model=%s, status_code=%s):",
+                        "OpenAI API error for model id=%s (model=%s, status_code=%s) "
+                        "on attempt %d; not retrying:",
                         self.id,
                         self.model,
-                        error.status_code,
+                        getattr(error, "status_code", None),
+                        attempt + 1,
                     )
                     raise
-            except APIError:
-                logger.exception(
-                    "Non-retryable OpenAI API error for model id=%s (model=%s):",
+                logger.warning(
+                    "OpenAI API error for model id=%s (model=%s) on attempt %d: %s",
                     self.id,
                     self.model,
+                    attempt + 1,
+                    error,
                 )
-                raise
+                if arguments.stream_handler is not None:
+                    arguments.stream_handler(None)
+                retry_state.wait(error, attempt)
         raise RuntimeError(
-            f"Failed to get response from OpenAI after {retries} retries"
+            f"Failed to get response from OpenAI after {retry_state.max_attempts} attempts"
         )
 
 
@@ -1326,13 +1519,13 @@ class DirectOpenAIChatModel(OpenAIChatModel):
             self._client = OpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
-                timeout=REQUEST_TIMEOUT_SECONDS,
+                timeout=self.request_timeout_seconds,
                 max_retries=0,
             )
         else:
             self._client = OpenAI(
                 api_key=self.api_key,
-                timeout=REQUEST_TIMEOUT_SECONDS,
+                timeout=self.request_timeout_seconds,
                 max_retries=0,
             )
 
@@ -1359,7 +1552,7 @@ class AzureOpenAIChatModel(OpenAIChatModel):
                 base_url=self.endpoint.rstrip("/") + "/openai/v1",
                 api_key=self.api_key,
                 default_headers={"api-key": self.api_key},
-                timeout=REQUEST_TIMEOUT_SECONDS,
+                timeout=self.request_timeout_seconds,
                 max_retries=0,
             )
             return
@@ -1369,7 +1562,7 @@ class AzureOpenAIChatModel(OpenAIChatModel):
             azure_deployment=self.azure_deployment,
             api_version=self.api_version,
             api_key=self.api_key,
-            timeout=REQUEST_TIMEOUT_SECONDS,
+            timeout=self.request_timeout_seconds,
             max_retries=0,
         )
 

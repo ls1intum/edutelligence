@@ -22,7 +22,6 @@ from iris.retrieval.lecture.lecture_page_chunk_retrieval import (  # noqa: E402
 )
 from iris.retrieval.lecture.lecture_retrieval import (  # noqa: E402
     LectureRetrieval,
-    QueryRewriteMode,
 )
 from iris.retrieval.lecture.lecture_unit_segment_retrieval import (  # noqa: E402
     LectureUnitSegmentRetrieval,
@@ -116,17 +115,6 @@ def _make_retrieval(probe_objects=None) -> LectureRetrieval:
         SimpleNamespace(objects=probe_objects if probe_objects is not None else [])
     )
 
-    retrieval.rewrite_student_query = MagicMock(
-        side_effect=lambda _history, _query, _language, _course, mode: (
-            f"rewrite-{mode.value}"
-        )
-    )
-    retrieval.rewrite_elaborated_query = MagicMock(
-        side_effect=lambda _history, _query, _language, _course, mode: (
-            f"hyde-{mode.value}"
-        )
-    )
-
     retrieval.llm_embedding = MagicMock()
     retrieval.llm_embedding.embed.side_effect = lambda query: [len(query)]
 
@@ -151,33 +139,22 @@ def test_no_transcriptions_skips_transcription_domain_and_caches_probe():
     ]
 
     result = retrieval(
-        "student query",
+        search_query="merge sort recurrence",
         course_id=1,
-        chat_history=[],
         lecture_id=2,
         lecture_unit_id=3,
     )
 
-    assert retrieval.rewrite_student_query.call_count == 1
-    assert retrieval.rewrite_elaborated_query.call_count == 1
-    assert retrieval.rewrite_student_query.call_args.args[-1] == (
-        QueryRewriteMode.LECTURE_PAGES
-    )
-    assert retrieval.rewrite_elaborated_query.call_args.args[-1] == (
-        QueryRewriteMode.LECTURE_PAGES
-    )
     retrieval.lecture_transcription_pipeline.assert_not_called()
     retrieval.get_lecture_transcription_of_lecture_unit.assert_not_called()
     assert result.lecture_transcriptions == []
 
     segment_call = retrieval.lecture_unit_segment_pipeline.call_args
-    assert segment_call.args[1] == "rewrite-lecture_pages"
-    assert segment_call.args[2] == "hyde-lecture_pages"
+    assert segment_call.args[0] == "merge sort recurrence"
 
     retrieval(
-        "student query",
+        search_query="merge sort recurrence",
         course_id=1,
-        chat_history=[],
         lecture_id=2,
         lecture_unit_id=3,
     )
@@ -187,29 +164,85 @@ def test_no_transcriptions_skips_transcription_domain_and_caches_probe():
     )
 
 
-def test_existing_transcriptions_keep_all_rewrites_and_pipelines():
+def test_the_agent_query_is_searched_in_every_domain_without_rewrites():
     retrieval = _make_retrieval(probe_objects=[SimpleNamespace(uuid=uuid4())])
     retrieval.lecture_unit_segment_pipeline.return_value = [_segment()]
     retrieval.lecture_transcription_pipeline.return_value = [_transcription()]
     retrieval.lecture_unit_page_chunk_pipeline.return_value = [_page_chunk()]
 
     result = retrieval(
-        "student query",
+        search_query="merge sort recurrence",
         course_id=1,
-        chat_history=[],
         lecture_id=2,
         lecture_unit_id=3,
     )
 
-    assert retrieval.rewrite_student_query.call_count == 2
-    assert retrieval.rewrite_elaborated_query.call_count == 2
-    retrieval.lecture_unit_segment_pipeline.assert_called_once()
-    retrieval.lecture_transcription_pipeline.assert_called_once()
-    retrieval.lecture_unit_page_chunk_pipeline.assert_called_once()
+    for pipeline in (
+        retrieval.lecture_unit_segment_pipeline,
+        retrieval.lecture_transcription_pipeline,
+        retrieval.lecture_unit_page_chunk_pipeline,
+    ):
+        pipeline.assert_called_once()
+        assert pipeline.call_args.args[0] == "merge sort recurrence"
+        assert pipeline.call_args.kwargs["query_vector"] == [
+            len("merge sort recurrence")
+        ]
+    # The query is embedded once and the vector is shared.
+    retrieval.llm_embedding.embed.assert_called_once_with("merge sort recurrence")
     assert result.lecture_transcriptions
-    assert (
-        retrieval.lecture_transcription_collection.query.fetch_objects.call_count == 1
+    rerank_queries = {
+        call.args[0] for call in retrieval.cohere_client.rerank.call_args_list
+    }
+    assert rerank_queries == {"merge sort recurrence"}
+
+
+def test_lecture_and_faq_retrieval_resolve_no_chat_model(monkeypatch):
+    """The agent writes the search query, so retrieval needs no chat model; the
+    reranker follows local mode."""
+    from iris.retrieval import basic_retrieval, faq_retrieval
+    from iris.retrieval.lecture import (
+        lecture_page_chunk_retrieval,
+        lecture_retrieval,
+        lecture_transcription_retrieval,
+        lecture_unit_segment_retrieval,
     )
+
+    roles = []
+
+    def resolve(pipeline_id, _variant, role, local):
+        roles.append((pipeline_id, role, local))
+        return "shared-model"
+
+    for module in (
+        basic_retrieval,
+        lecture_retrieval,
+        lecture_page_chunk_retrieval,
+        lecture_transcription_retrieval,
+        lecture_unit_segment_retrieval,
+    ):
+        monkeypatch.setattr(module, "resolve_model", resolve)
+        monkeypatch.setattr(
+            module,
+            "LlmRequestHandler",
+            lambda model_id: SimpleNamespace(model_id=model_id),
+        )
+        if hasattr(module, "RerankRequestHandler"):
+            monkeypatch.setattr(module, "RerankRequestHandler", MagicMock())
+        for name in dir(module):
+            if name.startswith("init_") and name.endswith("_schema"):
+                monkeypatch.setattr(module, name, MagicMock())
+    monkeypatch.setattr(faq_retrieval, "init_faq_schema", MagicMock())
+
+    lecture_retrieval.LectureRetrieval(MagicMock(), local=True)
+    faq_retrieval.FaqRetrieval(MagicMock())
+
+    assert roles
+    assert all(role in {"embedding", "reranker"} for _pipeline, role, _local in roles)
+    # Only the reranker follows the course's local mode; the query embedding has
+    # to match the ingested vectors either way.
+    assert {local for _pipeline, role, local in roles if role == "reranker"} == {True}
+    assert {local for _pipeline, role, local in roles if role == "embedding"} == {False}
+    assert len([1 for _pipeline, role, _local in roles if role == "reranker"]) == 4
 
 
 def test_final_reranks_run_concurrently_and_preserve_results():
@@ -219,14 +252,6 @@ def test_final_reranks_run_concurrently_and_preserve_results():
     reranked_transcription = _transcription("Reranked transcript")
     reranked_page_chunk = _page_chunk("Reranked page")
 
-    retrieval.run_parallel_rewrite_tasks = MagicMock(
-        return_value=(
-            "page rewrite",
-            "transcription rewrite",
-            "page hyde",
-            "trans hyde",
-        )
-    )
     retrieval.lecture_unit_segment_pipeline.return_value = []
     retrieval.lecture_transcription_pipeline.return_value = [transcription]
     retrieval.lecture_unit_page_chunk_pipeline.return_value = [page_chunk]
@@ -245,9 +270,8 @@ def test_final_reranks_run_concurrently_and_preserve_results():
     retrieval.cohere_client.rerank.side_effect = rerank
 
     result = retrieval(
-        "student query",
+        search_query="student query",
         course_id=1,
-        chat_history=[],
         lecture_id=2,
         lecture_unit_id=3,
     )
@@ -260,34 +284,7 @@ def test_final_reranks_run_concurrently_and_preserve_results():
     } == {"segment_text", "page_text_content"}
 
 
-def test_distinct_queries_embed_once_and_subpipeline_fallback_still_embeds():
-    retrieval = _make_retrieval(probe_objects=[SimpleNamespace(uuid=uuid4())])
-    retrieval.run_parallel_rewrite_tasks = MagicMock(
-        return_value=("same query", "same query", "same query", "same query")
-    )
-    retrieval.lecture_unit_segment_pipeline.return_value = []
-    retrieval.lecture_transcription_pipeline.return_value = []
-    retrieval.lecture_unit_page_chunk_pipeline.return_value = []
-
-    retrieval(
-        "student query",
-        course_id=1,
-        chat_history=[],
-        lecture_id=2,
-        lecture_unit_id=3,
-    )
-
-    retrieval.llm_embedding.embed.assert_called_once_with("same query")
-
-    segment_call = retrieval.lecture_unit_segment_pipeline.call_args
-    transcription_call = retrieval.lecture_transcription_pipeline.call_args
-    page_chunk_call = retrieval.lecture_unit_page_chunk_pipeline.call_args
-    assert segment_call.kwargs["rewritten_query_vector"] == [len("same query")]
-    assert transcription_call.kwargs["hypothetical_answer_vector"] == [
-        len("same query")
-    ]
-    assert page_chunk_call.kwargs["rewritten_query_vector"] == [len("same query")]
-
+def test_subpipelines_embed_the_query_themselves_without_a_vector():
     segment_retrieval = LectureUnitSegmentRetrieval.__new__(LectureUnitSegmentRetrieval)
     segment_retrieval.llm_embedding = MagicMock()
     segment_retrieval.llm_embedding.embed.return_value = [1, 2, 3]

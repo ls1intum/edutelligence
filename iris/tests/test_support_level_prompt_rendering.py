@@ -1,7 +1,8 @@
 import os
 
 import pytest
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+from iris.pipeline.prompts.environment import prompt_environment
 
 TEMPLATE_DIR = os.path.join(
     os.path.dirname(__file__),
@@ -25,10 +26,7 @@ CHAT_MODES = [
 
 
 def _render_template(template_name: str, context: dict) -> str:
-    env = Environment(
-        loader=FileSystemLoader(TEMPLATE_DIR),
-        autoescape=select_autoescape(["html", "xml", "j2"]),
-    )
+    env = prompt_environment(TEMPLATE_DIR)
     template = env.get_template(template_name)
     return template.render(context)
 
@@ -55,7 +53,6 @@ def _system_prompt_context(chat_mode: str, support_level: str) -> dict:
         "start_date": "",
         "end_date": "",
         "text_exercise_submission": "",
-        "mcq_parallel": False,
     }
 
 
@@ -130,3 +127,15 @@ def test_guide_prompt_moderate_support_level_injects_nothing():
     assert "Socratic" not in rendered
     assert "comprehensive help mode" not in rendered
     assert "minimal help mode" not in rendered
+
+
+@pytest.mark.parametrize("support_level", ["low", "moderate", "high"])
+def test_renamed_exercise_algorithm_counts_as_a_solution(support_level):
+    # A pressured answer once gave a complete insertion sort as a renamed
+    # "sketch"; the self-check rule must close that for every support level.
+    prompt = _render_template(
+        "chat_system_prompt.j2",
+        _system_prompt_context("PROGRAMMING_EXERCISE_CHAT", support_level),
+    )
+
+    assert "is a solution even when it is renamed" in prompt

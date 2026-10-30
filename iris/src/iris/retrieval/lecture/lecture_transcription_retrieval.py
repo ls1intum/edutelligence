@@ -1,4 +1,3 @@
-from langchain_core.output_parsers import StrOutputParser
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
@@ -7,10 +6,6 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureTranscriptionRetrievalDTO,
     LectureUnitRetrievalDTO,
 )
-from iris.llm import (
-    CompletionArguments,
-)
-from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
 from iris.llm.request_handler.llm_request_handler import (
     LlmRequestHandler,
@@ -20,7 +15,7 @@ from iris.llm.request_handler.rerank_request_handler import (
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.retrieval.lecture.lecture_visibility import is_transcription_visible
-from iris.tracing import TracedThreadPoolExecutor, observe
+from iris.tracing import observe
 from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -45,23 +40,16 @@ class LectureTranscriptionRetrieval(SubPipeline):
     def __init__(self, client: WeaviateClient, local: bool = False):
         super().__init__(implementation_id="lecture_transcriptions_retrieval_pipeline")
         pipeline_id = "lecture_transcriptions_retrieval_pipeline"
-        chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
         embedding_model = resolve_model(
             pipeline_id, "default", "embedding", local=False
         )
-        request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
-        self.llm = IrisLangchainChatModel(
-            request_handler=request_handler, completion_args=completion_args
-        )
         self.llm_embedding = LlmRequestHandler(embedding_model)
-        self.pipeline = self.llm | StrOutputParser()
         self.collection = init_lecture_transcription_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.lecture_unit_page_chunk_collection = init_lecture_unit_page_chunk_schema(
             client
         )
-        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=False)
+        reranker_id = resolve_model(pipeline_id, "default", "reranker", local=local)
         self.cohere_client = RerankRequestHandler(reranker_id)
         self.tokens = []
         # Per-request cache of lecture unit metadata, keyed by
@@ -73,61 +61,33 @@ class LectureTranscriptionRetrieval(SubPipeline):
     @observe(name="Lecture Transcription Retrieval")
     def __call__(
         self,
-        student_query: str,
-        rewritten_query: str,
-        hypothetical_answer: str,
+        query: str,
         lecture_unit_dto: LectureUnitRetrievalDTO,
         result_limit: int = 10,
         hybrid_factor: float = 0.9,
         top_n_reranked_results: int = 7,
-        rewritten_query_vector=None,
-        hypothetical_answer_vector=None,
+        query_vector=None,
     ):
-        # The two searches (embed + hybrid search each) are independent;
-        # run them concurrently.
-        with TracedThreadPoolExecutor(max_workers=2) as executor:
-            rewritten_future = executor.submit(
-                self.search_in_db,
-                lecture_unit_dto,
-                rewritten_query,
-                hybrid_factor,
-                result_limit,
-                query_vector=rewritten_query_vector,
-            )
-            hypothetical_future = executor.submit(
-                self.search_in_db,
-                lecture_unit_dto,
-                hypothetical_answer,
-                hybrid_factor,
-                result_limit,
-                query_vector=hypothetical_answer_vector,
-            )
-            results_rewritten_query = rewritten_future.result()
-            results_hypothetical_answer = hypothetical_future.result()
+        results = self.search_in_db(
+            lecture_unit_dto,
+            query,
+            hybrid_factor,
+            result_limit,
+            query_vector=query_vector,
+        )
+        lecture_transcription_retrieval_dtos = [
+            dto
+            for item in results
+            if (dto := self.generate_retrieval_dtos(item.properties, str(item.uuid)))
+            is not None
+        ]
 
-        unique = {}
-        for segment in results_hypothetical_answer + results_rewritten_query:
-            unique[segment.uuid] = segment
-        results = list(unique.values())
-        lecture_transcription_retrieval_dtos = []
-        for lecture_transcription_segment in results:
-            lecture_transcription_retrieval_dto = self.generate_retrieval_dtos(
-                lecture_transcription_segment.properties,
-                str(lecture_transcription_segment.uuid),
-            )
-            if lecture_transcription_retrieval_dto is not None:
-                lecture_transcription_retrieval_dtos.append(
-                    lecture_transcription_retrieval_dto
-                )
-
-        reranked_answers = self.cohere_client.rerank(
-            query=student_query,
+        return self.cohere_client.rerank(
+            query=query,
             documents=lecture_transcription_retrieval_dtos,
             top_n=top_n_reranked_results,
             content_field_name="segment_text",
         )
-
-        return reranked_answers
 
     @observe(name="Lecture Transcription: Search in DB")
     def search_in_db(
