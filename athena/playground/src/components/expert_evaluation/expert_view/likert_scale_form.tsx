@@ -46,7 +46,7 @@ export default function LikertScaleForm(likertScaleFormProps: LikertScaleFormPro
                 {Object.entries(feedback).map(([feedbackType, feedbackList]) => (
                     <div key={feedbackType} className="flex-1 min-w-[480px] flex flex-col">
                         {/* Render TextSubmissionDetail */}
-                        <div className="flex-grow flex flex-col mb-4">
+                        <div className="grow flex flex-col mb-4">
                             <TextSubmissionDetail
                                 identifier={`id-${submission.id}-${feedbackType}`}
                                 key={submission.id}
