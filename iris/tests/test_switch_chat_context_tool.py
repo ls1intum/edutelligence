@@ -22,6 +22,7 @@ from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
 from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
+from iris.pipeline.shared.citation_sources import CitationSourceRegistry
 from iris.pipeline.shared.utils import generate_structured_tool_from_function
 from iris.tools.chat_tool_providers import (
     provide_additional_exercise_details,
@@ -462,7 +463,7 @@ def test_mcq_generation_follows_the_switch_from_lecture_a_to_lecture_b():
 
 
 def test_switch_clears_lecture_content_of_the_previous_context():
-    """Content of lecture A must not end up as a citation in the answer about B."""
+    """The point-out tool must not move the student to content of lecture A after a switch to B."""
     state = _lecture_chat_state(
         _dto(
             chat_mode=IrisChatMode.LECTURE,
@@ -478,7 +479,7 @@ def test_switch_clears_lecture_content_of_the_previous_context():
 
 
 def test_cancelling_a_switch_clears_the_content_of_the_cancelled_target():
-    """A to B to A: content retrieved for B must not be cited in the answer about A."""
+    """A to B to A: the point-out tool must not use content retrieved for B in the answer about A."""
     state = _lecture_chat_state(
         _dto(
             chat_mode=IrisChatMode.LECTURE,
@@ -525,34 +526,32 @@ def _citation_run(pending_context_switch):
     pipeline = ChatPipeline.__new__(ChatPipeline)
     pipeline.citation_pipeline = MagicMock(return_value="cited answer")
     pipeline.citation_pipeline.tokens = []
-    current_view = LectureRetrievalDTO(
-        lecture_unit_segments=[],
-        lecture_transcriptions=[],
-        lecture_unit_page_chunks=[],
-    )
+    registry = CitationSourceRegistry()
     state = SimpleNamespace(
         dto=SimpleNamespace(settings=None, user=SimpleNamespace(lang_key="en")),
         variant=SimpleNamespace(id="default"),
-        faq_storage={},
-        lecture_content_storage={"current_view": current_view},
+        citation_sources=registry,
+        answer_language="English",
         pending_context_switch=pending_context_switch,
     )
-    pipeline._add_citations(state, "answer")  # pylint: disable=protected-access
-    return pipeline.citation_pipeline, current_view
+    # pylint: disable-next=protected-access
+    result = pipeline._add_citations(state, "answer [src:1]")
+    return pipeline.citation_pipeline, registry, result
 
 
-def test_citations_use_the_current_view_without_a_switch():
-    citation_pipeline, current_view = _citation_run(None)
+@pytest.mark.parametrize(
+    "pending_context_switch",
+    [None, SuggestedContextDTO(mode=IrisChatMode.LECTURE, entity_id=42)],
+)
+def test_citations_use_every_source_of_the_run_also_after_a_switch(
+    pending_context_switch,
+):
+    """The agent names its sources itself, so a switch does not hide any of them."""
+    citation_pipeline, registry, result = _citation_run(pending_context_switch)
 
-    assert citation_pipeline.call_args.args[0] is current_view
-
-
-def test_citations_skip_the_current_view_of_the_original_context_after_a_switch():
-    citation_pipeline, _ = _citation_run(
-        SuggestedContextDTO(mode=IrisChatMode.LECTURE, entity_id=42)
-    )
-
-    citation_pipeline.assert_not_called()
+    assert result == "cited answer"
+    citation_pipeline.assert_called_once()
+    assert citation_pipeline.call_args.args == ("answer [src:1]", registry)
 
 
 def test_switch_to_the_active_context_keeps_its_lecture_content():
@@ -563,12 +562,12 @@ def test_switch_to_the_active_context_keeps_its_lecture_content():
             lectures=_lectures(),
         )
     )
-    current_view = object()
-    state.lecture_content_storage["current_view"] = current_view
+    content = object()
+    state.lecture_content_storage["content"] = content
 
     provide_switch_chat_context(state)("LECTURE_CHAT", 41)
 
-    assert state.lecture_content_storage["current_view"] is current_view
+    assert state.lecture_content_storage["content"] is content
 
 
 def test_lecture_list_reaches_the_agent_without_indexed_lecture_content():

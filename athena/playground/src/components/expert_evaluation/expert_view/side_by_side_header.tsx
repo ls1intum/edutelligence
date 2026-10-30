@@ -67,9 +67,9 @@ export default function SideBySideHeader(sideBySideHeaderProps: SideBySideHeader
                                 {metrics.map((metric, index) => (
                                     <div key={index} className="border border-gray-300 rounded-md p-4">
                                         <h2 className="font-semibold mb-4">{metric.title}</h2>
-                                        <ReactMarkdown rehypePlugins={[rehypeRaw]} className="prose-sm">
-                                            {metric.description}
-                                        </ReactMarkdown>
+                                        <div className="prose-sm">
+                                            <ReactMarkdown rehypePlugins={[rehypeRaw]}>{metric.description}</ReactMarkdown>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -93,9 +93,9 @@ export default function SideBySideHeader(sideBySideHeaderProps: SideBySideHeader
             </div>
 
             {/* Progress Bar */}
-            <div className="relative w-full bg-gray-300 h-2 rounded">
+            <div className="relative w-full bg-gray-300 h-2 rounded-sm">
                 <div
-                    className="bg-blue-500 h-2 rounded"
+                    className="bg-blue-500 h-2 rounded-sm"
                     style={{ width: `${(globalSubmissionIndex + 1) / totalSubmissions * 100}%` }}
                 />
             </div>

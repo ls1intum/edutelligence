@@ -272,8 +272,40 @@
   reasoning_token_allowance: 4096
   cost_per_million_input_token: 0
   cost_per_million_output_token: 0
+# The same model at low reasoning effort for short calls on the answer path
+# (session title, interaction suggestions, query rewrites).
+- id: qwen3.8-27b-low
+  type: openai_chat
+  model: Qwen/Qwen3.8-27B
+  base_url: https://your-logos-instance/v1
+  api_key:
+  supports_temperature: false
+  supports_reasoning_effort: true
+  reasoning_effort: low
+  reasoning_effort_values: [low, medium, xhigh]
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: true
+  leading_system_message_only: true
+  reasoning_token_allowance: 4096
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+# The same model with thinking turned off, for calls that need no reasoning
+# (citation labels).
+- id: qwen3.8-27b-nothink
+  type: openai_chat
+  model: Qwen/Qwen3.8-27B
+  base_url: https://your-logos-instance/v1
+  api_key:
+  supports_temperature: false
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: false
+  leading_system_message_only: true
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
 # Logos queues requests by the priority of the calling API key. To let
-# interactive chat overtake background work (Memiris, ingestion), add a copy
+# interactive chat overtake background work (ingestion), add a copy
 # of this entry with another id (e.g. qwen3.8-27b-background) and a second,
 # lower-priority Logos key, and reference that id from the background slots.
 - id: mxbai-embed-large

@@ -67,6 +67,16 @@ def visibility_dto() -> LectureUnitVisibilityUpdateDTO:
     )
 
 
+def slide_row(uuid: str, page_number: int = 1, hidden_until=None) -> SimpleNamespace:
+    return SimpleNamespace(
+        uuid=uuid,
+        properties={
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_number,
+            LectureUnitPageChunkSchema.HIDDEN_UNTIL.value: hidden_until,
+        },
+    )
+
+
 def rate_limit_error() -> UnexpectedStatusCodeError:
     response = httpx.Response(
         429,
@@ -154,12 +164,12 @@ def test_visibility_pipeline_updates_unit_page_chunks_and_segments_without_vecto
     ]
     page_collection = Mock()
     page_collection.query.fetch_objects.return_value.objects = [
-        SimpleNamespace(uuid="page-uuid-1"),
-        SimpleNamespace(uuid="page-uuid-2"),
+        slide_row("page-uuid-1"),
+        slide_row("page-uuid-2"),
     ]
     segment_collection = Mock()
     segment_collection.query.fetch_objects.return_value.objects = [
-        SimpleNamespace(uuid="segment-uuid")
+        slide_row("segment-uuid")
     ]
 
     result = LectureVisibilityUpdatePipeline(
@@ -285,11 +295,10 @@ def test_visibility_pipeline_keeps_unit_denied_when_slide_update_fails():
         SimpleNamespace(uuid="unit-uuid")
     ]
     page_collection = Mock()
-    page_collection.query.fetch_objects.return_value.objects = [
-        SimpleNamespace(uuid="page-uuid")
-    ]
+    page_collection.query.fetch_objects.return_value.objects = [slide_row("page-uuid")]
     page_collection.data.update.side_effect = RuntimeError("Weaviate write failed")
     segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
 
     with pytest.raises(RuntimeError, match="Weaviate write failed"):
         LectureVisibilityUpdatePipeline(
@@ -309,7 +318,7 @@ def test_visibility_pipeline_retries_rate_limited_final_parent_update():
     ]
     unit_collection.data.update.side_effect = [None, rate_limit_error(), None]
     page_collection = Mock()
-    page_collection.query.fetch_objects.return_value.objects = []
+    page_collection.query.fetch_objects.return_value.objects = [slide_row("page-uuid")]
     segment_collection = Mock()
     segment_collection.query.fetch_objects.return_value.objects = []
     now = [0.0]
@@ -348,7 +357,7 @@ def test_visibility_pipeline_retries_rate_limited_parent_barrier():
     ]
     unit_collection.data.update.side_effect = [rate_limit_error(), None, None]
     page_collection = Mock()
-    page_collection.query.fetch_objects.return_value.objects = []
+    page_collection.query.fetch_objects.return_value.objects = [slide_row("page-uuid")]
     segment_collection = Mock()
     segment_collection.query.fetch_objects.return_value.objects = []
     sleeps = []
@@ -378,11 +387,10 @@ def test_visibility_pipeline_keeps_parent_barrier_after_rate_limit_exhaustion():
         SimpleNamespace(uuid="unit-uuid")
     ]
     page_collection = Mock()
-    page_collection.query.fetch_objects.return_value.objects = [
-        SimpleNamespace(uuid="page-uuid")
-    ]
+    page_collection.query.fetch_objects.return_value.objects = [slide_row("page-uuid")]
     page_collection.data.update.side_effect = rate_limit_error()
     segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
     now = [0.0]
     writer = WeaviateWriteRetry(
         retry_wait_budget=0.1,
@@ -837,3 +845,190 @@ def test_visibility_webhook_route_matches_artemis_contract():
     assert route.path == "/api/v1/webhooks/lectures/visibility"
     assert route.methods == {"POST"}
     assert route.status_code == 202
+
+
+def test_visibility_update_that_changes_nothing_writes_nothing():
+    release_date = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
+    hidden_until = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(
+            uuid="unit-uuid",
+            properties={
+                LectureUnitSchema.RELEASE_DATE.value: release_date,
+                LectureUnitSchema.SLIDE_VISIBILITY.value: (
+                    '{"1": "2026-07-03T12:00:00+00:00"}'
+                ),
+            },
+        )
+    ]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.return_value.objects = [
+        slide_row("page-uuid", hidden_until=hidden_until)
+    ]
+    segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = [
+        slide_row("segment-uuid", hidden_until=hidden_until)
+    ]
+
+    result = LectureVisibilityUpdatePipeline(
+        page_collection, unit_collection, segment_collection
+    )(visibility_dto())
+
+    # Still reports the unit as found, or the endpoint would answer 404.
+    assert result.lecture_units_updated == 1
+    assert result.page_chunks_updated == 0
+    assert result.segments_updated == 0
+    for collection in (unit_collection, page_collection, segment_collection):
+        collection.data.update.assert_not_called()
+
+
+def test_visibility_update_writes_only_rows_of_requested_slides_that_differ():
+    hidden_until = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(uuid="unit-uuid")
+    ]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.return_value.objects = [
+        slide_row("page-1-current", page_number=1, hidden_until=hidden_until),
+        slide_row("page-1-stale", page_number=1),
+        # Slide 2 is not in the request, so a partial update must leave it alone.
+        slide_row("page-2", page_number=2),
+    ]
+    segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
+
+    result = LectureVisibilityUpdatePipeline(
+        page_collection, unit_collection, segment_collection
+    )(visibility_dto())
+
+    assert result.page_chunks_updated == 1
+    page_collection.data.update.assert_called_once_with(
+        uuid="page-1-stale",
+        properties={LectureUnitPageChunkSchema.HIDDEN_UNTIL.value: hidden_until},
+    )
+    page_collection.query.fetch_objects.assert_called_once()
+
+
+def test_visibility_update_heals_a_unit_left_denied_by_a_failed_update():
+    hidden_until = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(
+            uuid="unit-uuid",
+            properties={
+                LectureUnitSchema.RELEASE_DATE.value: datetime.max.replace(
+                    tzinfo=timezone.utc
+                ),
+                LectureUnitSchema.SLIDE_VISIBILITY.value: (
+                    '{"1": "2026-07-03T12:00:00+00:00"}'
+                ),
+            },
+        )
+    ]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.return_value.objects = [
+        slide_row("page-uuid", hidden_until=hidden_until)
+    ]
+    segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
+
+    LectureVisibilityUpdatePipeline(
+        page_collection, unit_collection, segment_collection
+    )(visibility_dto())
+
+    unit_collection.data.update.assert_called_once_with(
+        uuid="unit-uuid",
+        properties={
+            LectureUnitSchema.RELEASE_DATE.value: datetime(
+                2026, 7, 4, 12, 0, tzinfo=timezone.utc
+            ),
+            LectureUnitSchema.SLIDE_VISIBILITY.value: (
+                '{"1": "2026-07-03T12:00:00+00:00"}'
+            ),
+        },
+    )
+    page_collection.data.update.assert_not_called()
+
+
+def test_visibility_update_reads_slide_by_slide_when_a_unit_exceeds_the_query_limit():
+    from iris.pipeline.lecture_visibility_update_pipeline import _ROW_FETCH_LIMIT
+
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(uuid="unit-uuid")
+    ]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.side_effect = [
+        SimpleNamespace(
+            objects=[slide_row("page-2", page_number=2)] * _ROW_FETCH_LIMIT
+        ),
+        SimpleNamespace(objects=[slide_row("page-1", page_number=1)]),
+    ]
+    segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
+
+    result = LectureVisibilityUpdatePipeline(
+        page_collection, unit_collection, segment_collection
+    )(visibility_dto())
+
+    assert result.page_chunks_updated == 1
+    assert page_collection.query.fetch_objects.call_count == 2
+    page_collection.data.update.assert_called_once()
+    assert page_collection.data.update.call_args.kwargs["uuid"] == "page-1"
+
+
+def test_visibility_update_does_not_wait_for_writes_to_other_units():
+    from iris.vector_database.database import batch_update_lock
+
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(uuid="unit-uuid")
+    ]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.return_value.objects = [slide_row("page")]
+    segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
+    finished = Event()
+
+    def update():
+        LectureVisibilityUpdatePipeline(
+            page_collection, unit_collection, segment_collection
+        )(visibility_dto())
+        finished.set()
+
+    # An ingestion of another unit holds the shared write lock the whole time.
+    with batch_update_lock:
+        worker = Thread(target=update)
+        worker.start()
+        assert finished.wait(timeout=2)
+    worker.join(timeout=2)
+
+
+def test_visibility_update_waits_for_a_write_to_the_same_unit():
+    dto = visibility_dto()
+    unit_collection = Mock()
+    unit_collection.query.fetch_objects.return_value.objects = [
+        SimpleNamespace(uuid="unit-uuid")
+    ]
+    page_collection = Mock()
+    page_collection.query.fetch_objects.return_value.objects = []
+    segment_collection = Mock()
+    segment_collection.query.fetch_objects.return_value.objects = []
+    finished = Event()
+
+    def update():
+        LectureVisibilityUpdatePipeline(
+            page_collection, unit_collection, segment_collection
+        )(dto)
+        finished.set()
+
+    with lecture_update_lock(
+        dto.base_url, dto.course_id, dto.lecture_id, dto.lecture_unit_id
+    ):
+        worker = Thread(target=update)
+        worker.start()
+        assert not finished.wait(timeout=0.1)
+    assert finished.wait(timeout=2)
+    worker.join(timeout=2)

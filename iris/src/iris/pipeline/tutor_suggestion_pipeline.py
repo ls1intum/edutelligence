@@ -247,36 +247,6 @@ class TutorSuggestionPipeline(
         """
         return {}
 
-    def get_memiris_tenant(
-        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO
-    ) -> str:
-        """
-        Return the Memiris tenant identifier for the current user.
-
-        Returns:
-            str: The tenant identifier
-        """
-        return ""
-
-    def get_memiris_reference(
-        self, dto: CommunicationTutorSuggestionPipelineExecutionDTO
-    ) -> str:
-        """
-        Does not return any reference, as memory creation is permanently disabled for this pipeline.
-
-        Returns:
-            str: "unknown"
-        """
-        return "unknown"
-
-    def is_memiris_memory_creation_enabled(
-        self,
-        state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
-        ],
-    ) -> bool:
-        return False
-
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[

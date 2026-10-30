@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.vector_database import database
@@ -47,17 +46,6 @@ def test_the_tools_still_follow_the_index_while_weaviate_answers():
 
     assert should_allow_lecture_tool(db, 7) is True
     assert should_allow_faq_tool(db, 7) is False
-
-
-def test_the_memory_tool_is_off_while_memories_cannot_be_read():
-    wrapper = MagicMock()
-    wrapper.has_memories.side_effect = RuntimeError("Weaviate down")
-    state = SimpleNamespace(
-        dto=SimpleNamespace(user=SimpleNamespace(memiris_enabled=True)),
-        memiris_wrapper=wrapper,
-    )
-
-    assert ChatPipeline._has_memories(state) is False
 
 
 def test_an_unavailable_weaviate_is_degraded_and_iris_stays_healthy(monkeypatch):
@@ -193,30 +181,6 @@ def test_a_failed_connect_is_closed_and_handles_are_taken_again_after_connecting
     assert client.connect.call_count == 2
     assert client.collections.get.call_count == handles_before + 5
     assert VectorDatabase._schemas_ready is True
-
-
-def test_a_run_goes_on_without_memories_while_weaviate_is_unavailable(monkeypatch):
-    from iris.pipeline import (  # pylint: disable=import-outside-toplevel
-        abstract_agent_pipeline,
-    )
-
-    monkeypatch.setattr(
-        abstract_agent_pipeline,
-        "MemirisWrapper",
-        MagicMock(side_effect=RuntimeError("Weaviate down")),
-    )
-    pipeline = MagicMock()
-    state = SimpleNamespace(db=SimpleNamespace(client=MagicMock()), dto=MagicMock())
-
-    wrapper = abstract_agent_pipeline.AbstractAgentPipeline._create_memiris_wrapper(
-        pipeline, state
-    )
-
-    assert wrapper is None
-    assert (
-        ChatPipeline._has_memories(SimpleNamespace(dto=state.dto, memiris_wrapper=None))
-        is False
-    )
 
 
 @pytest.mark.usefixtures("fresh_database")

@@ -77,7 +77,7 @@ class _RecordingCallback:
 def _make_dto():
     return SimpleNamespace(
         chat_history=[],
-        user=SimpleNamespace(id=1, lang_key="en", memiris_enabled=False),
+        user=SimpleNamespace(id=1, lang_key="en"),
         course=SimpleNamespace(
             id=7,
             name="Test Course",
@@ -141,7 +141,6 @@ def _run_pipeline(pipeline: ChatPipeline, callback: _RecordingCallback) -> None:
     variant.model.return_value = "some-model-id"
     with (
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
-        patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
         patch(
             "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
@@ -174,7 +173,6 @@ def test_course_mode_sends_result_suggestions_finish_in_order():
     send_result_args, send_result_kwargs = callback.calls_named("send_result")[0]
     assert send_result_args == ("agent answer",)
     assert send_result_kwargs["tokens"] == []
-    assert send_result_kwargs["accessed_memories"] == []
     assert send_result_kwargs["activities"] == []
     assert isinstance(send_result_kwargs["activity_seq"], int)
 

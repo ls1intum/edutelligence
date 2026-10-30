@@ -128,7 +128,7 @@ export default function FileTree({
                   "mx-1 px-1 py-0.5 text-xs",
                   props.item.data.isDir
                     ? "rounded-full aspect-auto text-slate-500"
-                    : "rounded text-blue-800 bg-blue-200",
+                    : "rounded-sm text-blue-800 bg-blue-200",
                   props.context.isSelected && props.item.data.isDir
                     ? "text-white"
                     : ""

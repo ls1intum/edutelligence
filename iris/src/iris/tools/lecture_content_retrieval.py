@@ -4,6 +4,7 @@ import math
 from typing import Any, Callable, Dict, List, Optional
 
 from ..domain.retrieval.lecture.lecture_retrieval_dto import printed_page_number
+from ..pipeline.shared.citation_sources import CitationSourceRegistry, source_id_line
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
 
@@ -50,6 +51,7 @@ def create_tool_lecture_content_retrieval(
     lecture_id: Optional[int] = None,
     lecture_unit_id: Optional[int] = None,
     scope_supplier: Optional[Callable[[], tuple[Optional[int], Optional[int]]]] = None,
+    citation_sources: Optional[CitationSourceRegistry] = None,
 ) -> Callable[[], str]:
     """
     Create a tool that retrieves lecture content using RAG.
@@ -67,6 +69,9 @@ def create_tool_lecture_content_retrieval(
         scope_supplier: Resolves the scope at call time instead of at creation
             time, so a context switch during the same run redirects retrieval
             to the new lecture. Overrides lecture_id and lecture_unit_id.
+        citation_sources: When given, every slide chunk and transcription segment
+            gets a source id the agent can cite. Pipelines without citations pass
+            nothing and get the plain output.
 
     Returns:
         Callable[[], str]: Function that returns lecture content string.
@@ -106,22 +111,34 @@ def create_tool_lecture_content_retrieval(
             base_url=base_url,
         )
 
-        # Store the lecture content for later use (e.g., citation pipeline)
+        # Read by the combined-view point-out tool, which points to a retrieved position.
         lecture_content_storage["content"] = lecture_content
 
         result = "Lecture slide content:\n"
         for paragraph in lecture_content.lecture_unit_page_chunks:
+            source_id = (
+                citation_sources.register_page_chunk(paragraph)
+                if citation_sources is not None
+                else None
+            )
             result += (
                 f"Lecture: {paragraph.lecture_name} (lecture ID {paragraph.lecture_id}), "
                 f"Unit: {paragraph.lecture_unit_name}, "
                 + _format_page_reference(
                     paragraph.display_page_number, paragraph.page_number
                 )
-                + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
+                + "\n"
+                + source_id_line(source_id)
+                + f"Content:\n---{paragraph.page_text_content}---\n\n"
             )
 
         result += "Lecture transcription content:\n"
         for paragraph in lecture_content.lecture_transcriptions:
+            source_id = (
+                citation_sources.register_transcription(paragraph)
+                if citation_sources is not None
+                else None
+            )
             result += (
                 # A transcription segment's page_number is the slide number read off the video frame
                 # during ingestion — the number printed on the slide, not its index in the deck. So it
@@ -135,8 +152,9 @@ def create_tool_lecture_content_retrieval(
                 + _format_video_timestamp(
                     paragraph.segment_start_time, paragraph.segment_end_time
                 )
-                + "s"
-                f"\nContent:\n---{paragraph.segment_text}---\n\n"
+                + "s\n"
+                + source_id_line(source_id)
+                + f"Content:\n---{paragraph.segment_text}---\n\n"
             )
 
         result += "Lecture segment content:\n"

@@ -94,6 +94,6 @@ def test_tool_error_marks_item_failed():
 
 
 def test_curation_truncates_detail_to_120_characters():
-    detail = curate_detail("memiris_search_for_memories", {"query": "x" * 150})
+    detail = curate_detail("faq_content_retrieval", {"query": "x" * 150})
 
     assert detail == "x" * 120
