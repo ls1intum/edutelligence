@@ -102,7 +102,7 @@ export default function ComparativeEvaluationStudyManagement() {
     setSelectedConfig(importedConfig);
   };
 
-  const { mutate: downloadEvaluationData, isLoading: isExporting } = useDownloadExpertEvaluationData({
+  const { mutate: downloadEvaluationData, isPending: isExporting } = useDownloadExpertEvaluationData({
     onSuccess: (blob: Blob) => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");

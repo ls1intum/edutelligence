@@ -1,7 +1,8 @@
 import type { Exercise } from "@/model/exercise";
 import type { DataMode } from "@/model/data_mode";
 
-import { UseQueryOptions, useQuery } from "react-query";
+import { useQuery } from "@tanstack/react-query";
+import type { UseQueryOptions } from "@tanstack/react-query";
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
 
@@ -16,14 +17,16 @@ export async function fetchExercises(dataMode: DataMode) {
  * @example
  * const { data, isLoading, error } = useExercises();
  * 
- * @param options The react-query options.
+ * @param options The TanStack Query options.
  */
 export default function useExercises(
-  options: Omit<UseQueryOptions<Exercise[], Error, Exercise[]>, 'queryFn'> & { eager?: boolean } = {},
+  options: Omit<UseQueryOptions<Exercise[]>, "queryFn" | "queryKey"> & {
+    eager?: boolean;
+  } = {},
 ) {
   const { dataMode } = useBaseInfo();
 
-  return useQuery({
+  return useQuery<Exercise[], Error>({
     queryKey: ["exercises", dataMode],
     queryFn: async () => {
       return await fetchExercises(dataMode);

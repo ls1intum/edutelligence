@@ -2,7 +2,8 @@ import type { Exercise } from "@/model/exercise";
 import type { Submission } from "@/model/submission";
 import type { DataMode } from "@/model/data_mode";
 
-import { UseQueryOptions, useQuery } from "react-query";
+import { useQuery } from "@tanstack/react-query";
+import type { UseQueryOptions } from "@tanstack/react-query";
 import baseUrl from "@/helpers/base_url";
 import { useBaseInfo } from "@/hooks/base_info_context";
 
@@ -18,22 +19,23 @@ export async function fetchSubmissions(exercise: Exercise, dataMode: DataMode) {
  * const { data, isLoading, error } = useSubmissions(exercise);
  * 
  * @param exercise The exercise to fetch the submissions for.
- * @param options The react-query options.
+ * @param options The TanStack Query options.
  */
 export default function useSubmissions(
   exercise?: Exercise,
-  options: Omit<UseQueryOptions<Submission[], Error, Submission[]>, 'queryFn'> = {}
+  options: Omit<UseQueryOptions<Submission[]>, "queryFn" | "queryKey"> = {}
 ) {
   const { dataMode } = useBaseInfo();
 
-  return useQuery<Submission[], Error, Submission[], any>({
+  return useQuery<Submission[], Error>({
     queryKey: ["submissions", dataMode, exercise?.id],
     queryFn: async () => {
       if (exercise === undefined) {
-        return undefined;
+        throw new Error("An exercise must be selected before loading submissions");
       }
       return await fetchSubmissions(exercise, dataMode);
     },
-    ...options
+    ...options,
+    enabled: exercise !== undefined && (options.enabled ?? true),
   });
 }

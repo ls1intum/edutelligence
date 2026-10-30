@@ -13,7 +13,3 @@ atlas:
 iris:
   - changed-files:
       - any-glob-to-any-file: iris/**/*
-
-memiris:
-  - changed-files:
-      - any-glob-to-any-file: memiris/**/*

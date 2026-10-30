@@ -58,7 +58,6 @@ common/
 ├── message_converters.py      # Convert between Iris and LangChain message formats
 ├── pipeline_enum.py           # PipelineEnum for token tracking
 ├── token_usage_dto.py         # TokenUsageDTO for tracking LLM costs
-├── memiris_setup.py           # Memiris (memory system) integration utilities
 ├── singleton.py               # Singleton metaclass
 ├── mastery_utils.py           # Competency mastery calculations
 └── custom_exceptions.py       # Custom exception types
@@ -78,6 +77,7 @@ domain/
 │   └── interaction_suggestion_dto.py      # Follow-up suggestion DTO
 ├── data/                                  # Shared data models
 │   ├── course_dto.py, exercise DTOs, ...
+│   ├── command_marker.py                  # History marker: a command the client carried out
 │   └── metrics/                           # Student performance metrics
 ├── variant/                               # Variant configurations
 │   ├── abstract_variant.py                # AbstractVariant
@@ -85,8 +85,11 @@ domain/
 ├── ingestion/                             # Ingestion pipeline DTOs
 ├── retrieval/                             # Retrieval result DTOs
 ├── status/                                # Stage/status DTOs
-│   ├── chat_status_update_dto.py          # Chat result, suggestions, memories, activities
-│   └── suggested_context_dto.py           # Context switch requested by the agent
+│   ├── chat_status_update_dto.py          # Chat result, suggestions, activities
+│   ├── suggested_context_dto.py           # Context switch requested by the agent
+│   ├── command_dto.py                     # Generic client-command envelope (type + parameters)
+│   ├── point_out_command_dto.py           # Point-out command and its parameters
+│   └── command_result_dto.py              # Whether the client carried a command out
 ├── event/                                 # Event DTOs
 └── communication/                         # Communication pipeline DTOs
 ```
@@ -133,6 +136,8 @@ tools/
 ├── chat_tool_providers.py                 # Per-request tool selection for ChatPipeline
 ├── lecture_content_retrieval.py            # RAG retrieval from lecture content
 ├── faq_content_retrieval.py               # RAG retrieval from FAQs
+├── current_view_content.py                # Read the material at the student's current position
+├── combined_view_point_out.py             # Move the student's combined view to a slide or moment
 ├── repository_files.py                    # List student repository files
 ├── file_lookup.py                         # Read specific file contents
 ├── submission_details.py                  # Get submission metadata
@@ -213,7 +218,6 @@ web/
 │   ├── pipelines.py                       # Pipeline execution endpoints
 │   ├── webhooks.py                        # Artemis webhook receivers
 │   ├── ingestion_status.py                # Ingestion status endpoints
-│   ├── memiris.py                         # Memory management endpoints
 │   └── health/                            # Health check endpoint
 ├── status/
 │   ├── status_update.py                   # Status callback implementations

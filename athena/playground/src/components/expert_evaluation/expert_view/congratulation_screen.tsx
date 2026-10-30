@@ -19,7 +19,7 @@ export default function CongratulationScreen() {
 
   return (
     <div
-      className="fixed inset-0 bg-congratulation-bg bg-cover bg-center bg-black bg-opacity-75 flex items-center justify-center z-50"
+      className="fixed inset-0 bg-congratulation-bg bg-cover bg-center bg-black/75 flex items-center justify-center z-50"
       style={{
         backgroundImage: `url(${background_image.src})`,
         backgroundSize: 'cover',

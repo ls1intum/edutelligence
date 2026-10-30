@@ -2,7 +2,7 @@ import type { Exercise } from "@/model/exercise";
 import type { Submission } from "@/model/submission";
 import type ModuleResponse from "@/model/module_response";
 
-import { UseMutationOptions, useMutation } from "react-query";
+import { UseMutationOptions, useMutation } from "@tanstack/react-query";
 import { AthenaError, useAthenaFetcher } from "@/hooks/athena_fetcher";
 import { Feedback } from "@/model/feedback";
 
@@ -10,10 +10,10 @@ import { Feedback } from "@/model/feedback";
  * Requests feedback suggestions for an exercise and a submission from an Athena module.
  *
  * @example
- * const { data, isLoading, error, mutate } = useRequestFeedbackSuggestions();
+ * const { data, isPending, error, mutate } = useRequestFeedbackSuggestions();
  * mutate({ exercise, submission });
  * 
- * @param options The react-query options.
+ * @param options The TanStack Query options.
  */
 export default function useRequestFeedbackSuggestions(
   options: Omit<

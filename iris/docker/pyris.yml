@@ -12,8 +12,15 @@ services:
     environment:
       APPLICATION_YML_PATH: "/config/application.yml"
       LLM_CONFIG_PATH: "/config/llm_config.yml"
+      # Watchdog alerts via Pushover (optional; only logged without them).
+      PYRIS_ALERT_NAME: ${PYRIS_ALERT_NAME:-pyris}
+      PYRIS_PUSHOVER_APP_TOKEN: ${PYRIS_PUSHOVER_APP_TOKEN:-}
+      PYRIS_PUSHOVER_USER_KEY: ${PYRIS_PUSHOVER_USER_KEY:-}
     expose:
       - "8000"
+    # An out-of-memory kill then hits only Iris (Docker restarts it), not the host's agents.
+    mem_limit: ${PYRIS_MEMORY_LIMIT:-6g}
+    memswap_limit: ${PYRIS_MEMORY_LIMIT:-6g}
     networks:
       - pyris
     command:

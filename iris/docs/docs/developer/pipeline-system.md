@@ -4,7 +4,7 @@ title: Pipeline System
 
 # Pipeline System
 
-Iris models request handling as callable pipelines. This page is the source of truth for Iris-owned execution, callbacks, RAG integration, and the Iris integration of the [Memiris library](https://github.com/ls1intum/edutelligence/tree/main/memiris). The library's reusable creation and sleep pipelines are documented in its own README; Iris owns how they are configured and run here.
+Iris models request handling as callable pipelines. This page is the source of truth for Iris-owned execution, callbacks, and RAG integration.
 
 For configuration rather than control flow, use [LLM configuration](../admin/llm-configuration.md), the [variant system](./variant-system.md), and [developer configuration](./configuration.md).
 
@@ -16,20 +16,19 @@ For configuration rather than control flow, use [LLM configuration](../admin/llm
 | `AbstractAgentPipeline` | `pipeline/abstract_agent_pipeline.py` | A `Pipeline` for tool-calling agents. It prepares state, selects the variant's local or cloud model role, builds tools and prompts, executes the agent, and finishes the callback.                    |
 | `SubPipeline`           | `pipeline/sub_pipeline.py`            | Internal callable helper with no API variant contract. A parent pipeline owns its invocation and response.                                                                                            |
 
-`AbstractAgentPipeline` supplies the agent loop and extension points for tools, prompts, pre/post hooks, token tracking, and streaming. Agent implementations decide whether memory creation and individual retrieval tools are enabled.
+`AbstractAgentPipeline` supplies the agent loop and extension points for tools, prompts, pre/post hooks, token tracking, and streaming. Agent implementations decide which retrieval tools are enabled.
 
 ### Agent execution state and extension points
 
 `Pipeline` subclasses are callable and identify their model roles and variants through `PIPELINE_ID`, `ROLES`, `VARIANT_DEFS`, and optional `DEPENDENCIES`. The base class derives variant requirements from those declarations, fails fast when a subclass omits `__call__`, and provides token-usage aggregation for nested stages.
 
-`AbstractAgentPipeline` carries one `AgentPipelineExecutionState` through the run. The state keeps the request DTO and selected variant together with the callback, filtered message history, resolved model, prompt, tools, partial-result sender, retrieval results, token usage, tracing context, a pending context switch, and optional Memiris state. This lets hooks enrich one execution without introducing another top-level request contract.
+`AbstractAgentPipeline` carries one `AgentPipelineExecutionState` through the run. The state keeps the request DTO and selected variant together with the callback, filtered message history, resolved model, prompt, tools, partial-result sender, retrieval results, token usage, tracing context, and a pending context switch. This lets hooks enrich one execution without introducing another top-level request contract.
 
-| Extension category                       | Methods                                                                                                                      | Responsibility                                                                                                                                                             |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Required                                 | `get_tools()`, `build_system_message()`                                                                                      | Define the agent's callable tools and system prompt.                                                                                                                       |
-| Required for the shared memory contract  | `is_memiris_memory_creation_enabled()`, `get_memiris_tenant()`, `get_memiris_reference()`                                    | Decide whether the run participates in memory creation and provide its isolation/reference keys. These methods still return safe values when Memiris is disabled globally. |
-| Optional run customization               | `prepare_state()`, `pre_agent_hook()`, `post_agent_hook()`, `on_agent_step()`                                                | Resolve state that both the prompt and the tools depend on, or add behavior before execution, after execution, or after an individual agent step.                          |
-| Optional context/execution customization | `create_tracing_context()`, `get_agent_params()`, `get_history_limit()`, `should_stream_agent_response()`, `execute_agent()` | Customize metadata, executor arguments, retained history, streaming, or the execution strategy.                                                                            |
+| Extension category                       | Methods                                                                                                                      | Responsibility                                                                                                                                    |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Required                                 | `get_tools()`, `build_system_message()`                                                                                      | Define the agent's callable tools and system prompt.                                                                                              |
+| Optional run customization               | `prepare_state()`, `pre_agent_hook()`, `post_agent_hook()`, `on_agent_step()`                                                | Resolve state that both the prompt and the tools depend on, or add behavior before execution, after execution, or after an individual agent step. |
+| Optional context/execution customization | `create_tracing_context()`, `get_agent_params()`, `get_history_limit()`, `should_stream_agent_response()`, `execute_agent()` | Customize metadata, executor arguments, retained history, streaming, or the execution strategy.                                                   |
 
 Private helper methods implement the shared loop and should remain centralized in `AbstractAgentPipeline` rather than being copied into individual agents.
 
@@ -46,18 +45,18 @@ All listed routes are authenticated and return `202 Accepted` for asynchronous w
 | `POST /api/v1/pipelines/rewriting/run`             | `RewritingPipeline`                                                                                                   | Raw `Thread`                                     | `RewritingCallback`; current Artemis has neither a caller nor a matching callback endpoint, so this Iris route is not an active end-to-end Artemis integration.          |
 | `POST /api/v1/pipelines/inconsistency-check/run`   | `InconsistencyCheckPipeline`                                                                                          | Raw `Thread`                                     | `InconsistencyCheckCallback`; current Artemis has neither a caller nor a matching callback endpoint, so this Iris route is not an active end-to-end Artemis integration. |
 | `POST /api/v1/pipelines/global-search/run`         | Route worker orchestrator; conditionally invokes `GlobalSearchPipeline` (a `SubPipeline`) for answer-producing intent | Shared `TracedThreadPoolExecutor`                | `GlobalSearchCallback` with the answer, sources, and token usage. The sources-only (`SKIP_AI`) branch retrieves directly and sends no LLM answer.                        |
-| `POST /api/v1/webhooks/lectures/ingest`            | `LectureIngestionUpdatePipeline`                                                                                      | Raw `Thread` registered in `IngestionJobHandler` | `IngestionStatusCallback`. Duplicate suppression is scoped only to the same course, lecture, and lecture unit.                                                           |
+| `POST /api/v1/webhooks/lectures/ingest`            | `LectureIngestionUpdatePipeline`                                                                                      | Raw `Thread` registered in `IngestionJobHandler` | `IngestionStatusCallback`. A new job supersedes a running one for the same base URL, course, lecture, and lecture unit; see [ingestion jobs](./ingestion-jobs.md).       |
 | `POST /api/v1/webhooks/lectures/delete`            | `LectureUnitDeletionPipeline`                                                                                         | Raw `Thread`                                     | `LecturesDeletionStatusCallback`.                                                                                                                                        |
 | `POST /api/v1/webhooks/faqs/ingest`                | `FaqIngestionPipeline`                                                                                                | Raw `Thread`                                     | `FaqIngestionStatus`.                                                                                                                                                    |
 | `POST /api/v1/webhooks/faqs/delete`                | `FaqIngestionPipeline.delete_faq()`                                                                                   | Raw `Thread`                                     | `FaqIngestionStatus`.                                                                                                                                                    |
 
-The FAQ ingestion/deletion and lecture-deletion routes deliberately do **not** use `IngestionJobHandler`; they start their own threads. The handler no longer creates processes or terminates/restarts workers.
+The FAQ ingestion/deletion and lecture-deletion routes deliberately do **not** use `IngestionJobHandler`; they start their own threads. The handler creates no processes and kills no threads: it starts every job immediately and signals a superseded one through a cancellation event that the pipeline observes at its own checkpoints.
 
 ### Chat modes
 
 `ChatPipeline` is the shared top-level chat entry. Its `chat_mode` selects the appropriate course, exercise, lecture, text-exercise, or programming-exercise behavior; the selected mode determines prompts and tools rather than creating a second HTTP route. Code feedback is an internal helper used by applicable chat behavior, not another top-level callback pipeline.
 
-`IrisChatMode` distinguishes `COURSE_CHAT`, `LECTURE_CHAT`, `PROGRAMMING_EXERCISE_CHAT`, and `TEXT_EXERCISE_CHAT`. The mode describes the **active context** of the chat, and three mechanisms consume it: `chat_system_prompt.j2` renders mode-specific blocks from a shared base (see [Prompts](./prompts.md)), `chat_tool_providers.py` decides per tool whether the current mode and the data Artemis sent make that tool useful (see [Tools](./tools.md)), and feature gating limits memory creation and MCQ intent detection to `COURSE` and `LECTURE` mode. One `ChatPipeline` serves all modes on purpose: a pipeline per mode would duplicate the agent setup, the retrieval wiring, and the citation handling, and it would make context switching impossible, since a running pipeline cannot hand a chat to a different one. `IrisChatMode` mirrors the Artemis enum, so both sides must agree on the string values.
+`IrisChatMode` distinguishes `COURSE_CHAT`, `LECTURE_CHAT`, `PROGRAMMING_EXERCISE_CHAT`, and `TEXT_EXERCISE_CHAT`. The mode describes the **active context** of the chat, and three mechanisms consume it: `chat_system_prompt.j2` renders mode-specific blocks from a shared base (see [Prompts](./prompts.md)), `chat_tool_providers.py` decides per tool whether the current mode and the data Artemis sent make that tool useful (see [Tools](./tools.md)), and feature gating limits MCQ intent detection to `COURSE` and `LECTURE` mode. One `ChatPipeline` serves all modes on purpose: a pipeline per mode would duplicate the agent setup, the retrieval wiring, and the citation handling, and it would make context switching impossible, since a running pipeline cannot hand a chat to a different one. `IrisChatMode` mirrors the Artemis enum, so both sides must agree on the string values.
 
 ### Context switching
 
@@ -89,6 +88,8 @@ Most chat work does not need a new pipeline. A new capability for student chats 
 | Change what the agent is told, or how it behaves         | A block in `pipeline/prompts/templates/chat_system_prompt.j2`                                                                             |
 | Add a new kind of context a chat can be attached to      | A member on `IrisChatMode`, the matching entity field on `ChatPipelineExecutionDTO`, a prompt block, and the corresponding Artemis change |
 | Post-process the answer (citations, titles, suggestions) | A `SubPipeline` invoked from `ChatPipeline.post_agent_hook()`                                                                             |
+| Act on what the student currently has open               | The `context` array on the request — see [viewing context](./viewing-context.md)                                                          |
+| Drive the student's client mid-run                       | A typed `CommandDTO` sent from a tool through `callback.execute_command()` — see [client commands](./client-commands.md)                  |
 
 ## Creating a New Pipeline
 
@@ -102,27 +103,3 @@ When introducing a new externally triggered pipeline:
 6. Add tests for variant requirements, worker/callback behavior, and the pipeline itself, then update the Artemis integration contract if Artemis must invoke the new route.
 
 Do not create a second public route for behavior that is only a chat mode or a nested helper; keep those choices inside their owning top-level pipeline.
-
-## Iris-owned Memiris integration
-
-Memiris is optional and controlled by Iris configuration. `MemirisWrapper` in `common/memiris_setup.py` maps Iris model-role configuration to Memiris-compatible language and embedding models, creates local and cloud creation/sleep pipelines, and exposes services over Iris's vector-database client. It is not a replacement for the reusable library's builders, repositories, or schemas.
-
-`AbstractAgentPipeline` creates a wrapper for the pipeline's tenant. A participating agent can:
-
-1. start memory creation in a context-propagating background thread;
-2. wait for that thread before its final callback, including created memories when present;
-3. offer semantic memory search and similar-memory tools, which record accessed memories; and
-4. isolate storage through the pipeline-provided tenant and reference.
-
-The active Memiris routes are:
-
-- `GET /api/v1/memiris/user/{user_id}` returns the tenant's memory list using the legacy v1 response shape.
-- `GET /api/v2/memiris/user/{user_id}` returns aggregate memory data: memories, learnings, and the memory-connection graph.
-- `DELETE /api/v1/memiris/user/{user_id}/delete-all` deletes all memories, learnings, and connections for the tenant.
-- `GET /api/v1/memiris/user/{user_id}/{memory_id}` retrieves one memory with its relations, and `DELETE` on the same path deletes that memory.
-
-### Periodic sleep orchestration
-
-The reusable `MemorySleepPipeline.sleep(tenant)` is a Memiris library operation. Iris separately schedules `memory_sleep_task` through its application `BackgroundScheduler`. The task is gated by Iris's Memiris and sleep settings, limits work to Artemis-user tenants, retains only tenants with unslept memories, and invokes the wrapper's sleep operation for each remaining tenant. It has no per-request Artemis callback.
-
-This distinction matters: Memiris owns the generic creation/sleep algorithm and repository contracts; Iris owns its model-role conversion, feature gates, tenant policy, tools, background creation, and periodic sleep scheduling.
