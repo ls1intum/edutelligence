@@ -16,6 +16,7 @@ from langchain_core.agents import AgentActionMessageLog
 from langchain_core.messages import AIMessage
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.callback_token import CallbackToken  # noqa: E402
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage  # noqa: E402
 from iris.common.reply_language import (  # noqa: E402
     detect_language_name,
@@ -795,7 +796,11 @@ def test_guide_outcomes_keep_only_the_markers_of_kept_content(guide_output, expe
 def test_exercise_guide_drafts_use_the_citation_free_transform():
     pipeline = ChatPipeline.__new__(ChatPipeline)
     state = SimpleNamespace(
-        dto=SimpleNamespace(settings=SimpleNamespace(stream_response=True)),
+        dto=SimpleNamespace(
+            settings=SimpleNamespace(
+                stream_response=True, authentication_token=CallbackToken("token")
+            )
+        ),
         callback=SimpleNamespace(url="http://x", run_id="run"),
     )
 

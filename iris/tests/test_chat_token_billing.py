@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 
 # Bootstrap the iris package (see test_chat_latency_ordering.py for the circular import).
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.callback_token import CallbackToken
 from iris.common.pipeline_enum import PipelineEnum  # noqa: E402
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage  # noqa: E402
 from iris.common.token_usage_dto import TokenUsageDTO  # noqa: E402
@@ -21,7 +22,11 @@ from iris.web.status.status_update import ChatRunCallback  # noqa: E402
 
 
 def _callback_with_outbox(results=None):
-    callback = ChatRunCallback(run_id="run-1", base_url="http://artemis")
+    callback = ChatRunCallback(
+        run_id="run-1",
+        base_url="http://artemis",
+        auth_token=CallbackToken("token-for-run-1"),
+    )
     outbox: list[dict] = []
     results = list(results or [])
 

@@ -34,6 +34,7 @@ from urllib.parse import urlsplit
 import requests as http_requests
 
 from iris.common.boot_id import BOOT_ID
+from iris.common.callback_token import CallbackToken
 from iris.common.logging_config import get_logger
 from iris.config import settings
 
@@ -73,7 +74,7 @@ class _ActiveRun:
 
     A claimed job is reserved here (``thread`` is None) as soon as the claim response
     arrives, so the heartbeat renews its lease while earlier jobs of the same batch are
-    still being started. Revoking its token sets ``cancel_event`` before the job starts.
+    still being started. Revoking the run sets ``cancel_event`` before the job starts.
     """
 
     thread: Optional[threading.Thread]
@@ -86,10 +87,11 @@ class _ActiveRun:
     cancel_event: threading.Event
 
 
-def _job_token(job) -> Optional[str]:
-    """The run token of a raw claimed job, or None when the job does not carry a usable one.
+def _job_credentials(job) -> Optional[tuple[str, CallbackToken]]:
+    """The run id and callback token of a raw claimed job, or None when it carries no usable token.
 
-    The job is untrusted JSON, so every level is type-checked instead of assumed.
+    The job is untrusted JSON, so every level is type-checked instead of assumed. An Artemis
+    version that sends no run id uses the token as run id, so the token stands in for it then.
     """
     if not isinstance(job, dict):
         return None
@@ -97,7 +99,12 @@ def _job_token(job) -> Optional[str]:
     if not isinstance(job_settings, dict):
         return None
     token = job_settings.get("authenticationToken")
-    return token if isinstance(token, str) and token else None
+    if not isinstance(token, str) or not token:
+        return None
+    run_id = job_settings.get("runId")
+    if not isinstance(run_id, str) or not run_id:
+        run_id = token
+    return run_id, CallbackToken(token)
 
 
 def _job_unit_id(job: dict) -> Optional[int]:
@@ -270,12 +277,12 @@ class IngestionWorker:
     def _prune_finished(self) -> None:
         # A run without a thread is a reserved claim that has not started yet; keep it.
         finished = [
-            token
-            for token, run in self._active.items()
+            run_id
+            for run_id, run in self._active.items()
             if run.thread is not None and not run.thread.is_alive()
         ]
-        for token in finished:
-            del self._active[token]
+        for run_id in finished:
+            del self._active[run_id]
 
     def _claim_loop(self) -> None:
         while not self._stop.wait(self._config.poll_interval_seconds):
@@ -319,8 +326,8 @@ class IngestionWorker:
         reserved: list[tuple[dict, Optional[_ActiveRun]]] = []
         with self._lock:
             for job in claimed:
-                token = _job_token(job)
-                if token is None:
+                credentials = _job_credentials(job)
+                if credentials is None:
                     reserved.append((job, None))
                     continue
                 pending = _ActiveRun(
@@ -329,13 +336,13 @@ class IngestionWorker:
                     lecture_unit_id=_job_unit_id(job),
                     cancel_event=threading.Event(),
                 )
-                self._active[token] = pending
+                self._active[credentials[0]] = pending
                 reserved.append((job, pending))
         started = 0
         for job, pending in reserved:
             try:
                 if pending is None:
-                    raise ValueError("claimed job carries no authentication token")
+                    raise ValueError("claimed job carries no callback token")
                 if self._start_job(job, pending):
                     started += 1
             except Exception as e:  # pylint: disable=broad-exception-caught
@@ -406,9 +413,9 @@ class IngestionWorker:
         finally:
             if not started:
                 with self._lock:
-                    for token, run in list(self._active.items()):
+                    for run_id, run in list(self._active.items()):
                         if run is pending:
-                            del self._active[token]
+                            del self._active[run_id]
 
     def _report_start_failure(
         self, job: dict, upstream: _Upstream, error: Exception
@@ -420,8 +427,8 @@ class IngestionWorker:
         report; either way the attempt cap on the Artemis side ends the retry cycle.
         """
         try:
-            token = _job_token(job)
-            if token is None:
+            credentials = _job_credentials(job)
+            if credentials is None:
                 logger.warning(
                     "Cannot report the start failure of a claimed job from %s: no token",
                     upstream.url,
@@ -436,10 +443,12 @@ class IngestionWorker:
                 IngestionStatusCallback,
             )
 
+            run_id, auth_token = credentials
             callback = IngestionStatusCallback(
-                run_id=token,
+                run_id=run_id,
                 base_url=base_url,
                 lecture_unit_id=_job_unit_id(job),
+                auth_token=auth_token,
             )
             if not self._failure_slots.acquire(blocking=False):
                 logger.warning(
@@ -481,9 +490,9 @@ class IngestionWorker:
         with self._lock:
             self._prune_finished()
             self._drop_expired_upstreams(time.monotonic())
-            tokens_by_url: dict[str, list[str]] = {url: [] for url in self._upstreams}
-            for token, run in self._active.items():
-                tokens_by_url.setdefault(run.upstream_url, []).append(token)
+            run_ids_by_url: dict[str, list[str]] = {url: [] for url in self._upstreams}
+            for run_id, run in self._active.items():
+                run_ids_by_url.setdefault(run.upstream_url, []).append(run_id)
             due = [
                 upstream
                 for upstream in self._upstreams.values()
@@ -494,7 +503,7 @@ class IngestionWorker:
             try:
                 threading.Thread(
                     target=self._heartbeat_upstream,
-                    args=(upstream, tokens_by_url.get(upstream.url, [])),
+                    args=(upstream, run_ids_by_url.get(upstream.url, [])),
                     name="ingestion-worker-heartbeat-request",
                     daemon=True,
                 ).start()
@@ -503,9 +512,9 @@ class IngestionWorker:
                 with self._lock:
                     self._heartbeats_in_flight.discard(upstream.url)
 
-    def _heartbeat_upstream(self, upstream: _Upstream, tokens: list[str]) -> None:
+    def _heartbeat_upstream(self, upstream: _Upstream, run_ids: list[str]) -> None:
         try:
-            self._send_heartbeat(upstream, tokens)
+            self._send_heartbeat(upstream, run_ids)
         except Exception as e:  # pylint: disable=broad-exception-caught
             # An unreadable response must not kill the thread silently; the next tick retries.
             logger.warning("Worker heartbeat to %s failed: %s", upstream.url, e)
@@ -513,12 +522,17 @@ class IngestionWorker:
             with self._lock:
                 self._heartbeats_in_flight.discard(upstream.url)
 
-    def _send_heartbeat(self, upstream: _Upstream, tokens: list[str]) -> None:
+    def _send_heartbeat(self, upstream: _Upstream, run_ids: list[str]) -> None:
         try:
             response = self._post(
                 upstream,
                 "heartbeat",
-                {"bootId": BOOT_ID, "activeJobTokens": tokens},
+                # activeJobTokens carries the same list for Artemis versions that read only that name.
+                {
+                    "bootId": BOOT_ID,
+                    "activeRunIds": run_ids,
+                    "activeJobTokens": run_ids,
+                },
                 timeout=self._config.heartbeat_timeout_seconds,
             )
             response.raise_for_status()
@@ -532,8 +546,10 @@ class IngestionWorker:
                 upstream.heartbeat_failures,
             )
         upstream.heartbeat_failures = 0
-        revoked = (response.json() or {}).get("revokedJobTokens") or []
-        for token in revoked:
+        body = response.json() or {}
+        # Artemis versions before run ids answer only under the earlier name, with the same entries.
+        revoked = body.get("revokedRunIds") or body.get("revokedJobTokens") or []
+        for run_id in revoked:
             # The pipeline thread cannot be killed safely, so it is signaled
             # through the same cancellation event add_job already uses to
             # supersede a same-worker re-claim: the pipeline's existing
@@ -542,10 +558,10 @@ class IngestionWorker:
             # start is signaled the same way, and add_job then refuses to start
             # it. The run stays in _active (occupying capacity) until its thread
             # actually exits, so a prune can't drop a still-live run; its status
-            # callbacks are also rejected by the token check regardless of how
+            # callbacks are also rejected by the run id check regardless of how
             # quickly it stops.
             with self._lock:
-                run = self._active.get(token)
+                run = self._active.get(run_id)
                 unit_id = run.lecture_unit_id if run is not None else "unknown"
                 if run is not None:
                     run.cancel_event.set()

@@ -22,6 +22,7 @@ for _mod in ("onnxruntime", "transformers"):
         sys.modules[_mod] = MagicMock()
         _stubbed.append(_mod)
 
+from iris.common.callback_token import CallbackToken  # noqa: E402
 from iris.web.routers import pipelines  # noqa: E402
 
 for _mod in _stubbed:
@@ -35,7 +36,8 @@ def test_struggle_route_is_registered():
 
 def test_worker_invokes_pipeline_with_callback():
     dto = MagicMock()
-    dto.settings.authentication_token = "job-1"
+    dto.settings.callback_run_id = "run-1"
+    dto.settings.authentication_token = CallbackToken("job-1")
     dto.settings.artemis_base_url = "http://localhost:8080"
     with patch.object(pipelines, "StruggleInterventionCallback") as cb, patch.object(
         pipelines, "StruggleInterventionPipeline"
@@ -43,7 +45,11 @@ def test_worker_invokes_pipeline_with_callback():
         pipelines, "find_variant", return_value="v"
     ) as find_variant:
         pipelines.run_struggle_intervention_pipeline_worker(dto, "default", "req-1")
-    cb.assert_called_once_with(run_id="job-1", base_url="http://localhost:8080")
+    cb.assert_called_once_with(
+        run_id="run-1",
+        auth_token=CallbackToken("job-1"),
+        base_url="http://localhost:8080",
+    )
     find_variant.assert_called_once_with(pipe.get_variants.return_value, "default")
     pipe.return_value.assert_called_once_with(
         dto=dto, variant="v", callback=cb.return_value

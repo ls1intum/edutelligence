@@ -1,5 +1,6 @@
 from typing import Optional
 
+from iris.common.callback_token import CallbackToken
 from iris.common.logging_config import get_logger
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
@@ -14,8 +15,16 @@ class FaqIngestionStatus(IngestionStatusCallback):
         run_id: str,
         base_url: str,
         faq_id: Optional[int] = None,
+        *,
+        auth_token: CallbackToken,
     ):
         url = (
             f"{base_url}/api/iris/internal/webhooks/ingestion/faqs/runs/{run_id}/status"
         )
-        super().__init__(run_id, base_url, lecture_unit_id=faq_id, status_url=url)
+        super().__init__(
+            run_id,
+            base_url,
+            lecture_unit_id=faq_id,
+            status_url=url,
+            auth_token=auth_token,
+        )

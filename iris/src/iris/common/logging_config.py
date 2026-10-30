@@ -12,6 +12,8 @@ import secrets
 import sys
 from contextvars import ContextVar
 
+from iris.common.callback_token import scrub_callback_credentials
+
 # Context variable for request ID - accessible from any async context
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
@@ -126,7 +128,9 @@ class IrisFormatter(logging.Formatter):
             )
             log_line = f"{log_line}\n{indented_exc}"
 
-        return log_line
+        # An older Artemis puts the callback token into the callback URL, which log messages and
+        # exceptions quote.
+        return scrub_callback_credentials(log_line)
 
 
 def setup_logging(level: str = "INFO") -> None:

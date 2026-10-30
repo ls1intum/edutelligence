@@ -4,6 +4,7 @@ from typing import Optional
 import requests as http_requests
 from sentry_sdk import capture_exception as sentry_capture
 
+from iris.common.callback_token import CallbackToken
 from iris.common.logging_config import get_logger
 from iris.domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
@@ -29,6 +30,8 @@ class IngestionStatusCallback(StatusCallback):
         base_url: str,
         lecture_unit_id: Optional[int] = None,
         status_url: Optional[str] = None,
+        *,
+        auth_token: CallbackToken,
     ):
         url = (
             status_url
@@ -38,7 +41,7 @@ class IngestionStatusCallback(StatusCallback):
             run_state=RunStateEnum.RUNNING,
             id=lecture_unit_id,
         )
-        super().__init__(url, run_id, status)
+        super().__init__(url, run_id, status, auth_token=auth_token)
 
     def _post_status_payload(
         self, payload: dict, timeout: int = 200
@@ -48,7 +51,7 @@ class IngestionStatusCallback(StatusCallback):
             self.url,
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.run_id}",
+                "Authorization": self._auth_token.authorization_header(),
             },
             json=payload,
             timeout=timeout,

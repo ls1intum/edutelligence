@@ -179,7 +179,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
         cancel_event = self.cancel_event
 
         callback = IngestionStatusCallback(
-            run_id=self.dto.settings.authentication_token,
+            run_id=self.dto.settings.callback_run_id,
+            auth_token=self.dto.settings.authentication_token,
             base_url=self.dto.settings.artemis_base_url,
             lecture_unit_id=self.dto.lecture_unit.lecture_unit_id,
         )

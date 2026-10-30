@@ -6,6 +6,7 @@ from typing import Callable, Optional
 import requests
 from pydantic import BaseModel
 
+from iris.common.callback_token import CallbackToken
 from iris.common.logging_config import get_logger
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
 from iris.domain.status.run_state_dto import RunStateEnum
@@ -35,14 +36,15 @@ class PartialResultSender(Thread):
     def __init__(
         self,
         url: str,
-        run_id: str,
+        auth_token: CallbackToken,
         interval_seconds: float = 0.35,
         status_dto_factory: Optional[Callable[[str, int], BaseModel]] = None,
         text_transform: Optional[Callable[[str], str]] = None,
     ):
         super().__init__(daemon=True)
         self.url = url
-        self.run_id = run_id
+        # The run's callback credential; only ever sent as the Authorization header.
+        self._auth_token = auth_token
         self.interval_seconds = interval_seconds
         # Builds the RUNNING payload for one partial (text, seq). Defaults to
         # the chat DTO; other pipelines (global search) pass their own.
@@ -142,7 +144,7 @@ class PartialResultSender(Thread):
                 self.url,
                 headers={
                     "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.run_id}",
+                    "Authorization": self._auth_token.authorization_header(),
                 },
                 json=payload,
                 timeout=PARTIAL_POST_TIMEOUT_SECONDS,

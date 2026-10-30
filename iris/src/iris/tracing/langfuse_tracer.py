@@ -11,6 +11,7 @@ Provides:
 
 import concurrent.futures
 import contextvars
+import json
 import logging
 import os
 import threading
@@ -57,6 +58,20 @@ def _is_enabled() -> bool:
         return False
 
 
+def mask_callback_credentials(*, data: Any, **_kwargs) -> Any:
+    """Langfuse mask: serialize the traced data as Langfuse would, then scrub callback tokens.
+
+    Observed functions receive callback objects whose URL contains the callback token when an
+    older Artemis sends no run id.
+    """
+    # pylint: disable=import-outside-toplevel
+    from langfuse._utils.serializer import EventSerializer
+
+    from iris.common.callback_token import scrub_callback_credentials
+
+    return scrub_callback_credentials(json.loads(json.dumps(data, cls=EventSerializer)))
+
+
 def init_langfuse() -> Optional[Any]:
     """
     Initialize the LangFuse client from settings.
@@ -95,6 +110,7 @@ def init_langfuse() -> Optional[Any]:
                 host=settings.langfuse.host,
                 environment=os.environ.get("SENTRY_ENVIRONMENT", "development"),
                 sample_rate=1.0,  # 100% sampling as decided
+                mask=mask_callback_credentials,
             )
             logger.info(
                 "LangFuse client initialized successfully (host: %s)",
@@ -138,7 +154,7 @@ class TracingContext:
 
     # Core identifiers
     user_id: Optional[str] = None
-    session_id: Optional[str] = None  # authentication_token from Artemis
+    session_id: Optional[str] = None  # run id from Artemis
 
     # Course context
     course_id: Optional[int] = None
@@ -190,7 +206,8 @@ class TracingContext:
 
         # Extract session/run ID and Artemis URL
         if hasattr(dto, "settings") and dto.settings:
-            ctx.session_id = getattr(dto.settings, "authentication_token", None)
+            # The run id, never the callback token: traces leave Iris.
+            ctx.session_id = getattr(dto.settings, "trace_run_id", None)
             ctx.artemis_base_url = getattr(dto.settings, "artemis_base_url", None)
 
         # Extract course info from CourseDTO

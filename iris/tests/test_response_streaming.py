@@ -9,6 +9,7 @@ import pytest
 import requests
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.callback_token import CallbackToken  # noqa: E402
 from iris.domain.pipeline_execution_settings_dto import (  # noqa: E402
     PipelineExecutionSettingsDTO,
 )
@@ -594,7 +595,7 @@ def test_partial_result_sender_clears_draft_on_reset_and_uses_run_state():
     with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
-            "run-1",
+            CallbackToken("run-1"),
             interval_seconds=0.01,
         )
         sender.start()
@@ -660,7 +661,7 @@ def test_stop_waits_for_in_flight_partial_post_to_drain():
     with patch("iris.web.status.partial_result_sender.requests.post", slow_post):
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
-            "run-1",
+            CallbackToken("run-1"),
             interval_seconds=0.01,
         )
         sender.start()
@@ -688,7 +689,7 @@ def test_partial_result_sender_stops_permanently_on_404():
     with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
-            "run-1",
+            CallbackToken("run-1"),
             interval_seconds=0.01,
         )
         sender.start()
@@ -721,7 +722,7 @@ def test_reset_during_in_flight_post_still_clears_draft():
     with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
-            "run-1",
+            CallbackToken("run-1"),
             interval_seconds=0.01,
         )
         sender.start()
@@ -746,12 +747,14 @@ def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
 
     if stream_response_marker == "absent":
         settings = Settings(
-            authentication_token="run-1",
+            authentication_token=CallbackToken("run-1"),
+            callback_run_id="run-1",
             artemis_base_url="https://artemis.example",
         )
     else:
         settings = Settings(
-            authentication_token="run-1",
+            authentication_token=CallbackToken("run-1"),
+            callback_run_id="run-1",
             artemis_base_url="https://artemis.example",
             stream_response=stream_response_marker,
         )
@@ -850,9 +853,9 @@ def _run_stubbed_pipeline_details(
     class FakeSender:
         """Stands in for PartialResultSender to record wiring calls."""
 
-        def __init__(self, url, run_id, interval_seconds=0.35, text_transform=None):
+        def __init__(self, url, auth_token, interval_seconds=0.35, text_transform=None):
             self.url = url
-            self.run_id = run_id
+            self.auth_token = auth_token
             self.interval_seconds = interval_seconds
             self.text_transform = text_transform
             self.deltas = []
@@ -913,7 +916,7 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     assert len(sender_instances) == 1
     sender = sender_instances[0]
     assert sender.url.endswith("/chat/runs/run-1/status")
-    assert sender.run_id == "run-1"
+    assert sender.auth_token == CallbackToken("run-1")
     # Chat drafts carry no citations: markers are removed before a partial is posted.
     assert sender.text_transform is citation_free_draft
     created_args[0].stream_handler("Hello")
