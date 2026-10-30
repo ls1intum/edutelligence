@@ -35,18 +35,21 @@ export default function SendFeedbacks() {
   // Fetched "storedFeedbacks" from the server can be customized in feedbacks
   const { data: storedFeedbacks, isLoading: isLoadingFeedbacks, error: errorFeedbacks } = useFeedbacks(
     exercise,
-    selectedSubmission,
-    {
-      onSuccess: (fetchFeedbacks) => {
-        const ignoreIds = new Set<number>(removedFeedbackIds);
-        feedbacks.forEach((f) => ignoreIds.add(f.id));
-        setFeedbacks([
-          ...fetchFeedbacks.filter((f) => !ignoreIds.has(f.id)),
-          ...feedbacks,
-        ]);
-      },
-    }
+    selectedSubmission
   );
+
+  useEffect(() => {
+    if (!storedFeedbacks) return;
+
+    setFeedbacks((currentFeedbacks) => {
+      const ignoreIds = new Set<number>(removedFeedbackIds);
+      currentFeedbacks.forEach((feedback) => ignoreIds.add(feedback.id));
+      return [
+        ...storedFeedbacks.filter((feedback) => !ignoreIds.has(feedback.id)),
+        ...currentFeedbacks,
+      ];
+    });
+  }, [storedFeedbacks, removedFeedbackIds]);
 
   const setFeedbacksAndTrackChanges = (newFeedbacks: Feedback[]) => {
     const storedFeedbackIds = new Set<number>(
@@ -68,7 +71,7 @@ export default function SendFeedbacks() {
     error: errorSubmissions,
   } = useSubmissions(exercise);
 
-  const { isLoading, error, mutateAsync, reset } = useSendFeedbacks();
+  const { isPending: isLoading, error, mutateAsync, reset } = useSendFeedbacks();
 
   const feedbacksAreChanged =
     removedFeedbackIds.length > 0 || feedbacks.some((f) => f.isChanged);

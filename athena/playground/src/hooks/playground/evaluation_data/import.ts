@@ -1,16 +1,16 @@
 import base_url from "@/helpers/base_url";
-import { useMutation, UseMutationOptions } from "react-query";
+import { useMutation, UseMutationOptions } from "@tanstack/react-query";
 
 /**
  * Hook to import evaluation data.
  *
  * @example
- * const { data, isLoading, error, mutate } = useImportEvaluationData();
+ * const { data, isPending, error, mutate } = useImportEvaluationData();
  * const formData = new FormData();
  * formData.append("file", file);
  * mutate({ dataMode: "evaluation", formData });
  * 
- * @param options The react-query options.
+ * @param options The TanStack Query options.
  */
 export default function useImportEvaluationData(
   options: Omit<
