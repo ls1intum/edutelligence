@@ -454,9 +454,6 @@ def _production_context(scenario) -> dict[str, Any]:
     state = AgentPipelineExecutionState()
     state.dto = dto
     state.db = SimpleNamespace(client=None)
-    state.memiris_wrapper = SimpleNamespace(
-        has_memories=lambda: bool(metadata.get("memories"))
-    )
     state.message_history = list(dto.chat_history or [])
     state.lecture_content_storage = {}
     state.current_view_storage = {}

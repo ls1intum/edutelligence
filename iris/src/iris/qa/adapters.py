@@ -118,42 +118,6 @@ class FixtureFaqRetrieval:
         ]
 
 
-class FixtureMemiris:
-    metadata: dict = {}
-
-    def __init__(self, *_args, **_kwargs):
-        pass
-
-    def has_memories(self):
-        return bool(self.metadata.get("memories"))
-
-    def create_tool_memory_search(self, _storage):
-        metadata = self.metadata
-
-        def memiris_search_for_memories(query: str = "") -> str:
-            """Search the scenario's synthetic student memories."""
-            del query
-            return "\n".join(item["content"] for item in metadata.get("memories", []))
-
-        return memiris_search_for_memories
-
-    def create_tool_find_similar_memories(self, _storage):
-        metadata = self.metadata
-
-        def memiris_find_similar_memories(query: str = "") -> str:
-            """Find memories similar to the scenario's synthetic chat context."""
-            del query
-            return "\n".join(item["content"] for item in metadata.get("memories", []))
-
-        return memiris_find_similar_memories
-
-    def create_memories_in_separate_thread(self, *_args, **_kwargs):
-        # The product enables background learning when the user has Memiris
-        # enabled. QA must preserve read/tool behavior while performing no
-        # external write and starting no background thread.
-        return None
-
-
 class FixtureVectorDatabase:
     def __init__(self):
         self.client = SimpleNamespace()
@@ -201,7 +165,6 @@ class ScenarioAdapters:
     def __enter__(self):
         FixtureLectureRetrieval.metadata = self.metadata
         FixtureFaqRetrieval.metadata = self.metadata
-        FixtureMemiris.metadata = self.metadata
         FixtureGlobalRetriever.metadata = self.metadata
         retrieval = self.metadata.get("retrieval", {})
         lecture_available = bool(retrieval.get("lectureAvailable"))
@@ -225,7 +188,6 @@ class ScenarioAdapters:
             (
                 "iris.pipeline.abstract_agent_pipeline.VectorDatabase"
             ): FixtureVectorDatabase,
-            ("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"): FixtureMemiris,
             (
                 "iris.pipeline.chat.chat_pipeline.LectureRetrieval"
             ): FixtureLectureRetrieval,

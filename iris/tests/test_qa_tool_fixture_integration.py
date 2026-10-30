@@ -13,7 +13,7 @@ from iris.domain.chat.chat_pipeline_execution_dto import (  # noqa: E402
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (  # noqa: E402,E501
     CommunicationTutorSuggestionPipelineExecutionDTO,
 )
-from iris.qa.adapters import FixtureMemiris, ScenarioAdapters  # noqa: E402
+from iris.qa.adapters import ScenarioAdapters  # noqa: E402
 from iris.qa.loader import load_suite  # noqa: E402
 from iris.qa.worker import _run_pipeline  # noqa: E402
 from iris.tools import chat_tool_providers as providers  # noqa: E402
@@ -40,7 +40,6 @@ def _chat(scenario_id: str):
 
 def _state(dto, metadata: dict):
     retrieval = metadata.get("retrieval", {})
-    FixtureMemiris.metadata = metadata
     return SimpleNamespace(
         dto=dto,
         callback=Mock(),
@@ -51,11 +50,8 @@ def _state(dto, metadata: dict):
         faq_storage={},
         pending_context_switch=None,
         local=False,
-        accessed_memory_storage=[],
         allow_lecture_tool=bool(retrieval.get("lectureAvailable")),
         allow_faq_tool=bool(retrieval.get("faqAvailable")),
-        allow_memiris_tool=bool(metadata.get("memories")),
-        memiris_wrapper=FixtureMemiris(),
     )
 
 
@@ -128,7 +124,7 @@ def test_scenario_adapter_freezes_prompt_and_deadline_time():
     assert deadline["due_date_over"] is False
 
 
-def test_retrieval_and_memory_fixtures_execute_production_tool_wrappers():
+def test_retrieval_fixtures_execute_production_tool_wrappers():
     faq_dto, faq_metadata = _chat("course-deadline-conflict-moderate")
     with ScenarioAdapters(faq_metadata):
         faq_state = _state(faq_dto, faq_metadata)
@@ -142,15 +138,6 @@ def test_retrieval_and_memory_fixtures_execute_production_tool_wrappers():
         lecture_output = providers.provide_lecture_retrieval(lecture_state)()
     assert "Master Theorem" in lecture_output
     assert lecture_state.lecture_content_storage["content"]
-
-    memory_dto, memory_metadata = _chat("course-memory-low")
-    with ScenarioAdapters(memory_metadata):
-        memory_tool = providers.provide_memory_search(
-            _state(memory_dto, memory_metadata)
-        )
-        assert memory_tool is not None
-        memory_output = memory_tool("learning preference")
-    assert "small traced examples" in memory_output
 
 
 def test_mcq_and_tutor_artifact_fixtures_execute_production_tool_wrappers():
