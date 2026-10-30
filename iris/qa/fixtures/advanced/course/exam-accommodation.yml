@@ -1,0 +1,15 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+qa:
+  syntheticNow: "2026-07-01T08:30:00Z"
+  retrieval:
+    faqAvailable: true
+    faqs:
+      - id: 8301
+        question: Did the Algorithms exam move to 10:00?
+        answer: No general time change has been announced. The written exam remains at 09:00 on 3 July 2026. Room MW 2001 is the general room; students with an approved accommodation receive their individual room through the accommodation notice.
+        link: /courses/42/faq/8301
+      - id: 8302
+        question: How do approved extra-time accommodations affect the timetable?
+        answer: An approved accommodation changes the individual room and permitted duration stated in the approval notice. It does not change the start time unless the examination office sends a separate written update.
+        link: /courses/42/faq/8302

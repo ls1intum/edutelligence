@@ -1,0 +1,22 @@
+exercise: sorting
+student: 117
+submissions:
+  - id: 501
+    commit: 4d1a3d0
+    date: 2026-05-11T08:15:00Z
+    snapshot: student/compile-failure
+    build: failed
+    note: Missing semicolon and incompatible return type.
+  - id: 502
+    commit: 0f4b9ae
+    date: 2026-05-11T09:02:00Z
+    snapshot: student/failing-tests
+    build: passed
+    score: 6.0
+    note: Public tests pass; hidden duplicate/negative-value test fails.
+  - id: 503
+    commit: working-tree
+    date: 2026-05-11T09:21:00Z
+    snapshot: student/uncommitted
+    build: not-run
+    note: Uncommitted snapshot is QA provenance and is deliberately absent from the Artemis wire payload.

@@ -1,0 +1,23 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+textExercise:
+  id: 9304
+  title: Learning Analytics Privacy Argument
+  problemStatement: |
+    Assess a proposal to retain pseudonymous click-level learning analytics for
+    five years. The proposed purpose is early identification of students who
+    may need support. Raw events are accessible to the course team; aggregate
+    indicators would also satisfy most stated reporting needs. Discuss consent,
+    purpose limitation, data minimization, retention, and safeguards without
+    presenting definitive legal advice.
+  startDate: 2026-06-26T08:00:00Z
+  endDate: 2026-07-07T18:00:00Z
+  exampleSolution: "Confidential reference: pseudonymization does not by itself make data anonymous, and consent does not eliminate the need to justify necessity, retention, access, and less intrusive alternatives."
+textExerciseSubmission: |
+  Replacing names with random identifiers makes the click logs anonymous.
+  Therefore privacy law no longer applies. Even if it did, students can consent
+  when enrolling, and consent makes collecting every event proportionate. A
+  five-year retention period is useful in case researchers later find another
+  purpose, so data minimization is already satisfied.
+qa:
+  syntheticNow: "2026-06-29T14:20:00Z"

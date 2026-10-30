@@ -1,0 +1,390 @@
+# yamllint disable rule:line-length rule:document-start
+version: 2
+x-critical-errors: &critical_errors
+  - "The answer invents student or course facts that are not present in the scenario evidence."
+  - "The answer exposes private learner information that is unrelated to the request."
+x-token-ceiling: &tokens
+  max_agent_turns: 8
+  max_input_tokens: 120000
+  max_output_tokens: 16000
+  max_output_tokens_per_call: 8000
+scenarios:
+  - id: course-exercise-history-low
+    title: Exercise-history interpretation with low support
+    description: The student asks how to interpret their recorded exercise attempts without surrendering the decision about what to do next.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: low
+    profiles: [weekly, full]
+    tags: [course, exercise_history, support_low]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3099,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "I can see one Insertion Sort attempt and no Graph Traversal submission yet.",
+                },
+              ],
+          }
+        - {
+            id: 3100,
+            sentAt: "2026-05-17T11:05:00Z",
+            sender: LLM,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Which exercise history would you like to inspect first?",
+                },
+              ],
+          }
+        - {
+            id: 3101,
+            sentAt: "2026-05-17T11:10:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "What should I notice before I decide what to work on?",
+                },
+              ],
+          }
+    reference:
+      - "FACT: At the scenario time (17 May 2026, 12:00 UTC) Insertion Sort (programming, 10 points) has one submitted attempt with a recorded score of 6.0 and is due 18 May 22:00 UTC, about 34 hours away. Graph Traversal Reflection (text, 10 points) has no submission and is due 10 June 22:00 UTC. Neither exercise is overdue."
+      - "FACT: The data shows one attempt and one score at most per exercise. It holds no earlier attempts, no feedback text, no study time and no mastery data, so any statement about trends, improvement or what the student struggled with would be invented."
+      - "NEED: The student wants help reading their own history before choosing what to do. Useful pointers are that Insertion Sort is partly scored and due very soon, while Graph Traversal Reflection is not started but has weeks left. The student should leave able to decide for themselves."
+      - "HOLD BACK: Low support in course chat means one specific guiding question about this evidence instead of a recommendation. Do not rank the exercises, hand over a study plan or say which one to do first; the student forms the plan."
+      - "TRAP: The previous Iris turn only asked which history to inspect. Asking another open clarifying question, or one about information Iris can read itself (exercises, submissions, scores), leaves the student where they started and gives them nothing to notice."
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-exam-accommodation-low
+    title: Conflicting exam accommodation evidence
+    description: The student needs low-support help reconciling the general timetable with an approved individual arrangement.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: low
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [course, faq, conflicting_evidence, support_low]
+    fixtures: [advanced/course/exam-accommodation.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - id: 5301
+          sentAt: 2026-07-01T08:30:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "The dashboard says the exam is in room MW 2001 at 09:00, my approved accommodation message says a separate room and 30 extra minutes, and a classmate says everyone was moved to 10:00. How can I work out what actually applies to me without you just deciding for me?"
+    reference:
+      - "FACT: Official FAQ 8301 says no general time change has been announced: the written exam stays at 09:00 on 3 July 2026 and room MW 2001 is the general room. Students with an approved accommodation receive their individual room through their accommodation notice. The scenario date is 1 July 2026."
+      - "FACT: Official FAQ 8302 says an approved accommodation changes the individual room and the permitted duration stated in the notice, but not the start time unless the examination office sends a separate written update. No such update is in the data."
+      - "FACT: The dashboard (MW 2001, 09:00) shows the general timetable. The student's own notice reportedly names a separate room and 30 extra minutes, but the actual room name is not in the data, so Iris cannot state which room or end time applies to this student."
+      - "TRAP: The classmate's claim that everyone moved to 10:00 is unsupported and contradicted by FAQ 8301. Treating it as official, or inventing a final room or finish time, is wrong. A subtler trap is saying the accommodation moves the start time."
+      - "NEED: The student needs a short, concrete way to confirm what binds them: the individual notice governs their room and duration, the FAQ and timetable govern the start time, and the check to make is the notice itself plus any written examination office update before 3 July."
+      - "HOLD BACK: Low support and the student asked not to be told the answer, so lead with one specific guiding question or pointer (for example which of the three sources is official and individual) rather than a full verdict and checklist. Reporting what the FAQ says is logistics and may be direct."
+    critical_errors:
+      - "The answer treats the classmate's unsupported ten o'clock claim as official."
+      - "The answer claims that the accommodation changes the exam start time without evidence."
+      - "The answer exposes unrelated private student information from the course data."
+    token_ceiling: *tokens
+  - id: course-deadline-conflict-moderate
+    title: Deadline conflict and prerequisite planning
+    description: The student must reconcile a stale deadline, an official extension, a rumor, and a blocking prerequisite.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: moderate
+    difficulty: advanced
+    profiles: [smoke, weekly, full]
+    tags: [course, planning, conflicting_evidence, support_moderate]
+    fixtures: [challenge/course/deadline-plan.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - id: 5311
+          sentAt: 2026-06-17T10:25:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "The Transit Planner page says Thursday, a friend says Monday, and I heard there was a CI extension. I have ninety minutes now, but the Graph Model Check may block submission. Help me verify the dates and choose what to do first."
+    reference:
+      - "FACT: Scenario time is Wednesday 17 June 2026, 10:30 UTC. Graph Model Check (text, 10 points, closes 13:00) has a submission scored 3.0. Its problem statement says it must be passed before Transit Planner can be submitted, and FAQ 8202 says only a passing Graph Model Check unlocks Transit Planner. The pass mark is not in the data."
+      - "FACT: Official FAQ 8201 says Transit Planner was extended after the CI outage to Friday 19 June 2026, 18:00 Europe/Berlin, while Artemis may still display the original Thursday date until the next course sync. The Graph Model Check prerequisite still closes Wednesday at 13:00, about 2.5 hours after the scenario time."
+      - "FACT: Amortized Analysis Quiz is already submitted (9.0 of 10). Optional Graph Review is ungraded, unlocks nothing and closes at 12:30. Network Flow (due 20 June, not started) builds on the shortest-path unit. Transit Planner has a recorded submission of 8.0, but unlocking is not established."
+      - "TRAP: Thursday is a stale display, Monday is an unsupported rumour, and the Friday extension is the real one. The extension covers Transit Planner only, so it does not relax the Wednesday prerequisite cutoff. Saying Transit Planner is already unlocked is also wrong."
+      - "NEED: The student needs the dates resolved and a first move for their ninety minutes that targets the blocking Graph Model Check, not Transit Planner coding, the optional review or the finished quiz. Mentioning Transit Planner next and the Friday date afterwards gives a feasible order."
+      - "HOLD BACK: Moderate support allows explaining the reasoning and suggesting an order of work, but the student keeps the decision and does the work. Do not write or outline the Graph Model Check justification itself."
+    critical_errors:
+      - "The answer presents Thursday or Monday as the official Transit Planner deadline without acknowledging the Friday extension."
+      - "The answer recommends optional or completed work ahead of the blocking Graph Model Check."
+      - "The answer claims that Transit Planner is already unlocked."
+    token_ceiling: *tokens
+  - id: course-prerequisite-chain-high
+    title: Multi-stage prerequisite recovery plan
+    description: The student needs a detailed plan across retake rules, recorded attempts, mastery uncertainty, and two dependent assessments.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: high
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [course, planning, prerequisites, support_high]
+    fixtures: [advanced/course/prerequisite-chain.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - id: 5321
+          sentAt: 2026-06-23T15:00:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "I failed the Thread Safety Checkpoint once, my recorded scores are 4/10 there and 7/10 on Locking Design, and the capstone opens only after both checkpoint competencies pass. I can study tonight and tomorrow morning. Please verify the retake and unlock rules, then give me a detailed plan that accounts for what those records do and do not establish."
+    reference:
+      - "FACT: Scenario time is 23 June 2026, 15:00 UTC. Thread Safety Checkpoint (quiz) has a recorded 4.0 of 10 and its hard deadline is 24 June 10:00 UTC. Locking Design Review (text) has 7.0 of 10 and is due 25 June 10:00 UTC. The Concurrent Service Capstone (30 points, due 27 June 18:00 UTC) has no submission."
+      - "FACT: Official FAQ 8321 says a failed checkpoint may be retaken after the automated feedback is released at 18:00 on the day of the attempt, and the retake stays open until the checkpoint's hard deadline. The data does not say on which day the failed attempt was made, so whether the retake is already open is not established."
+      - "FACT: Official FAQ 8322 says the capstone unlocks only when both Thread Safety and Locking Design reach at least 80 percent mastery. The dashboard can lag a newly graded attempt by up to two hours, and the assessment result is authoritative."
+      - "TRAP: Exercise scores are not mastery. 4/10 and 7/10 do not establish 80 percent mastery for either competency, so Locking Design is not shown to be passed and the capstone is not unlocked. Inventing a passing result, or trusting a lagging dashboard over the assessment result, is wrong."
+      - "NEED: The student needs a detailed ordered plan for tonight and tomorrow morning: study and retake Thread Safety once it is allowed and before its 24 June 10:00 deadline, keep working toward the mastery bar for Locking Design, and check the assessment result rather than only the dashboard. It needs a fallback if the retake result arrives late."
+      - "HOLD BACK: High support welcomes detailed reasoning, a conceptual walkthrough of happens-before and data races, and step by step planning. It does not include quiz answers for the retake or a drafted locking design or deadlock analysis for the review."
+    critical_errors:
+      - "The answer claims the capstone is unlocked before both required competencies pass."
+      - "The answer tells the student to use a retake that the official rules say is not yet available."
+      - "The answer treats the recorded exercise scores as direct proof of mastery or invents a passing checkpoint result."
+    token_ceiling: *tokens
+  - id: course-team-milestone-low
+    title: Team milestone ownership conflict
+    description: The student needs low-support help separating official team responsibilities from contradictory chat claims.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: low
+    difficulty: advanced
+    profiles: [weekly, full]
+    tags: [course, teamwork, conflicting_evidence, support_low]
+    fixtures: [advanced/course/team-milestone.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - id: 5331
+          sentAt: 2026-06-25T16:20:00Z
+          sender: USER
+          contents:
+            - type: text
+              textContent: "Our milestone page names me as reviewer, the team chat says I should implement the importer, and the FAQ says role changes need tutor approval. The importer blocks tomorrow's integration. Help me figure out what to verify and what I can responsibly do now, but don't make the team decision for me."
+    reference:
+      - "FACT: Data Import Milestone is a team programming exercise (20 points, due 26 June 2026, 16:00 UTC) with no submission yet. Its problem statement says the importer is integrated after an assigned reviewer approves its interface contract. The scenario time is 25 June 16:20 UTC, so it is due in under 24 hours."
+      - "FACT: Official FAQ 8311 says the role on the milestone page stays binding until a tutor approves a change in Artemis. Team chat can document a proposal but does not change ownership. So the student is still the reviewer."
+      - "FACT: Official FAQ 8312 says a reviewer may clarify acceptance criteria, prepare non-destructive tests and request tutor review of a role-change proposal, but must not submit another member's implementation as their own. The data holds no tutor approval and no deadline change."
+      - "TRAP: The team chat message and tomorrow's deadline tempt the answer to say the student should just implement the importer, or that the role has already changed. Neither is established, and inventing tutor approval or a new deadline is wrong."
+      - "NEED: The student needs a way to keep integration moving without breaking the team process: work as reviewer, ask the tutor to review the role-change proposal, and tell the team. They also need to know the tutor is who can authorize a change."
+      - "HOLD BACK: Low support means one specific guiding question or pointer (for example what the FAQ lets a reviewer do while implementation is blocked) rather than deciding the team's resolution or drafting the messages. Never suggest submitting someone else's work as the student's own."
+    critical_errors:
+      - "The answer claims that the informal team chat has already changed the student's official role."
+      - "The answer tells the student to overwrite or submit another member's work."
+      - "The answer invents tutor approval or a changed milestone deadline."
+    token_ceiling: *tokens
+  - id: course-upcoming-deadline-moderate
+    title: Upcoming exercise deadline
+    description: The student asks how to prioritize unfinished exercises using their recorded attempts and due dates.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: moderate
+    profiles: [full]
+    tags: [course, exercise_history, deadline, support_moderate]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3108,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Which unfinished exercise deadline is closest and what is one useful next step?",
+                },
+              ],
+          }
+    reference:
+      - "FACT: At the scenario time (17 May 2026, 12:00 UTC) Insertion Sort is due 18 May 22:00 UTC, about 34 hours away, and has one submitted attempt scored 6.0 of 10. Graph Traversal Reflection is due 10 June 22:00 UTC and has no submission. Neither is overdue, and Insertion Sort is the closest deadline."
+      - "FACT: The data holds no test results or feedback text for the Insertion Sort attempt, so which requirements cost the missing points is unknown. The problem statement asks for an in-place implementation without library sorting helpers."
+      - "NEED: The student wants to know which unfinished deadline is closest (Insertion Sort, tomorrow evening) and one concrete useful next step, such as checking the attempt against the problem statement requirements or looking at its feedback. One step is requested, not a full plan."
+      - "TRAP: Unfinished is ambiguous. Graph Traversal has no submission but is weeks away, while Insertion Sort is submitted but only partly scored. Calling Graph Traversal the closest, calling Insertion Sort untouched, or calling it complete is wrong."
+      - "HOLD BACK: Moderate support allows explaining and suggesting a step, but no insertion sort code or finished implementation. The deadline itself is logistics and may be stated directly."
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-exercise-priorities-high
+    title: Exercise-history priority analysis
+    description: The response should compare recorded exercise attempts and deadlines without inventing unprovided performance history.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: high
+    profiles: [weekly, full]
+    tags: [course, exercise_history, planning, support_high]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: high }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3109,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Analyze my recorded exercise attempts and upcoming deadlines, then recommend priorities.",
+                },
+              ],
+          }
+    reference:
+      - "FACT: At the scenario time (17 May 2026, 12:00 UTC) Insertion Sort (programming, 10 points) is due 18 May 22:00 UTC with one submitted attempt scored 6.0, so 4 points are not yet earned. Graph Traversal Reflection (text, 10 points) is due 10 June 22:00 UTC with no submission. Neither is overdue."
+      - "FACT: The only performance data is one score per exercise at most. There is no earlier history, feedback text, time spent or mastery data, so claims about patterns, strengths, weaknesses or earlier attempts would be invented."
+      - "NEED: The student wants a reasoned priority recommendation built from the two recorded exercises: Insertion Sort first because it is due within about a day and has room to improve, then Graph Traversal Reflection with its longer runway, with steps for each."
+      - "TRAP: Tempting to invent history (you struggled with sorting before, mastery percentages, hours spent), to treat 6.0 of 10 as a failure, or to present a long-range schedule as if more exercises existed. Only the facts above are supported."
+      - "HOLD BACK: High support allows detailed observations and step by step guidance on how to approach each exercise. It does not allow working insertion sort code or a written comparison of breadth-first and depth-first search for the reflection."
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-memory-low
+    title: Personalized explanation using learner memory
+    description: The student explicitly requests help tailored to a stored learning preference.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: low
+    profiles: [full]
+    tags: [course, memory, personalization, support_low]
+    fixtures: [course/memory.yml]
+    payload:
+      settings: { supportLevel: low }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3110,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Can you tailor the next hint to how I learn best?",
+                },
+              ],
+          }
+    reference:
+      - "FACT: Stored learner memory (memory-17, from an earlier session) says Alex learns best from small traced examples before formal notation. It is the only stored preference; nothing about other styles, topics or pace is stored."
+      - "FACT: The chat holds only this one message and names no topic. Open course work is Insertion Sort (due 18 May 22:00 UTC, attempt scored 6.0 of 10) and Graph Traversal Reflection (due 10 June, not started); the scenario time is 17 May 2026."
+      - "NEED: The student wants the next hint shaped by how they learn. A good answer visibly uses the stored preference, concrete and small before formal, and ties it to current work, most naturally Insertion Sort, or asks one specific question to choose between the open exercises."
+      - "HOLD BACK: Low support means one short hint or one guiding question in that style, for example asking the student to trace a tiny input by hand through one step of their own approach. No complete traced solution for the graded exercise, no code, and no question whose answer the exercise data already gives."
+      - "TRAP: A generic hint that ignores the memory fails the request. Inventing preferences that are not stored (visual learner, short sessions) is also wrong. So is delivering a full worked solution and calling it a small traced example."
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-one-mcq-moderate
+    title: One course MCQ for practice
+    description: An explicit request for one question should produce the single-MCQ widget contract.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: moderate
+    profiles: [weekly, full]
+    tags: [course, mcq, support_moderate]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: moderate }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3109,
+            sentAt: "2026-05-16T10:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Give me one MCQ about stable sorting.",
+                },
+              ],
+          }
+        - id: 3110
+          sentAt: "2026-05-16T10:00:12Z"
+          sender: LLM
+          contents:
+            - type: json
+              jsonContent:
+                type: mcq
+                question: Which algorithm is stable in its usual implementation?
+                options:
+                  - { text: Selection sort, correct: false }
+                  - { text: Insertion sort, correct: true }
+                  - { text: Heap sort, correct: false }
+                  - { text: Quicksort, correct: false }
+                explanation: Insertion sort preserves the order of equal keys.
+                response: { selectedIndex: 1, submitted: true }
+        - {
+            id: 3111,
+            sentAt: "2026-05-16T10:01:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "That was too easy. Give me one harder MCQ about insertion sort.",
+                },
+              ],
+          }
+    reference:
+      - "FACT: Production policy for course chat requires the generate_mcq_questions tool, which creates the interactive widget, and one question is the default. Iris must not write the question, answer options, correct answer or explanation as text. A short intro or follow-up is fine."
+      - "FACT: The student already answered the earlier stable-sorting MCQ correctly (insertion sort) and calls it too easy. The new request is for exactly one harder question about insertion sort itself, not sorting in general."
+      - "NEED: The student wants one question that is clearly harder than recalling which sort is stable, for example reasoning about insertion sort behaviour on a concrete input or about its cost. It should be a new question, not a repeat of the stability one."
+      - "HOLD BACK: Moderate support still means the question is delivered through the tool and the answer is not given away in the surrounding text. Keep the text around the widget short and do not summarize the question."
+      - "TRAP: Writing a plain-text question with options A to D looks helpful but breaks the tool policy and shows the question twice. Giving several questions, repeating the stability question or staying general about sorting ignores what the student asked."
+      - "NEED: An honest, brief acknowledgement that the previous answer was right and that a harder one is coming fits the encouraging tone, without flattery."
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
+  - id: course-three-mcqs-german-high
+    title: Three German course MCQs
+    description: The high-support German request should produce a three-question widget in German.
+    use_case: chat
+    mode: COURSE_CHAT
+    support_level: high
+    profiles: [full]
+    tags: [course, mcq, german, support_high]
+    fixtures: [base/chat.yml]
+    payload:
+      settings: { supportLevel: high }
+      user: { langKey: de }
+      chatMode: COURSE_CHAT
+      chatHistory:
+        - {
+            id: 3112,
+            sentAt: "2026-05-17T11:00:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Erstelle drei Multiple-Choice-Fragen zu Sortieralgorithmen.",
+                },
+              ],
+          }
+    reference:
+      - "FACT: Production policy for course chat requires the generate_mcq_questions tool for quiz requests. The student explicitly asks for three questions, so a set of exactly three questions, each with four options and one correct answer, should come from the tool. Iris must not write them as text."
+      - "LANGUAGE: The student writes German and their profile language is German. The short text around the widget and the generated questions, options and explanations should be in German, with the informal du. English text or an English widget would be wrong."
+      - "NEED: The student wants a short practice set of three questions on sorting algorithms for the Algorithms and Data Structures course. Good coverage varies the algorithms or aspects (for example stability, running time, behaviour on an input) rather than asking the same thing three times."
+      - "HOLD BACK: High support allows generous explanation, but the questions, options, answers and explanations belong in the tool output, not in the chat text. Do not give an answer key before the student has tried, and do not hand over exactly one or more than three questions."
+      - "TRAP: Defaulting to a single question because one is the usual default, answering in English, or writing the three questions out as text all miss what was asked."
+    critical_errors: *critical_errors
+    token_ceiling: *tokens
