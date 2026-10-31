@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 import traceback
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -163,6 +163,11 @@ class _ScenarioRequestBudget:
                 self.reserved_output_tokens -= request_limit
                 if input_tokens < 0 or output_tokens < 0:
                     raise RuntimeError("Model returned negative token usage")
+                if input_tokens == 0:
+                    # Production counts a missing usage report as zero, but every
+                    # prompt has tokens, so the provider did not report this call.
+                    self._charge_reservation(estimate, request_limit)
+                    input_tokens = output_tokens = 0
                 self.input_tokens += input_tokens
                 self.output_tokens += output_tokens
                 if self.input_tokens > self.ceiling.max_input_tokens:
@@ -689,6 +694,30 @@ def build_judge_request(
     return request
 
 
+@contextmanager
+def _without_ambiguous_retries():
+    """Stop production from retrying an attempt that may have been billed.
+
+    The trial reserves one judge call, so a second billed attempt would not fit.
+    A refused retry fails the trial, which keeps its full reservation.
+    """
+    from openai import RateLimitError
+
+    from iris.llm.external import openai_chat
+
+    original_retry = openai_chat._retry_after_openai_error
+
+    def retry(attempt, initial_delay, backoff_factor):
+        if not isinstance(sys.exc_info()[1], RateLimitError):
+            raise RuntimeError(
+                "A judge attempt failed after dispatch; its usage is ambiguous"
+            )
+        original_retry(attempt, initial_delay, backoff_factor)
+
+    with patch.object(openai_chat, "_retry_after_openai_error", retry):
+        yield
+
+
 def _judge(
     scenario,
     response: str | None,
@@ -715,22 +744,26 @@ def _judge(
             contents=[TextMessageContentDTO(textContent=serialized)],
         ),
     ]
-    answer = LlmRequestHandler("qa-judge").chat(
-        messages,
-        CompletionArguments(
-            max_tokens=JUDGE_OUTPUT_CEILING,
-            response_format=cast(Any, "JSON"),
-            reasoning_effort="low",
-        ),
-        None,
-    )
+    with _without_ambiguous_retries():
+        answer = LlmRequestHandler("qa-judge").chat(
+            messages,
+            CompletionArguments(
+                max_tokens=JUDGE_OUTPUT_CEILING,
+                response_format=cast(Any, "JSON"),
+                reasoning_effort="low",
+            ),
+            None,
+        )
+    usage = _token_usage(answer.token_usage)
+    if usage["inputTokens"] <= 0:
+        raise RuntimeError("Judge call reported no token usage")
     text = getattr(answer.contents[0], "text_content", None)
     if not isinstance(text, str):
         raise RuntimeError("Judge returned non-text content")
     result = json.loads(text)
     if not isinstance(result, dict):
         raise RuntimeError("Judge returned a non-object JSON value")
-    return result, _token_usage(answer.token_usage)
+    return result, usage
 
 
 def main(argv: list[str] | None = None) -> int:

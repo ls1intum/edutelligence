@@ -100,12 +100,17 @@ def run_paid_suite(
                             "Next scenario would exceed --max-cost-usd; "
                             "stopping before the paid call"
                         )
-                    reservation = guard.record_reservation(
-                        run_id=run_id,
-                        scenario_id=scenario.id,
-                        pipeline="trial-upper-bound",
-                        model=model,
-                        cost_usd=reserve,
+                    # Zero-priced models without a judge cost nothing to reserve.
+                    reservation = (
+                        guard.record_reservation(
+                            run_id=run_id,
+                            scenario_id=scenario.id,
+                            pipeline="trial-upper-bound",
+                            model=model,
+                            cost_usd=reserve,
+                        )
+                        if reserve > 0
+                        else None
                     )
                     stem = trial_stem(model, scenario.id, repetition)
                     input_path = raw_root / f"{stem}.input.json"
@@ -178,7 +183,7 @@ def run_paid_suite(
                     usage_incomplete = bool(
                         (payload.get("incidents") or {}).get("unaccountedAttempts")
                     )
-                    if usage_incomplete:
+                    if usage_incomplete or reservation is None:
                         # An attempt ran without reported usage, so the trial's full
                         # reservation stays as its cost; the answer is still rated.
                         pass

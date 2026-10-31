@@ -65,6 +65,7 @@ from iris.qa.worker import (  # noqa: E402
     _ITERATION_LIMIT_MARKERS,
     JUDGE_SYSTEM_PROMPT,
     _extract_callback,
+    _judge,
     _ScenarioRequestBudget,
     _timing,
     build_judge_request,
@@ -910,7 +911,9 @@ def _openai_handler(monkeypatch, side_effect, model_id="qa-gpt-6-luna-high"):
     client.chat.completions.create.side_effect = side_effect
     monkeypatch.setattr(DirectOpenAIChatModel, "get_client", lambda self: client)
     monkeypatch.setattr(openai_chat.time, "sleep", lambda _seconds: None)
-    return SimpleNamespace(model_id=model_id, _select_model=lambda _kind: model)
+    return SimpleNamespace(
+        model_id=model_id, model=model, _select_model=lambda _kind: model
+    )
 
 
 def test_a_timed_out_attempt_before_a_successful_retry_is_charged(monkeypatch):
@@ -1134,3 +1137,93 @@ def test_rate_card_refuses_an_auxiliary_price_other_than_the_mini_candidate(
 
     with pytest.raises(ValueError, match="auxiliary must match"):
         load_rate_card(path, require_confirmed=False)
+
+
+def test_a_response_without_usage_is_charged_at_its_reservation(monkeypatch):
+    response = _openai_response()
+    response.usage = None
+    handler = _openai_handler(monkeypatch, [response])
+    budget = _ScenarioRequestBudget(_budget_scenario().token_ceiling)
+
+    with budget:
+        LlmRequestHandler.chat(handler, [], CompletionArguments(), None)
+
+    assert budget.unaccounted_attempts == 1
+    assert budget.output_tokens == 1_000
+
+
+def test_the_judge_is_not_retried_after_an_attempt_that_may_be_billed(monkeypatch):
+    timeout = APITimeoutError(request=httpx.Request("POST", "https://llm.example"))
+    handler = _openai_handler(monkeypatch, [timeout, _openai_response()], "qa-judge")
+    monkeypatch.setattr(
+        LlmRequestHandler, "__init__", lambda self, model_id: None, raising=True
+    )
+    monkeypatch.setattr(
+        LlmRequestHandler,
+        "_select_model",
+        lambda _self, _kind: handler.model,
+    )
+
+    with pytest.raises(RuntimeError, match="judge attempt failed after dispatch"):
+        _judge(_real_chat(1)[0], "An answer.", [], {})
+
+
+def test_a_zero_priced_collection_needs_no_reservation(tmp_path, monkeypatch):
+    scenario = _real_chat(1)[0]
+    ledger = SpendLedger(tmp_path / "spend.jsonl")
+    card = _rate_card()
+
+    def worker(args, **_kwargs):
+        Path(args[args.index("--output") + 1]).write_text(
+            json.dumps(
+                {
+                    "scenarioId": scenario.id,
+                    "model": "gpt-6-luna-medium",
+                    "response": "An answer.",
+                    "activities": [],
+                    "usage": [
+                        {
+                            "model": "gpt-6-luna",
+                            "pipeline": "chat",
+                            "inputTokens": 100,
+                            "outputTokens": 50,
+                            "costUsd": 0.0,
+                        }
+                    ],
+                    "judgePending": True,
+                    "judgeInput": {"systemPrompt": "p", "request": {}},
+                    "executionError": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setenv("IRIS_QA_PRODUCTION_ROLES", "1")
+    monkeypatch.setattr(
+        "iris.qa.run.create_worker_configuration",
+        lambda *_args, **_kwargs: SimpleNamespace(environment={}, close=lambda: None),
+    )
+    monkeypatch.setattr("iris.qa.run.subprocess.run", worker)
+    monkeypatch.setattr("iris.qa.run._git_value", lambda *_args: "test")
+
+    code, root, _ = run_paid_suite(
+        qa_root=tmp_path / "qa",
+        scenarios=[scenario],
+        models=("gpt-6-luna-medium",),
+        repetitions=1,
+        rate_card=card,
+        ledger=ledger,
+        hard_limit=Decimal("30"),
+        max_run_cost=Decimal("30"),
+        planned_cost=Decimal("0"),
+        output_root=tmp_path / "collected",
+        skip_judge=True,
+    )
+
+    trial = json.loads((root / COLLECTION_FILE).read_text(encoding="utf-8"))["trials"][
+        0
+    ]
+    assert code == 0
+    assert trial["executionError"] is None
+    assert not ledger.records()
