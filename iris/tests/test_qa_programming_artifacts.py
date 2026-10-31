@@ -1,3 +1,4 @@
+import re
 import runpy
 import shutil
 import subprocess  # nosec B404 - fixed local javac/java commands
@@ -5,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 QA_ROOT = Path(__file__).parents[1] / "qa"
 
@@ -88,9 +90,14 @@ def test_java_sorting_student_snapshot_reproduces_hidden_test_failure(tmp_path):
     )
 
     completed = _compile_and_run_sort(source, tmp_path)
+    feedback = yaml.safe_load(
+        (QA_ROOT / "fixtures/programming/sorting.yml").read_text(encoding="utf-8")
+    )["programmingExerciseSubmission"]["latestResult"]["feedbacks"][0]["text"]
+    recorded = re.search(r"but was (\[[^\]]*\])", feedback)
 
     assert completed.returncode != 0
-    assert "AssertionError" in completed.stderr
+    assert recorded is not None
+    assert f"AssertionError: {recorded.group(1)}" in completed.stderr
 
 
 def test_java_sorting_compile_failure_snapshot_reproduces_build_failure(tmp_path):

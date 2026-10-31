@@ -336,7 +336,7 @@ scenarios:
               ],
           }
     reference:
-      - "FACT: Submission 502 builds, and the hidden test sortsDuplicatesAndNegativeValues fails for {3, -1, 3, 0} (expected {-1, 0, 3, 3}). Tracing the committed code by hand gives {3, -1, 0, 3}; the feedback text quotes a different actual array, so an answer should not treat that quoted array as exact."
+      - "FACT: Submission 502 builds, and the hidden test sortsDuplicatesAndNegativeValues fails for {3, -1, 3, 0} (expected {-1, 0, 3, 3}). The feedback reports the actual array [3, -1, 0, 3], which matches a hand trace of the committed code."
       - "FACT: The cause is the inner loop condition `j > 0 && values[j] > current`. It stops before comparing with index 0, so an element that belongs at the front is never moved there. Starting the outer loop at i = 1 is correct."
       - "TRAP: The test name suggests duplicates or negative numbers are the problem. They are not: any input whose smallest value is not already first fails, for example {2, 1} stays {2, 1}. Special-casing negatives or duplicates, or swapping the comparison operator on values, points the wrong way."
       - "NEED: A focused, test-driven next step: trace the failing input by hand and look at what the inner loop does when the current element is smaller than everything to its left. The student already gave the feedback, so asking again which feedback they see repeats an earlier question."

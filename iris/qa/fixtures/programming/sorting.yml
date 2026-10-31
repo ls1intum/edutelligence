@@ -27,7 +27,7 @@ programmingExerciseSubmission:
     successful: false
     feedbacks:
       - testCaseName: sortsDuplicatesAndNegativeValues
-        text: Expected [-1, 0, 3, 3] but was [-1, 3, 0, 3].
+        text: Expected [-1, 0, 3, 3] but was [3, -1, 0, 3].
         credits: 0.0
 qa:
   submissionHistory: artifacts/programming/sorting/submission-history.yml
