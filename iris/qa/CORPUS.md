@@ -20,7 +20,7 @@ available on `iris/quality-assurance-simple-v1-checkpoint`.
 | `course-exercise-priorities-high`     | `chat`             | `COURSE_CHAT`               | `high`     | `foundation` | Exercise-history priority analysis                   |
 | `course-exercise-history-low`         | `chat`             | `COURSE_CHAT`               | `low`      | `foundation` | Exercise-history interpretation with low support     |
 | `course-exam-accommodation-low`       | `chat`             | `COURSE_CHAT`               | `low`      | `advanced`   | Conflicting exam accommodation evidence              |
-| `course-memory-low`                   | `chat`             | `COURSE_CHAT`               | `low`      | `foundation` | Personalized explanation using learner memory        |
+| `course-memory-low`                   | `chat`             | `COURSE_CHAT`               | `low`      | `foundation` | Personalized hint from a preference stated in chat   |
 | `course-team-milestone-low`           | `chat`             | `COURSE_CHAT`               | `low`      | `advanced`   | Team milestone ownership conflict                    |
 | `course-deadline-conflict-moderate`   | `chat`             | `COURSE_CHAT`               | `moderate` | `advanced`   | Deadline conflict and prerequisite planning          |
 | `course-one-mcq-moderate`             | `chat`             | `COURSE_CHAT`               | `moderate` | `foundation` | One course MCQ for practice                          |

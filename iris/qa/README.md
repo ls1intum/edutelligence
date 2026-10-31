@@ -242,8 +242,8 @@ errors. A low score is benchmark data, not a command failure.
 
 - `scenarios/` — the complete 50-situation corpus.
 - `RUBRIC.md` — the five criteria every chat answer is rated on.
-- `fixtures/` — deterministic course, retrieval, lecture, memory, draft, and
-  prompt context.
+- `fixtures/` — deterministic course, retrieval, lecture, draft, and prompt
+  context.
 - `artifacts/` — student repositories, reference repositories, tests, build
   evidence, and chronological submission histories.
 - `config/rates.example.yml` — visible pricing assumptions for the cost guard.

@@ -261,18 +261,42 @@ scenarios:
     critical_errors: *critical_errors
     token_ceiling: *tokens
   - id: course-memory-low
-    title: Personalized explanation using learner memory
-    description: The student explicitly requests help tailored to a stored learning preference.
+    title: Personalized hint from a preference stated in chat
+    description: The student asks for help tailored to a learning preference they stated earlier in the same chat.
     use_case: chat
     mode: COURSE_CHAT
     support_level: low
     profiles: [full]
-    tags: [course, memory, personalization, support_low]
-    fixtures: [course/memory.yml]
+    tags: [course, conversation_memory, personalization, support_low]
+    fixtures: [base/chat.yml]
     payload:
       settings: { supportLevel: low }
       chatMode: COURSE_CHAT
       chatHistory:
+        - {
+            id: 3108,
+            sentAt: "2026-05-17T10:40:00Z",
+            sender: USER,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Something about me first: I learn best when I trace a small example by hand before I see any formal notation.",
+                },
+              ],
+          }
+        - {
+            id: 3109,
+            sentAt: "2026-05-17T10:40:09Z",
+            sender: LLM,
+            contents:
+              [
+                {
+                  type: text,
+                  textContent: "Thanks, that helps. I'll start with a small example you can trace yourself and only bring in notation after that. What would you like to work on?",
+                },
+              ],
+          }
         - {
             id: 3110,
             sentAt: "2026-05-17T11:00:00Z",
@@ -286,11 +310,11 @@ scenarios:
               ],
           }
     reference:
-      - "FACT: Stored learner memory (memory-17, from an earlier session) says Alex learns best from small traced examples before formal notation. It is the only stored preference; nothing about other styles, topics or pace is stored."
-      - "FACT: The chat holds only this one message and names no topic. Open course work is Insertion Sort (due 18 May 22:00 UTC, attempt scored 6.0 of 10) and Graph Traversal Reflection (due 10 June, not started); the scenario time is 17 May 2026."
-      - "NEED: The student wants the next hint shaped by how they learn. A good answer visibly uses the stored preference, concrete and small before formal, and ties it to current work, most naturally Insertion Sort, or asks one specific question to choose between the open exercises."
+      - "FACT: Earlier in this chat (10:40) the student said they learn best by tracing a small example by hand before seeing formal notation, and Iris agreed to work that way. It is the only preference stated; nothing about other styles, topics or pace was said."
+      - "FACT: The chat names no topic. Open course work is Insertion Sort (due 18 May 22:00 UTC, attempt scored 6.0 of 10) and Graph Traversal Reflection (due 10 June, not started); the scenario time is 17 May 2026."
+      - "NEED: The student wants the next hint shaped by how they learn. A good answer visibly uses the preference from earlier in the chat, concrete and small before formal, and ties it to current work, most naturally Insertion Sort, or asks one specific question to choose between the open exercises."
       - "HOLD BACK: Low support means one short hint or one guiding question in that style, for example asking the student to trace a tiny input by hand through one step of their own approach. No complete traced solution for the graded exercise, no code, and no question whose answer the exercise data already gives."
-      - "TRAP: A generic hint that ignores the memory fails the request. Inventing preferences that are not stored (visual learner, short sessions) is also wrong. So is delivering a full worked solution and calling it a small traced example."
+      - "TRAP: A generic hint that ignores the stated preference fails the request, and so does asking the student again how they learn best. Inventing preferences that were not stated (visual learner, short sessions) is also wrong. So is delivering a full worked solution and calling it a small traced example."
     critical_errors: *critical_errors
     token_ceiling: *tokens
   - id: course-one-mcq-moderate
