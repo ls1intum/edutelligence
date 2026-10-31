@@ -96,7 +96,11 @@ class AutonomousTutorPipeline(
         ],
     ) -> list[Callable]:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
-        allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
+        allow_faq_tool = should_allow_faq_tool(
+            state.db,
+            state.dto.course.id,
+            (state.dto.settings.artemis_base_url if state.dto.settings else None),
+        )
         is_programming_exercise = state.dto.programming_exercise is not None
         is_text_exercise = state.dto.text_exercise is not None
 
@@ -150,6 +154,11 @@ class AutonomousTutorPipeline(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
                     state.dto.course.id,
+                    (
+                        state.dto.settings.artemis_base_url
+                        if state.dto.settings
+                        else None
+                    ),
                     callback,
                 )
             )
@@ -208,7 +217,11 @@ class AutonomousTutorPipeline(
             "allow_lecture_tool": should_allow_lecture_tool(
                 state.db, state.dto.course.id
             ),
-            "allow_faq_tool": should_allow_faq_tool(state.db, state.dto.course.id),
+            "allow_faq_tool": should_allow_faq_tool(
+                state.db,
+                state.dto.course.id,
+                (state.dto.settings.artemis_base_url if state.dto.settings else None),
+            ),
             "is_programming_exercise": state.dto.programming_exercise is not None,
             "is_text_exercise": state.dto.text_exercise is not None,
             "student_question": post.content if post else "No question provided.",

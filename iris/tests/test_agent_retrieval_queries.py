@@ -114,12 +114,19 @@ def test_the_faq_tool_searches_the_agent_query():
         calls.append(kwargs)
         return [{"faq_id": 2, "question_title": "Room?", "question_answer": "MI 1."}]
 
-    tool = create_tool_faq_content_retrieval(retriever, 7, None)
+    tool = create_tool_faq_content_retrieval(
+        retriever, 7, "https://artemis.example", None
+    )
 
     output = tool("Where is the exam?")
 
     assert calls == [
-        {"search_query": "Where is the exam?", "course_id": 7, "result_limit": 10}
+        {
+            "search_query": "Where is the exam?",
+            "course_id": 7,
+            "base_url": "https://artemis.example",
+            "result_limit": 10,
+        }
     ]
     assert "MI 1." in output
 
@@ -129,7 +136,7 @@ def test_an_empty_query_gets_a_hint_instead_of_a_search():
         raise AssertionError("no search for an empty query")
 
     lecture_tool = create_tool_lecture_content_retrieval(fail, 1, "", None, {})
-    faq_tool = create_tool_faq_content_retrieval(fail, 1, None)
+    faq_tool = create_tool_faq_content_retrieval(fail, 1, "", None)
 
     assert lecture_tool("  ") == LECTURE_EMPTY_QUERY_REPLY
     assert faq_tool("") == FAQ_EMPTY_QUERY_REPLY
@@ -217,7 +224,7 @@ def test_a_cleared_content_also_resets_the_search_count():
 
 def test_both_tools_ask_the_model_for_a_query():
     lecture_tool = create_tool_lecture_content_retrieval(None, 1, "", None, {})
-    faq_tool = create_tool_faq_content_retrieval(None, 1, None)
+    faq_tool = create_tool_faq_content_retrieval(None, 1, "", None)
 
     for tool in (lecture_tool, faq_tool):
         parameters = AgentTool.from_function(tool).openai_schema()["function"][

@@ -413,6 +413,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         state.citation_sources = CitationSourceRegistry(require_delivery=True)
         dto = state.dto
         course_id = dto.course.id
+        base_url = dto.settings.artemis_base_url if dto.settings else None
         # The two availability checks are independent Weaviate round trips;
         # run them concurrently so the agent can start sooner.
         with TracedThreadPoolExecutor(max_workers=2) as executor:
@@ -420,7 +421,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 should_allow_lecture_tool, state.db, course_id
             )
             faq_tool_future = executor.submit(
-                should_allow_faq_tool, state.db, course_id
+                should_allow_faq_tool, state.db, course_id, base_url
             )
             state.allow_lecture_tool = lecture_tool_future.result()
             state.allow_faq_tool = faq_tool_future.result()

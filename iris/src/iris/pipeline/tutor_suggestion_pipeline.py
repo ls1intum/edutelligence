@@ -93,7 +93,11 @@ class TutorSuggestionPipeline(
         ],
     ) -> list[Callable]:
         allow_lecture_tools = should_allow_lecture_tool(state.db, state.dto.course.id)
-        allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
+        allow_faq_tool = should_allow_faq_tool(
+            state.db,
+            state.dto.course.id,
+            (state.dto.settings.artemis_base_url if state.dto.settings else None),
+        )
         is_programming_exercise = state.dto.programming_exercise is not None
         is_text_exercise = state.dto.text_exercise is not None
 
@@ -162,6 +166,11 @@ class TutorSuggestionPipeline(
                 create_tool_faq_content_retrieval(
                     self.faq_retriever,
                     state.dto.course.id,
+                    (
+                        state.dto.settings.artemis_base_url
+                        if state.dto.settings
+                        else None
+                    ),
                     callback,
                 )
             )
@@ -188,7 +197,11 @@ class TutorSuggestionPipeline(
         ],
     ) -> str:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
-        allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
+        allow_faq_tool = should_allow_faq_tool(
+            state.db,
+            state.dto.course.id,
+            (state.dto.settings.artemis_base_url if state.dto.settings else None),
+        )
         is_programming_exercise = state.dto.programming_exercise is not None
         is_text_exercise = state.dto.text_exercise is not None
         tutor_query = self.get_text_of_latest_user_message(state) != ""

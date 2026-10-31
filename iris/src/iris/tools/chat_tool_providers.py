@@ -296,6 +296,7 @@ def provide_faq_retrieval(state: State) -> Optional[Callable]:
     return create_tool_faq_content_retrieval(
         faq_retriever,
         course_id,
+        state.dto.settings.artemis_base_url if state.dto.settings else None,
         state.callback,
         citation_sources=getattr(state, "citation_sources", None),
     )
