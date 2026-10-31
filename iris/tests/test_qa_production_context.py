@@ -46,4 +46,5 @@ def test_judge_context_is_built_for_a_lecture_with_a_viewed_position():
 
 
 def test_non_chat_use_cases_have_no_production_context():
-    assert _production_context(_scenario("global-navigation-no-answer")) == {}
+    context = _production_context(_scenario("global-navigation-no-answer"))
+    assert isinstance(context, dict) and not context
