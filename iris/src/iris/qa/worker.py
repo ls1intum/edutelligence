@@ -37,12 +37,21 @@ def _request_token_upper_bound(messages: list[Any], tools: Any) -> int:
     return len(serialized) + framing_room
 
 
-def _is_content_filter_error(error: BaseException) -> bool:
-    """Whether the provider's content filter refused a prompt or filtered an answer."""
-    return (
-        getattr(error, "code", None) == "content_filter"
-        or type(error).__name__ == "ContentFilterFinishReasonError"
-    )
+def _is_prompt_refusal(error: BaseException) -> bool:
+    """Whether the provider's content filter refused the prompt before generating."""
+    from openai import APIStatusError
+
+    return isinstance(error, APIStatusError) and error.code == "content_filter"
+
+
+def _is_filtered_answer(error: BaseException) -> bool:
+    """Whether the provider generated an answer and its content filter withheld it.
+
+    The provider bills such a completion, but the error carries no usage.
+    """
+    from openai import ContentFilterFinishReasonError
+
+    return isinstance(error, ContentFilterFinishReasonError)
 
 
 class _ScenarioRequestBudget:
@@ -56,14 +65,33 @@ class _ScenarioRequestBudget:
         self.reserved_output_tokens = 0
         self.request_failure: str | None = None
         self.filtered_requests = 0
+        # Attempts that may have been billed but whose usage nobody reported. Each
+        # one is charged at its reserved upper bound.
+        self.unaccounted_attempts = 0
+        from iris.qa.bootstrap import BILLING_MODELS_ENV
+
+        self.billing_models: dict[str, str] = json.loads(
+            os.environ.get(BILLING_MODELS_ENV) or "{}"
+        )
         self.lock = threading.Lock()
+        self.local = threading.local()
         self.stack = ExitStack()
 
+    def _charge_reservation(self, estimate: int, request_limit: int) -> None:
+        """Count an attempt without reported usage at its upper bound (lock held)."""
+        self.input_tokens += estimate
+        self.output_tokens += request_limit
+        self.unaccounted_attempts += 1
+
     def __enter__(self):
+        from openai import RateLimitError
+
+        from iris.llm.external import openai_chat
         from iris.llm.request_handler.llm_request_handler import LlmRequestHandler
         from iris.pipeline import abstract_agent_pipeline
 
         original_chat = LlmRequestHandler.chat
+        original_retry = openai_chat._retry_after_openai_error
         original_executor = abstract_agent_pipeline.AgentExecutor
 
         def budgeted_chat(handler, messages, arguments, tools):
@@ -96,24 +124,38 @@ class _ScenarioRequestBudget:
                 self.reserved_input_tokens += estimate
                 self.reserved_output_tokens += request_limit
 
+            self.local.reservation = (estimate, request_limit)
             try:
                 response = original_chat(handler, messages, arguments, tools)
             except Exception as error:
                 with self.lock:
-                    if _is_content_filter_error(error):
+                    if _is_prompt_refusal(error):
                         # The provider refused the prompt before generating anything, so
                         # no usage is ambiguous. The pipeline decides what the student
                         # sees; the rejection is reported as an incident of the trial.
                         self.filtered_requests += 1
                         self.reserved_input_tokens -= estimate
                         self.reserved_output_tokens -= request_limit
+                    elif _is_filtered_answer(error):
+                        # The withheld answer was billed, so its reservation becomes
+                        # used tokens and the trial keeps its full cost reservation.
+                        self.filtered_requests += 1
+                        self.reserved_input_tokens -= estimate
+                        self.reserved_output_tokens -= request_limit
+                        self._charge_reservation(estimate, request_limit)
                     else:
                         self.request_failure = (
                             "A model request failed after dispatch; "
                             "its usage is ambiguous"
                         )
                 raise
+            finally:
+                self.local.reservation = None
             usage = response.token_usage
+            if self.billing_models:
+                usage.model_info = self.billing_models.get(
+                    handler.model_id, f"unpriced:{handler.model_id}"
+                )
             input_tokens = int(usage.num_input_tokens)
             output_tokens = int(usage.num_output_tokens)
             with self.lock:
@@ -129,6 +171,29 @@ class _ScenarioRequestBudget:
                     raise RuntimeError("Scenario output-token limit was exceeded")
             return response
 
+        def accounted_retry(attempt, initial_delay, backoff_factor):
+            # Production retries a failed attempt inside one model call and reports
+            # only the usage of the attempt that succeeds. An attempt that failed
+            # other than by a rate limit may still have run and been billed.
+            reservation = getattr(self.local, "reservation", None)
+            if reservation is not None and not isinstance(
+                sys.exc_info()[1], RateLimitError
+            ):
+                with self.lock:
+                    # The call's reservation stays held for the retry.
+                    self._charge_reservation(*reservation)
+                    if (
+                        self.input_tokens + self.reserved_input_tokens
+                        > self.ceiling.max_input_tokens
+                        or self.output_tokens + self.reserved_output_tokens
+                        > self.ceiling.max_output_tokens
+                    ):
+                        raise RuntimeError(
+                            "Scenario token limit would be exceeded "
+                            "before retrying a model call"
+                        )
+            original_retry(attempt, initial_delay, backoff_factor)
+
         def budgeted_executor(*args, **kwargs):
             configured = kwargs.get("max_iterations")
             kwargs["max_iterations"] = (
@@ -139,6 +204,9 @@ class _ScenarioRequestBudget:
             return original_executor(*args, **kwargs)
 
         self.stack.enter_context(patch.object(LlmRequestHandler, "chat", budgeted_chat))
+        self.stack.enter_context(
+            patch.object(openai_chat, "_retry_after_openai_error", accounted_retry)
+        )
         self.stack.enter_context(
             patch.object(abstract_agent_pipeline, "AgentExecutor", budgeted_executor)
         )
@@ -416,11 +484,14 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
         "diagnostics": diagnostics,
         "usage": [_token_usage(token) for token in raw_tokens],
         "timing": timing,
-        "incidents": (
-            {"contentFilterRejections": budget.filtered_requests}
-            if budget.filtered_requests
-            else {}
-        ),
+        "incidents": {
+            key: value
+            for key, value in (
+                ("contentFilterRejections", budget.filtered_requests),
+                ("unaccountedAttempts", budget.unaccounted_attempts),
+            )
+            if value
+        },
     }
 
 
@@ -430,6 +501,25 @@ def _bounded(value: Any, limit: int = 12_000) -> Any:
     if len(serialized) <= limit:
         return value
     return serialized[:limit] + "\n[benchmark evidence truncated]"
+
+
+def _discussion_post(post: Any) -> Any:
+    """Bound each text of a discussion post but keep its structure and flags.
+
+    Truncating the whole post would turn it into a string and could cut off the
+    ``redacted`` flags the judge needs to spot copied or obeyed hidden replies.
+    """
+    if not isinstance(post, dict):
+        return _bounded(post, 4_000)
+    answers = [
+        (
+            {**answer, "content": str(answer.get("content", ""))[:1_500]}
+            if isinstance(answer, dict)
+            else _bounded(answer, 1_500)
+        )
+        for answer in post.get("answers") or []
+    ]
+    return {**post, "content": str(post.get("content", ""))[:3_000], "answers": answers}
 
 
 def _production_context(scenario) -> dict[str, Any]:
@@ -515,6 +605,8 @@ def _judge_evidence(scenario, diagnostics: dict[str, Any]) -> dict[str, Any]:
         "course": _bounded(payload.get("course"), 6_000),
         "lecture": _bounded(payload.get("lecture"), 4_000),
         "lectureContext": _bounded(payload.get("context"), 8_000),
+        "discussionPost": _discussion_post(payload.get("post")),
+        "searchQuery": _bounded(payload.get("query"), 2_000),
         "controlledFixtureEvidence": _bounded(payload.get("qa", {}), 12_000),
         "productArtifacts": _bounded(diagnostics, 8_000),
         **_production_context(scenario),

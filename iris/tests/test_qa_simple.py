@@ -335,7 +335,9 @@ def test_failed_judge_keeps_full_trial_reservation(tmp_path, monkeypatch):
         ledger=ledger,
         hard_limit=Decimal("30"),
         max_run_cost=Decimal("30"),
-        planned_cost=trial_reserve(scenario, rate_card, "gpt-5.4-mini"),
+        planned_cost=trial_reserve(
+            scenario, rate_card, "gpt-5.4-mini", production_roles=False
+        ),
         output_root=tmp_path / "failed-judge-run",
     )
 
@@ -601,6 +603,7 @@ def test_cost_plan_is_visible_and_budget_aware(tmp_path):
         ledger=SpendLedger(tmp_path / "ledger.jsonl"),
         hard_limit=Decimal("30"),
         models=("gpt-5.4-mini",),
+        production_roles=False,
     )
     assert plan.planned_total > plan.judge_cost
     assert plan.remaining_after_plan > 0

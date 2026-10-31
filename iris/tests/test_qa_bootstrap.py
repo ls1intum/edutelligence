@@ -26,6 +26,7 @@ def _card():
             ModelRate("gpt-6-luna-high", Decimal("0"), Decimal("0")),
         ),
         judge=ModelRate("gpt-5.4", Decimal("5"), Decimal("6")),
+        auxiliary=ModelRate("gpt-5.4-mini", Decimal("1"), Decimal("2")),
     )
 
 

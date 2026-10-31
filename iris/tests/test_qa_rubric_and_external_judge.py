@@ -12,13 +12,20 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 import yaml
-from openai import BadRequestError
+from openai import (
+    APITimeoutError,
+    BadRequestError,
+    ContentFilterFinishReasonError,
+    RateLimitError,
+)
 from pydantic import ValidationError
 
 # Establish the production package import order before importing DTOs.
 importlib.import_module("iris.pipeline.pipeline")
 
 from iris.llm import CompletionArguments  # noqa: E402
+from iris.llm.external import openai_chat  # noqa: E402
+from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
 from iris.llm.request_handler.llm_request_handler import (  # noqa: E402
     LlmRequestHandler,
 )
@@ -41,7 +48,11 @@ from iris.qa.external_judge import (  # noqa: E402
     import_judgments,
 )
 from iris.qa.loader import _scenario_from_raw, load_suite  # noqa: E402
-from iris.qa.planning import build_cost_plan, trial_reserve  # noqa: E402
+from iris.qa.planning import (  # noqa: E402
+    build_cost_plan,
+    load_rate_card,
+    trial_reserve,
+)
 from iris.qa.report import summarize  # noqa: E402
 from iris.qa.rubric import (  # noqa: E402
     CHAT_MODE_USAGE_WEIGHTS,
@@ -310,9 +321,15 @@ def test_skipping_the_judge_removes_its_cost_from_reserve_and_plan():
     scenario = _scenario()
     card = _rate_card()
 
-    with_judge = trial_reserve(scenario, card, "gpt-6-luna-medium")
+    with_judge = trial_reserve(
+        scenario, card, "gpt-6-luna-medium", production_roles=False
+    )
     without_judge = trial_reserve(
-        scenario, card, "gpt-6-luna-medium", include_judge=False
+        scenario,
+        card,
+        "gpt-6-luna-medium",
+        production_roles=False,
+        include_judge=False,
     )
     plan = build_cost_plan(
         [scenario],
@@ -321,6 +338,7 @@ def test_skipping_the_judge_removes_its_cost_from_reserve_and_plan():
         ledger=SimpleNamespace(total=lambda: Decimal(0)),
         hard_limit=Decimal(30),
         models=("gpt-6-luna-medium",),
+        production_roles=False,
         include_judge=False,
     )
 
@@ -559,7 +577,11 @@ def test_skipping_the_judge_collects_answers_and_reserves_only_the_pipeline(
     configuration_calls = []
     worker_commands = []
     pipeline_reserve = trial_reserve(
-        scenario, card, "gpt-6-luna-medium", include_judge=False
+        scenario,
+        card,
+        "gpt-6-luna-medium",
+        production_roles=False,
+        include_judge=False,
     )
 
     def configuration(*_args, **kwargs):
@@ -829,3 +851,286 @@ def test_summary_counts_the_trials_with_a_content_filter_rejection():
     model = summarize([clean, filtered])["models"]["m"]
 
     assert model["contentFilterTrials"] == 1
+
+
+def _budget_scenario():
+    return _scenario(
+        token_ceiling={
+            "max_input_tokens": 100_000,
+            "max_output_tokens": 10_000,
+            "max_output_tokens_per_call": 1_000,
+            "max_agent_turns": 4,
+        }
+    )
+
+
+def test_a_filtered_answer_is_charged_at_its_reservation(monkeypatch):
+    def filtered(handler, messages, arguments, tools):
+        del handler, messages, arguments, tools
+        raise ContentFilterFinishReasonError()
+
+    monkeypatch.setattr(LlmRequestHandler, "chat", filtered)
+    budget = _ScenarioRequestBudget(_budget_scenario().token_ceiling)
+
+    with budget:
+        with pytest.raises(ContentFilterFinishReasonError):
+            LlmRequestHandler.chat(object(), [], CompletionArguments(), None)
+
+    budget.raise_if_failed()
+    assert budget.filtered_requests == 1
+    assert budget.unaccounted_attempts == 1
+    assert budget.reserved_input_tokens == 0
+    assert budget.reserved_output_tokens == 0
+    assert budget.input_tokens > 0
+    assert budget.output_tokens == 1_000
+
+
+def _openai_response():
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="stop",
+                message=SimpleNamespace(
+                    role="assistant", content="ok", tool_calls=None, refusal=None
+                ),
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3),
+    )
+
+
+def _openai_handler(monkeypatch, side_effect, model_id="qa-gpt-6-luna-high"):
+    model = DirectOpenAIChatModel(
+        id=model_id,
+        type="openai_chat",
+        model="gpt-6-luna",
+        api_key="sk-test",  # pragma: allowlist secret
+    )
+    client = MagicMock()
+    client.chat.completions.create.side_effect = side_effect
+    monkeypatch.setattr(DirectOpenAIChatModel, "get_client", lambda self: client)
+    monkeypatch.setattr(openai_chat.time, "sleep", lambda _seconds: None)
+    return SimpleNamespace(model_id=model_id, _select_model=lambda _kind: model)
+
+
+def test_a_timed_out_attempt_before_a_successful_retry_is_charged(monkeypatch):
+    timeout = APITimeoutError(request=httpx.Request("POST", "https://llm.example"))
+    handler = _openai_handler(monkeypatch, [timeout, _openai_response()])
+    budget = _ScenarioRequestBudget(_budget_scenario().token_ceiling)
+
+    with budget:
+        answer = LlmRequestHandler.chat(handler, [], CompletionArguments(), None)
+
+    budget.raise_if_failed()
+    assert answer.contents[0].text_content == "ok"
+    assert budget.unaccounted_attempts == 1
+    # The timed-out attempt is charged at its reservation, the retry as reported.
+    assert budget.output_tokens == 1_000 + 3
+    assert budget.reserved_input_tokens == 0
+    assert budget.reserved_output_tokens == 0
+
+
+def test_a_rate_limited_attempt_is_not_charged(monkeypatch):
+    request = httpx.Request("POST", "https://llm.example")
+    limited = RateLimitError(
+        "rate limited", response=httpx.Response(429, request=request), body=None
+    )
+    handler = _openai_handler(monkeypatch, [limited, _openai_response()])
+    budget = _ScenarioRequestBudget(_budget_scenario().token_ceiling)
+
+    with budget:
+        LlmRequestHandler.chat(handler, [], CompletionArguments(), None)
+
+    assert budget.unaccounted_attempts == 0
+    assert (budget.input_tokens, budget.output_tokens) == (7, 3)
+
+
+def test_a_retry_that_would_pass_the_ceiling_is_refused(monkeypatch):
+    timeout = APITimeoutError(request=httpx.Request("POST", "https://llm.example"))
+    handler = _openai_handler(monkeypatch, [timeout, _openai_response()])
+    ceiling = _budget_scenario().token_ceiling.model_copy(
+        update={"max_output_tokens": 1_500}
+    )
+    budget = _ScenarioRequestBudget(ceiling)
+
+    with budget:
+        with pytest.raises(RuntimeError, match="before retrying"):
+            LlmRequestHandler.chat(handler, [], CompletionArguments(), None)
+
+    with pytest.raises(RuntimeError, match="usage is ambiguous"):
+        budget.raise_if_failed()
+
+
+def test_usage_is_named_by_the_rate_card_row_of_the_configured_model(monkeypatch):
+    monkeypatch.setenv(
+        "IRIS_QA_BILLING_MODELS",
+        json.dumps({"qa-gpt-6-luna-high": "gpt-6-luna-high"}),
+    )
+    priced = _openai_handler(monkeypatch, [_openai_response()])
+    budget = _ScenarioRequestBudget(_budget_scenario().token_ceiling)
+
+    with budget:
+        answer = LlmRequestHandler.chat(priced, [], CompletionArguments(), None)
+        unknown = _openai_handler(monkeypatch, [_openai_response()], "qa-other")
+        other = LlmRequestHandler.chat(unknown, [], CompletionArguments(), None)
+
+    assert answer.token_usage.model_info == "gpt-6-luna-high"
+    assert other.token_usage.model_info == "unpriced:qa-other"
+
+
+@pytest.mark.usefixtures("isolated_environment")
+def test_worker_configuration_names_the_billing_row_of_each_model(
+    tmp_path, monkeypatch
+):
+    apply_local_llm_config(_logos_only_config(tmp_path), judge=False)
+    monkeypatch.setenv("IRIS_QA_PRODUCTION_ROLES", "1")
+
+    configuration = create_worker_configuration(
+        _rate_card(), "gpt-6-luna-high", skip_judge=True
+    )
+    configuration.close()
+
+    assert json.loads(configuration.environment["IRIS_QA_BILLING_MODELS"]) == {
+        "qa-gpt-6-luna-high": "gpt-6-luna-high",
+        "qa-aux-mini": "gpt-6-luna",
+    }
+
+
+def _rate_card_with_luna(price: str):
+    card = _rate_card()
+    candidates = tuple(
+        (
+            ModelRate("gpt-6-luna", Decimal(price), Decimal(price))
+            if rate.model == "gpt-6-luna"
+            else rate
+        )
+        for rate in card.candidates
+    )
+    return SimpleNamespace(**{**vars(card), "candidates": candidates})
+
+
+def test_production_roles_reserve_the_luna_helper_rate():
+    scenario = _budget_scenario()
+    card = _rate_card_with_luna("50")
+
+    production = trial_reserve(
+        scenario,
+        card,
+        "gpt-6-luna-medium",
+        production_roles=True,
+        include_judge=False,
+    )
+    plan = build_cost_plan(
+        [scenario],
+        card,
+        repetitions=1,
+        ledger=SimpleNamespace(total=lambda: Decimal(0)),
+        hard_limit=Decimal(1_000),
+        models=("gpt-6-luna-medium",),
+        production_roles=True,
+        include_judge=False,
+    )
+
+    assert production == ModelRate("gpt-6-luna", Decimal(50), Decimal(50)).cost(
+        100_000, 10_000
+    )
+    assert plan.subtotal == production
+    assert production > trial_reserve(
+        scenario,
+        card,
+        "gpt-6-luna-medium",
+        production_roles=False,
+        include_judge=False,
+    )
+
+
+def test_trial_with_an_unaccounted_attempt_keeps_its_reservation_and_is_rated(
+    tmp_path, monkeypatch
+):
+    scenario = _real_chat(1)[0]
+    ledger = SpendLedger(tmp_path / "spend.jsonl")
+
+    def worker(args, **_kwargs):
+        Path(args[args.index("--output") + 1]).write_text(
+            json.dumps(
+                {
+                    "scenarioId": scenario.id,
+                    "model": "gpt-6-luna-medium",
+                    "response": "An answer.",
+                    "activities": [],
+                    "usage": [
+                        {
+                            "model": "gpt-5.4-mini",
+                            "pipeline": "chat",
+                            "inputTokens": 100,
+                            "outputTokens": 50,
+                            "costUsd": 0.0003,
+                        }
+                    ],
+                    "incidents": {"unaccountedAttempts": 1},
+                    "judgePending": True,
+                    "judgeInput": {"systemPrompt": "p", "request": {}},
+                    "executionError": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(
+        "iris.qa.run.create_worker_configuration",
+        lambda *_args, **_kwargs: SimpleNamespace(environment={}, close=lambda: None),
+    )
+    monkeypatch.setattr("iris.qa.run.subprocess.run", worker)
+    monkeypatch.setattr("iris.qa.run._git_value", lambda *_args: "test")
+
+    code, root, _ = run_paid_suite(
+        qa_root=tmp_path / "qa",
+        scenarios=[scenario],
+        models=("gpt-6-luna-medium",),
+        repetitions=1,
+        rate_card=_rate_card(),
+        ledger=ledger,
+        hard_limit=Decimal("30"),
+        max_run_cost=Decimal("30"),
+        planned_cost=Decimal("1"),
+        output_root=tmp_path / "collected",
+        skip_judge=True,
+    )
+
+    trial = json.loads((root / COLLECTION_FILE).read_text(encoding="utf-8"))["trials"][
+        0
+    ]
+    assert code == 0
+    assert trial["executionError"] is None
+    assert [record.reservation for record in ledger.records()] == [True]
+
+
+def test_judge_sees_the_discussion_with_its_redaction_flags_and_the_query():
+    scenarios = {item.id: item for item in _suite().scenarios}
+
+    evidence = build_judge_request(
+        scenarios["autonomous-logistics-optout"], "An answer.", [], {}
+    )["evidence"]
+    search = build_judge_request(
+        scenarios["global-retake-window"], "An answer.", [], {}
+    )["evidence"]
+
+    post = evidence["discussionPost"]
+    assert post["content"] == "Does the grace period apply to graded submissions?"
+    assert post["answers"][0]["redacted"] is True
+    assert "system prompt" in post["answers"][0]["content"]
+    assert search["searchQuery"].startswith("I failed the graded checkpoint")
+
+
+def test_rate_card_refuses_an_auxiliary_price_other_than_the_mini_candidate(
+    tmp_path,
+):
+    raw = yaml.safe_load((QA_ROOT / "config/rates.example.yml").read_text("utf-8"))
+    assert load_rate_card(QA_ROOT / "config/rates.example.yml", require_confirmed=False)
+    raw["auxiliary"]["output_per_million"] = "9.00"
+    path = tmp_path / "rates.yml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="auxiliary must match"):
+        load_rate_card(path, require_confirmed=False)

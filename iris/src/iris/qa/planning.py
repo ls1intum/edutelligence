@@ -39,6 +39,10 @@ ZERO_RATE_CANDIDATES = {
 }
 
 
+# Iris' own side tasks run on this model with --production-roles.
+PRODUCTION_HELPER_MODEL = "gpt-6-luna"
+
+
 @dataclass(frozen=True)
 class RateCard:
     candidates: tuple[ModelRate, ...]
@@ -133,7 +137,17 @@ def load_rate_card(path: Path, *, require_confirmed: bool = True) -> RateCard:
         raise ValueError("Rate card judge must be gpt-5.4")
     if auxiliary.model != "gpt-5.4-mini":
         raise ValueError("Rate card auxiliary must be gpt-5.4-mini")
+    # One deployment serves both, and usage names only the model, so one price.
+    if auxiliary not in candidates:
+        raise ValueError("Rate card auxiliary must match the gpt-5.4-mini candidate")
     return RateCard(candidates, judge, auxiliary, confirmed, source)
+
+
+def helper_rate(rate_card: RateCard, *, production_roles: bool) -> ModelRate:
+    """The rate of the model Iris calls for its own side tasks."""
+    if production_roles:
+        return candidate_rates(rate_card, (PRODUCTION_HELPER_MODEL,))[0]
+    return rate_card.auxiliary
 
 
 def judge_reserve(rate_card: RateCard) -> Decimal:
@@ -146,6 +160,7 @@ def trial_reserve(
     rate_card: RateCard,
     candidate_model: str,
     *,
+    production_roles: bool,
     include_judge: bool = True,
 ) -> Decimal:
     """Pessimistic price for one real-pipeline execution plus one judge call.
@@ -155,14 +170,11 @@ def trial_reserve(
     is more expensive, then the judge ceiling is added separately.
     """
     candidate = candidate_rates(rate_card, (candidate_model,))[0]
+    helper = helper_rate(rate_card, production_roles=production_roles)
     pipeline_rate = ModelRate(
         model=candidate_model,
-        input_per_million=max(
-            candidate.input_per_million, rate_card.auxiliary.input_per_million
-        ),
-        output_per_million=max(
-            candidate.output_per_million, rate_card.auxiliary.output_per_million
-        ),
+        input_per_million=max(candidate.input_per_million, helper.input_per_million),
+        output_per_million=max(candidate.output_per_million, helper.output_per_million),
     )
     pipeline = pipeline_rate.cost(
         scenario.token_ceiling.max_input_tokens,
@@ -180,6 +192,7 @@ def build_cost_plan(
     hard_limit: Decimal,
     uplift_percent: Decimal = Decimal("10"),
     models: Sequence[str] = CANDIDATE_MODELS,
+    production_roles: bool,
     include_judge: bool = True,
 ) -> CostPlan:
     if repetitions < 1:
@@ -194,7 +207,13 @@ def build_cost_plan(
     pipeline_costs = {
         rate.model: sum(
             (
-                trial_reserve(scenario, rate_card, rate.model, include_judge=False)
+                trial_reserve(
+                    scenario,
+                    rate_card,
+                    rate.model,
+                    production_roles=production_roles,
+                    include_judge=False,
+                )
                 for scenario in scenarios
             ),
             Decimal(0),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from urllib.parse import urlparse
 
 import yaml
 
+from iris.qa.planning import PRODUCTION_HELPER_MODEL, helper_rate
 from iris.qa.yaml_utils import safe_load_unique
 
 CANDIDATE_MODEL_IDS = {
@@ -70,7 +72,9 @@ LOGOS_HELPER_MODEL = "gpt-5.4-mini"
 # model, because the production role mapping has no separate guide model. Needs Logos
 # for the helper.
 PRODUCTION_ROLES_ENV = "IRIS_QA_PRODUCTION_ROLES"
-PRODUCTION_HELPER_MODEL = "gpt-6-luna"
+# Maps each configured model id to the rate-card row that prices it. Production
+# reports the provider model name, which two reasoning efforts of one model share.
+BILLING_MODELS_ENV = "IRIS_QA_BILLING_MODELS"
 LOGOS_ENVIRONMENT_NAMES = (
     HELPER_ROUTE_ENV,
     "IRIS_QA_LOGOS_BASE_URL",
@@ -239,6 +243,10 @@ def apply_local_llm_config(path: Path, *, judge: bool = True) -> dict[str, str]:
     if logos_entries:
         metadata["logosBaseUrl"] = configured["IRIS_QA_LOGOS_BASE_URL"]
     return metadata
+
+
+def production_roles_enabled() -> bool:
+    return os.environ.get(PRODUCTION_ROLES_ENV) == "1"
 
 
 def _required(name: str) -> str:
@@ -480,11 +488,13 @@ def create_worker_configuration(
         raise ValueError(f"Unsupported QA candidate model: {candidate_model}")
     logos_candidate = _logos_candidate(candidate_model)
     helper_via_logos = os.environ.get(HELPER_ROUTE_ENV) == "logos"
-    production_roles = os.environ.get(PRODUCTION_ROLES_ENV) == "1"
+    production_roles = production_roles_enabled()
     if production_roles and not helper_via_logos:
         raise ValueError("Production roles need a Logos-only configuration")
     rates = {rate.model: rate for rate in (*rate_card.candidates, rate_card.judge)}
     models: list[dict] = []
+    # Each model id is billed by the rate-card row whose price it is given below.
+    billing_models: dict[str, str] = {}
     if helper_via_logos:
         if not skip_judge:
             raise ValueError("A Logos-only configuration needs the judge to be skipped")
@@ -535,6 +545,9 @@ def create_worker_configuration(
             )
             for model, deployment in deployments.items()
         ]
+        billing_models.update(
+            {CANDIDATE_MODEL_IDS.get(model, "qa-judge"): model for model in deployments}
+        )
     if logos_candidate is not None:
         base_model, reasoning_effort = logos_candidate
         logos_model = _required(str(LOGOS_CANDIDATES[base_model]["model_env"]))
@@ -548,7 +561,7 @@ def create_worker_configuration(
                 reasoning_effort=reasoning_effort,
             )
         )
-    mini_rate = rates[PRODUCTION_HELPER_MODEL if production_roles else "gpt-5.4-mini"]
+    mini_rate = helper_rate(rate_card, production_roles=production_roles)
     if helper_via_logos:
         models.append(
             _logos_helper_model(
@@ -573,6 +586,8 @@ def create_worker_configuration(
             )
         )
     candidate_id = CANDIDATE_MODEL_IDS[candidate_model]
+    billing_models[candidate_id] = candidate_model
+    billing_models["qa-aux-mini"] = mini_rate.model
     directory = tempfile.TemporaryDirectory(prefix="iris-qa-")
     root = Path(directory.name)
     application = root / "application.yml"
@@ -591,4 +606,5 @@ def create_worker_configuration(
         IRIS_QA_CANDIDATE_MODEL=candidate_model,
         IRIS_QA_JUDGE_MODEL=rate_card.judge.model,
     )
+    environment[BILLING_MODELS_ENV] = json.dumps(billing_models, sort_keys=True)
     return WorkerConfiguration(directory, environment)

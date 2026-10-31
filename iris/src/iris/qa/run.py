@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
-from iris.qa.bootstrap import create_worker_configuration
+from iris.qa.bootstrap import create_worker_configuration, production_roles_enabled
 from iris.qa.cost import BudgetGuard, ModelRate, SpendLedger
 from iris.qa.evaluate import ScenarioEvaluation, evaluation_from_worker
 from iris.qa.planning import RateCard, trial_reserve
@@ -75,6 +75,8 @@ def run_paid_suite(
     guard = BudgetGuard(ledger, hard_limit)
     model_rates = _rates(rate_card)
     run_start_total = ledger.total()
+    # Read where the worker configuration reads it, so both price the same helper.
+    production_roles = production_roles_enabled()
     evaluations: list[ScenarioEvaluation] = []
     collected: list[dict] = []
 
@@ -86,7 +88,11 @@ def run_paid_suite(
             for scenario in scenarios:
                 for repetition in range(1, repetitions + 1):
                     reserve = trial_reserve(
-                        scenario, rate_card, model, include_judge=not skip_judge
+                        scenario,
+                        rate_card,
+                        model,
+                        production_roles=production_roles,
+                        include_judge=not skip_judge,
                     )
                     guard.require_capacity(reserve)
                     if ledger.total() - run_start_total + reserve > max_run_cost:
@@ -169,7 +175,14 @@ def run_paid_suite(
                         rate.model == rate_card.judge.model
                         for _, rate, _, _ in verified_usage
                     )
-                    if (
+                    usage_incomplete = bool(
+                        (payload.get("incidents") or {}).get("unaccountedAttempts")
+                    )
+                    if usage_incomplete:
+                        # An attempt ran without reported usage, so the trial's full
+                        # reservation stays as its cost; the answer is still rated.
+                        pass
+                    elif (
                         completed.returncode == 0
                         and not payload.get("executionError")
                         and verified_usage

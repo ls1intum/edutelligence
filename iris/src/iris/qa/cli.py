@@ -145,6 +145,7 @@ def _plan(args):
         hard_limit=_decimal(args.budget_usd, "--budget-usd"),
         uplift_percent=_decimal(args.uplift_percent, "--uplift-percent"),
         models=_models(args),
+        production_roles=args.production_roles,
         include_judge=not args.skip_judge,
     )
     return root, scenarios, rate_card, ledger_path, plan
