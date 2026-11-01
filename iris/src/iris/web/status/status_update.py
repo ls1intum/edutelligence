@@ -4,8 +4,6 @@ from threading import Lock
 from typing import Any, Optional
 
 import requests
-from memiris import Memory
-from memiris.api.memory_dto import MemoryDTO
 from sentry_sdk import capture_exception, capture_message
 
 from iris.common.logging_config import get_logger
@@ -388,7 +386,6 @@ class ChatRunCallback(StatusCallback):
         self,
         final_result,
         tokens=None,
-        accessed_memories=None,
         activities=None,
         activity_seq=None,
         suggested_context=None,
@@ -398,8 +395,6 @@ class ChatRunCallback(StatusCallback):
             "final": True,
             "tokens": tokens or [],
         }
-        if accessed_memories is not None:
-            fields["accessed_memories"] = self._memory_dtos(accessed_memories)
         if activities is not None:
             fields["activities"] = activities
         if activity_seq is not None:
@@ -445,7 +440,6 @@ class ChatRunCallback(StatusCallback):
     def finish(
         self,
         session_title=None,
-        created_memories=None,
         tokens=None,
         activities=None,
         activity_seq=None,
@@ -454,8 +448,6 @@ class ChatRunCallback(StatusCallback):
         fields: dict[str, Any] = {}
         if session_title is not None:
             fields["session_title"] = session_title
-        if created_memories is not None:
-            fields["created_memories"] = self._memory_dtos(created_memories)
         if tokens is not None:
             fields["tokens"] = tokens
         if activities is not None:
@@ -560,10 +552,6 @@ class ChatRunCallback(StatusCallback):
         if self._undelivered_result_fields is None:
             return fields, False
         return {**self._undelivered_result_fields, **fields}, True
-
-    @staticmethod
-    def _memory_dtos(memories: list[Memory]) -> list[MemoryDTO]:
-        return [MemoryDTO.from_memory(memory) for memory in memories]
 
     @staticmethod
     def _payload(

@@ -164,7 +164,6 @@ def setup_logging(level: str = "INFO") -> None:
         "openai",
         "urllib3",
         "asyncio",
-        "apscheduler",
     ]
     for logger_name in noisy_loggers:
         logging.getLogger(logger_name).setLevel(logging.WARNING)

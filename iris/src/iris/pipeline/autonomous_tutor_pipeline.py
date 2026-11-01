@@ -257,33 +257,6 @@ class AutonomousTutorPipeline(
             confidence_section = self.confidence_basic_template.render()
         return base_prompt + "\n\n" + confidence_section
 
-    def get_memiris_tenant(self, dto: AutonomousTutorPipelineExecutionDTO) -> str:
-        """
-        Return the Memiris tenant identifier for the current user.
-
-        Returns:
-            str: The tenant identifier
-        """
-        return ""
-
-    def get_memiris_reference(self, dto: AutonomousTutorPipelineExecutionDTO) -> str:
-        """
-        Does not return any reference, as memory creation is currently disabled for this pipeline.
-
-        Returns:
-            str: "unknown"
-        """
-        return "unknown"
-
-    def is_memiris_memory_creation_enabled(
-        self,
-        state: AgentPipelineExecutionState[
-            AutonomousTutorPipelineExecutionDTO, Variant
-        ],
-    ) -> bool:
-        """Memory creation is disabled for autonomous tutor pipeline."""
-        return False
-
     NO_RESPONSE_MARKER = "NO_RESPONSE_NEEDED"
 
     def post_agent_hook(

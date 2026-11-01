@@ -63,12 +63,25 @@ def _discover_unit_ids(collection, schema, course_id: int, base_url: str) -> set
     under-reports per-unit totals versus a direct filtered fetch/aggregate), so
     the actual counting is done one unit at a time, confirmed against the object
     store, by each of this endpoint's per-collection loops.
+
+    The limit must be explicit: without one Weaviate returns only 100 groups, so
+    in a course with more units the rest looked empty and Artemis re-ingested
+    them on every reconcile pass.
     """
     groups = collection.aggregate.over_all(
         filters=_course_filter(schema, course_id, base_url),
-        group_by=GroupByAggregate(prop=schema.LECTURE_UNIT_ID.value),
+        group_by=GroupByAggregate(
+            prop=schema.LECTURE_UNIT_ID.value, limit=_UNIT_ROW_LIMIT
+        ),
         total_count=True,
     ).groups
+    if len(groups) >= _UNIT_ROW_LIMIT:
+        logger.warning(
+            "Census unit discovery hit its limit | collection=%s course_id=%s limit=%s",
+            schema.COLLECTION_NAME.value,
+            course_id,
+            _UNIT_ROW_LIMIT,
+        )
     return {
         int(group.grouped_by.value)
         for group in groups

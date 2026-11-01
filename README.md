@@ -37,8 +37,6 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 - **Iris:** [Pipeline system](https://ls1intum.github.io/edutelligence/iris/docs/developer/pipeline-system) and [RAG pipeline](https://ls1intum.github.io/edutelligence/iris/docs/developer/rag-pipeline)
 - **Athena:** [Module request lifecycle](https://ls1intum.github.io/edutelligence/athena/docs/dev/module/request-lifecycle)
 - **Atlas:** [AtlasML ML pipelines](https://ls1intum.github.io/edutelligence/atlas/dev/code-reference/ml-pipelines)
-- **Logos:** [Request pipeline source reference](./logos/logos-orchestrator/src/logos/pipeline/README.md)
-- **Memiris:** [Library source reference](./memiris/README.md)
 
 ## 🚀 Sub-Services Overview
 
@@ -81,25 +79,11 @@ A microservice that incorporates competency models into Learning Management Syst
 
 **Technology Stack:** Python, Machine Learning, GenAI/LLMs
 
-### 📊 [Logos](./logos/) - LLM Engineering Platform
-
-A comprehensive LLM Engineering Platform that provides centralized management and monitoring for AI services.
-
-**Key Features:**
-
-- **Usage Logging**: Comprehensive tracking of LLM usage
-- **Billing Management**: Cost tracking and billing for AI services
-- **Central Resource Management**: Unified management of AI resources
-- **Policy-Based Model Selection**: Intelligent model routing based on policies
-- **Scheduling & Monitoring**: Advanced scheduling and real-time monitoring
-
-**Technology Stack:** Python 3.13, Poetry, FastAPI, Docker
-
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Python 3.13** for Iris, Memiris, Atlas and Logos; **Python 3.11** for Athena
+- **Python 3.13** for Iris and Atlas; **Python 3.11** for Athena
 - **Poetry** for dependency management
 - **Docker & Docker Compose** for containerization
 - **Git** for version control

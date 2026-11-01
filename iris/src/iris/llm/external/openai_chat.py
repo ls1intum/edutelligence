@@ -86,6 +86,26 @@ def _is_retryable_openai_error(error: Exception) -> bool:
     return False
 
 
+def _close_stream(stream: Any) -> None:
+    """Close a streamed response once we stop reading it.
+
+    An unclosed ``openai.Stream`` is freed only by the cyclic garbage collector,
+    because its generator references it. The generator's cleanup takes the
+    httpcore connection pool lock; when that collection runs in a thread that
+    already holds the lock, the thread deadlocks, and every later request on the
+    model's shared client then blocks forever without any timeout.
+
+    Langfuse's client wraps the stream in an object without ``close()`` whose
+    ``__exit__`` does nothing, so the OpenAI stream is closed through its
+    ``response`` attribute.
+    """
+    if not callable(getattr(stream, "close", None)):
+        stream = getattr(stream, "response", None)
+    close = getattr(stream, "close", None)
+    if callable(close):
+        close()
+
+
 def is_content_filter_error(error: Exception) -> bool:
     """Whether the provider's content filter rejected the request or its answer.
 
@@ -917,6 +937,16 @@ class OpenAIChatModel(ChatModel):
             stream=True,
             stream_options={"include_usage": True},
         )
+        try:
+            return self._read_streamed_chat_completion(response, stream_handler)
+        finally:
+            _close_stream(response)
+
+    def _read_streamed_chat_completion(
+        self,
+        response: Any,
+        stream_handler: Callable[[Optional[str]], None],
+    ) -> PyrisMessage:
         content_parts: list[str] = []
         tool_call_fragments: dict[int, dict[str, Any]] = {}
         usage: Optional[CompletionUsage] = None
@@ -1034,6 +1064,18 @@ class OpenAIChatModel(ChatModel):
     ) -> PyrisMessage:
         params = self._create_responses_params(responses_input, arguments, tools)
         response_stream = client.responses.create(**params, stream=True)
+        try:
+            return self._read_streamed_responses_completion(
+                response_stream, stream_handler
+            )
+        finally:
+            _close_stream(response_stream)
+
+    def _read_streamed_responses_completion(
+        self,
+        response_stream: Any,
+        stream_handler: Callable[[Optional[str]], None],
+    ) -> PyrisMessage:
         content_parts: list[str] = []
         tool_call_turn = False
         reset_sent = False

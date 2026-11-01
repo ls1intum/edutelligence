@@ -22,7 +22,7 @@ from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
 def _make_dto():
     return SimpleNamespace(
         chat_history=[],
-        user=SimpleNamespace(id=1, lang_key="en", memiris_enabled=False),
+        user=SimpleNamespace(id=1, lang_key="en"),
         course=SimpleNamespace(
             id=7,
             name="Test Course",
@@ -115,7 +115,6 @@ def _run_pipeline(pipeline: ChatPipeline, callback: MagicMock) -> None:
     variant.model.return_value = "some-model-id"
     with (
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
-        patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
         patch(
             "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",

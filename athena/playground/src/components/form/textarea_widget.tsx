@@ -24,7 +24,7 @@ const TextAreaWidget = ({ id, value, onChange, options, disabled: readOnly }: Wi
   };
 
   return (
-    <div id={id} className="border border-gray-300 rounded my-2 py-2">
+    <div id={id} className="border border-gray-300 rounded-sm my-2 py-2">
       <div style={{ height }}>
         <Editor
           options={{

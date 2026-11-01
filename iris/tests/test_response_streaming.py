@@ -17,6 +17,7 @@ from iris.llm import CompletionArguments  # noqa: E402
 from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
+from iris.pipeline.shared.citation_sources import citation_free_draft  # noqa: E402
 from iris.web.status.partial_result_sender import (  # noqa: E402
     PARTIAL_POST_TIMEOUT_SECONDS,
     STOP_DRAIN_TIMEOUT_SECONDS,
@@ -764,7 +765,7 @@ def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
 
     return SimpleNamespace(
         chat_history=[],
-        user=SimpleNamespace(id=1, lang_key="en", memiris_enabled=False),
+        user=SimpleNamespace(id=1, lang_key="en"),
         course=SimpleNamespace(
             id=7,
             name="Test Course",
@@ -849,10 +850,11 @@ def _run_stubbed_pipeline_details(
     class FakeSender:
         """Stands in for PartialResultSender to record wiring calls."""
 
-        def __init__(self, url, run_id, interval_seconds=0.35):
+        def __init__(self, url, run_id, interval_seconds=0.35, text_transform=None):
             self.url = url
             self.run_id = run_id
             self.interval_seconds = interval_seconds
+            self.text_transform = text_transform
             self.deltas = []
             sender_instances.append(self)
 
@@ -882,7 +884,6 @@ def _run_stubbed_pipeline_details(
 
     with (
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
-        patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
         patch(
             "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
@@ -913,6 +914,8 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     sender = sender_instances[0]
     assert sender.url.endswith("/chat/runs/run-1/status")
     assert sender.run_id == "run-1"
+    # Chat drafts carry no citations: markers are removed before a partial is posted.
+    assert sender.text_transform is citation_free_draft
     created_args[0].stream_handler("Hello")
     assert sender.deltas == ["Hello"]
     assert events.index("sender.start") < events.index("sender.stop")
