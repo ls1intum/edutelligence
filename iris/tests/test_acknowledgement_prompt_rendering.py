@@ -91,8 +91,8 @@ def test_every_mode_and_support_level_asks_for_a_specific_acknowledgement(
 
     rule = _rule(rendered)
     assert "Open every reply that is not a greeting" in rule
-    assert "one short, specific, true acknowledgement" in rule
-    assert "what the student did, asked or faces" in rule
+    assert "one short sentence that names something specific and true" in rule
+    assert "from the student's message, work or results" in rule
     assert "Maintain a patient, encouraging tone" not in rendered
 
 
@@ -104,11 +104,43 @@ def test_the_rule_keeps_the_acknowledgement_honest_and_then_helps():
     assert rule.endswith("Then help.")
 
 
+def test_the_rule_says_what_does_not_count_and_leads_a_correction_with_what_is_right():
+    rule = _rule(_render("COURSE_CHAT"))
+
+    assert "Restating the question is not an acknowledgement." in rule
+    assert "If you correct a mistake, name what is right first." in rule
+
+
 def test_the_rule_is_one_short_bullet_that_replaces_the_old_one():
     rendered = _render("LECTURE_CHAT")
 
     assert rendered.count("acknowledgement") == 1
-    assert len(_rule(rendered).split()) < 45
+    assert len(_rule(rendered).split()) < 80
+
+
+@pytest.mark.parametrize("chat_mode", CHAT_MODES)
+def test_the_closing_reminder_points_at_the_acknowledgement_instead_of_praise(
+    chat_mode,
+):
+    rendered = _render(chat_mode)
+
+    assert "offer positive reinforcement" not in rendered
+    assert "Show encouragement by acknowledging what the student did" in rendered
+
+
+@pytest.mark.parametrize("chat_mode", ["COURSE_CHAT", "LECTURE_CHAT"])
+def test_the_quiz_intro_names_something_true_about_the_request(chat_mode):
+    rendered = _render(chat_mode)
+
+    assert "short intro before that names something true about the request" in rendered
+    assert "Testing yourself on this is a good way to spot gaps." in rendered
+
+
+@pytest.mark.parametrize(
+    "chat_mode", ["PROGRAMMING_EXERCISE_CHAT", "TEXT_EXERCISE_CHAT"]
+)
+def test_the_quiz_intro_rule_only_exists_where_quizzes_are_generated(chat_mode):
+    assert "short intro before" not in _render(chat_mode)
 
 
 def test_the_greeting_protocol_still_answers_a_greeting_warmly():
