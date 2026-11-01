@@ -1,6 +1,5 @@
 from typing import List, Optional
 
-from memiris.api.memory_dto import MemoryDTO
 from pydantic import Field
 
 from iris.domain.data.compaction_dto import CompactionDTO
@@ -18,8 +17,6 @@ class ChatStatusUpdateDTO(StatusUpdateDTO):
     partial_seq: Optional[int] = Field(alias="partialSeq", default=None)
     session_title: Optional[str] = Field(alias="sessionTitle", default=None)
     suggestions: Optional[List[str]] = Field(default_factory=list)
-    accessed_memories: List[MemoryDTO] = Field(alias="accessedMemories", default=[])
-    created_memories: List[MemoryDTO] = Field(alias="createdMemories", default=[])
     activities: Optional[List[ActivityDTO]] = None
     activity_seq: Optional[int] = Field(alias="activitySeq", default=None)
     suggested_context: Optional[SuggestedContextDTO] = Field(

@@ -3,6 +3,7 @@
 import base64
 import threading
 import time
+from contextlib import contextmanager
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -13,7 +14,6 @@ import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.custom_exceptions import IngestionCancelledException
 from iris.config import settings
 from iris.domain.data.slide_vision_dto import SlideVisionDTO
-from iris.pipeline import lecture_unit_segment_summary_pipeline as segment_module
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
     LectureUnitSegmentSummaryPipeline,
@@ -262,11 +262,20 @@ def test_a_segment_is_written_with_the_visibility_its_slide_has_when_it_is_writt
     )
     pipeline.llm_embedding = MagicMock()
     pipeline.lecture_unit_segment_collection = MagicMock()
-    pipeline.job_handler = MagicMock()
-    lock_held_while_reading = []
+    unit_guard_active = []
+
+    @contextmanager
+    def current_job_guard(*_args):
+        unit_guard_active.append(True)
+        yield
+        unit_guard_active.pop()
+
+    pipeline.job_handler = SimpleNamespace(current_job_guard=current_job_guard)
+    guard_held_while_reading = []
 
     def current_slides(*_args):
-        lock_held_while_reading.append(segment_module.batch_update_lock.locked())
+        # The visibility update holds only the unit lock, which the job guard takes.
+        guard_held_while_reading.append(bool(unit_guard_active))
         return [SimpleNamespace(properties={"hidden_until": "2030-01-01T00:00:00Z"})]
 
     pipeline._get_slides = current_slides
@@ -274,4 +283,4 @@ def test_a_segment_is_written_with_the_visibility_its_slide_has_when_it_is_writt
 
     written = pipeline.lecture_unit_segment_collection.data.insert.call_args.kwargs
     assert written["properties"]["hidden_until"] == "2030-01-01T00:00:00Z"
-    assert lock_held_while_reading == [True]
+    assert guard_held_while_reading == [True]

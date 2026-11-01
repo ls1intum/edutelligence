@@ -55,22 +55,11 @@ class MinimalAgentPipeline(AbstractAgentPipeline[object, object]):
     def __call__(self, *args, **kwargs):  # pylint: disable=unused-argument
         return None
 
-    def is_memiris_memory_creation_enabled(
-        self, state
-    ):  # pylint: disable=unused-argument
-        return False
-
     def get_tools(self, state):  # pylint: disable=unused-argument
         return []
 
     def build_system_message(self, state):  # pylint: disable=unused-argument
         return ""
-
-    def get_memiris_tenant(self, dto):  # pylint: disable=unused-argument
-        return ""
-
-    def get_memiris_reference(self, dto):  # pylint: disable=unused-argument
-        return None
 
 
 def make_action(content, reasoning_content=None):

@@ -52,4 +52,4 @@ These updates use current stored competency and cluster data with the generated 
 
 `generate_competency_relationship` first filters pairs by cosine similarity. It then applies zero-shot NLI to competency descriptions and produces `MATCH`, `REQUIRE`, `EXTEND`, or `NONE`. `suggest_competency_relations` maps these results to the API's directed relation DTOs. The relation output is a suggestion; persistence remains the caller's responsibility.
 
-AtlasML is an optional external service for its Artemis consumer. Its API and storage implementation should be kept separate from Iris RAG and Memiris memory collections.
+AtlasML is an optional external service for its Artemis consumer. Its API and storage implementation should be kept separate from the Iris RAG collections.
