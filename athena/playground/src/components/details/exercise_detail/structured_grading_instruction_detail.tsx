@@ -16,7 +16,7 @@ export default function StructuredGradingInstructionDetail({
       className={twMerge(
         "my-1 mx-1 border border-gray-300 rounded-lg text-sm max-w-3xl",
         [
-          "hover:outline outline-2 hover:shadow transition-all duration-200",
+          "hover:outline-2 hover:shadow-sm transition-all duration-200",
           instruction.credits < 0
             ? "outline-red-300/50"
             : instruction.credits > 0
@@ -43,7 +43,7 @@ export default function StructuredGradingInstructionDetail({
       <div className="flex justify-start items-start space-x-2 px-4 py-2">
         <div
           className={twMerge(
-            "font-medium rounded px-2.5 py-0.5 mt-2",
+            "font-medium rounded-sm px-2.5 py-0.5 mt-2",
             instruction.credits < 0
               ? "bg-red-100 text-red-800"
               : instruction.credits > 0

@@ -1,9 +1,0 @@
-.test-deploy/
-benchmarks/benchmark_results/
-benchmarks/workloads/
-benchmarks/data/
-benchmarks/venv/
-letsencrypt/
-# Output of the worker-node benchmark tools
-logos-workernode/**/bench_results/
-logos-workernode/data/

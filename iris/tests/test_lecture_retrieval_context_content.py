@@ -3,8 +3,8 @@
 ``LectureRetrieval.fetch_context_content`` looks up the exact slide page chunks
 and transcription segments referenced by the student's current position so they
 can be pasted directly into the prompt, independently of the RAG lecture tool.
-This content is also stored for the citation pipeline so it can be cited without
-the agent calling the lecture retrieval tool.
+This content also gets source ids, so it can be cited without the agent calling
+the lecture retrieval tool.
 """
 
 # pylint: skip-file
@@ -17,11 +17,11 @@ import pytest
 
 from iris.domain.data.lecture_context_dto import SlidesContextDTO, VideoContextDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
-    LectureRetrievalDTO,
     LectureTranscriptionRetrievalDTO,
     LectureUnitPageChunkRetrievalDTO,
 )
-from iris.pipeline.chat.chat_pipeline import ChatPipeline, _merge_lecture_content
+from iris.pipeline.chat.chat_pipeline import ChatPipeline
+from iris.pipeline.shared.citation_sources import CitationSourceRegistry
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.tools.current_view_content import CONTENT_BLOCKS_KEY
 
@@ -124,8 +124,8 @@ def test_fetch_context_content_suppresses_unreleased_unit():
     pipeline._fetch_transcriptions_by_timestamp.assert_not_called()
 
 
-def test_current_view_content_is_stored_for_citations():
-    """Current-view content must land in the citation storage without the tool."""
+def test_current_view_content_gets_source_ids():
+    """Current-view content must be citable without the lecture retrieval tool."""
     pipeline = ChatPipeline.__new__(ChatPipeline)
 
     page_chunk = _make_page_chunk(3, "Page 3 content")
@@ -142,6 +142,7 @@ def test_current_view_content_is_stored_for_citations():
         lecture_retriever=retriever,
         lecture_content_storage={},
         current_view_storage={},
+        citation_sources=CitationSourceRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -162,15 +163,17 @@ def test_current_view_content_is_stored_for_citations():
     assert state.current_view_storage[CONTENT_BLOCKS_KEY] == [
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
-        "\n---\nPage 3 content\n---",
+        "\n---\nSource id: [src:1]\nPage 3 content\n---",
         "The student is currently at 50.0 seconds in the lecture video of the "
         "lecture unit Test Unit (lecture unit ID: 1). The transcript at this "
-        "point:\n---\nTranscript 45-55\n---",
+        "point:\n---\nSource id: [src:2]\nTranscript 45-55\n---",
     ]
-    stored = state.lecture_content_storage["current_view"]
-    assert stored.lecture_unit_page_chunks == [page_chunk]
-    assert stored.lecture_transcriptions == [transcription]
-    assert stored.lecture_unit_segments == []
+    slide = state.citation_sources.get(1)
+    assert slide.cite_block() == "[cite:L:1:3::::]"
+    assert slide.content == "Page 3 content"
+    segment = state.citation_sources.get(2)
+    assert segment.cite_block() == "[cite:L:1::45:55::]"
+    assert segment.content == "Transcript 45-55"
 
 
 def test_multiple_chunks_on_same_page_share_one_block():
@@ -304,10 +307,8 @@ def test_position_omitted_when_material_not_ingested():
 
     blocks = pipeline._build_current_view(state)
 
-    # Without ingested content there is no position to describe and nothing to
-    # store for citations.
+    # Without ingested content there is no position to describe.
     assert blocks == []
-    assert "current_view" not in state.lecture_content_storage
 
 
 def test_only_ingested_positions_are_described():
@@ -346,38 +347,3 @@ def test_only_ingested_positions_are_described():
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
         "\n---\nPage 3 content\n---",
     ]
-
-
-def test_merge_combines_current_view_and_retrieved_content_deduped():
-    """Current-view and retrieved content are merged for citations, deduped."""
-    current_page = _make_page_chunk(3, "Current page 3")
-    rag_page = _make_page_chunk(7, "RAG page 7")
-
-    current_view = LectureRetrievalDTO(
-        lecture_unit_segments=[],
-        lecture_transcriptions=[],
-        lecture_unit_page_chunks=[current_page],
-    )
-    # RAG returns the current page again plus a new one.
-    retrieved = LectureRetrievalDTO(
-        lecture_unit_segments=[],
-        lecture_transcriptions=[],
-        lecture_unit_page_chunks=[current_page, rag_page],
-    )
-
-    merged = _merge_lecture_content(current_view, retrieved)
-
-    assert merged.lecture_unit_page_chunks == [current_page, rag_page]
-
-
-def test_merge_returns_other_source_when_one_is_absent():
-    """When only one source exists (no current view, or no tool call) it is used."""
-    only = LectureRetrievalDTO(
-        lecture_unit_segments=[],
-        lecture_transcriptions=[],
-        lecture_unit_page_chunks=[_make_page_chunk(1, "Only page")],
-    )
-
-    assert _merge_lecture_content(only, None) is only
-    assert _merge_lecture_content(None, only) is only
-    assert _merge_lecture_content(None, None) is None

@@ -32,7 +32,6 @@ def _system_prompt_context(user_language: str, has_exercises: bool) -> dict:
         "support_level": "moderate",
         "allow_lecture_tool": False,
         "allow_faq_tool": False,
-        "allow_memiris_tool": False,
         "has_exercises": has_exercises,
         "custom_instructions": "",
         "lecture_name": None,

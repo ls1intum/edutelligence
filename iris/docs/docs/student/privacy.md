@@ -37,7 +37,6 @@ When you use Iris, the following data may be included in requests to the languag
 | Your code / submission text    | When a programming or text exercise is the active context                                                |
 | Build logs and test results    | When a programming exercise is the active context                                                        |
 | Lecture slides and transcripts | When relevant to your question — scoped to the active lecture, or across the course when at course level |
-| Memory summaries               | When Memory is enabled                                                                                   |
 
 The [active context](./chat-context) therefore also determines the data footprint of a request. A chat at course level does not send your code, and switching away from an exercise stops sending it from the next message onwards.
 
@@ -55,8 +54,8 @@ The AI receives the context needed to help you with your current question — no
 
 Iris operates under the General Data Protection Regulation (GDPR). Key points:
 
-- You have the **right to access** your stored data (available through your learner profile).
-- You have the **right to deletion** — you can delete your Memory data and chat history at any time.
+- You have the **right to access** your stored data (available in your AI experience settings).
+- You have the **right to deletion** — you can delete your chat history at any time in your AI experience settings.
 - You can **withdraw consent** by switching your AI experience to "No AI" at any time.
 - Your institution's data protection officer can provide additional information about the specific data processing agreement in place.
 
@@ -67,8 +66,6 @@ You are always in control of your AI experience:
 | Action                                            | How                                 |
 | ------------------------------------------------- | ----------------------------------- |
 | Switch AI experience (Cloud / On-Premise / No AI) | Account settings in Artemis         |
-| Enable or disable Memory                          | Learner profile settings            |
-| Delete stored memories                            | Learner profile settings            |
 | Return the chat to course level                   | Remove the context chip in the chat |
 | Start a fresh conversation                        | Click the pen icon in the chat      |
 
@@ -78,6 +75,5 @@ If you are unsure about data handling at your institution, ask your instructor o
 
 ## Next Steps
 
-- [Memory](./memory) — how Iris Memory works and how to manage it
 - [Getting Started](./getting-started) — choose your AI experience
 - [Tips for Effective Use](./tips) — practical advice for working with Iris

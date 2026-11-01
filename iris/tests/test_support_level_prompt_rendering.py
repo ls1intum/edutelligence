@@ -42,7 +42,6 @@ def _system_prompt_context(chat_mode: str, support_level: str) -> dict:
         "support_level": support_level,
         "allow_lecture_tool": False,
         "allow_faq_tool": False,
-        "allow_memiris_tool": False,
         "has_chat_history": False,
         "has_exercises": False,
         "has_query": False,

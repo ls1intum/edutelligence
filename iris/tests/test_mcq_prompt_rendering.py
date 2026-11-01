@@ -30,7 +30,6 @@ def _base_context() -> dict:
         "chat_mode": "COURSE_CHAT",
         "allow_lecture_tool": False,
         "allow_faq_tool": False,
-        "allow_memiris_tool": False,
         "has_chat_history": False,
         "has_exercises": False,
         "support_level": "moderate",

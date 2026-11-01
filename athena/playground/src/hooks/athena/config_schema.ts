@@ -1,6 +1,7 @@
 import type ModuleResponse from "@/model/module_response";
 
-import { UseQueryOptions, useQuery } from "react-query";
+import { useQuery } from "@tanstack/react-query";
+import type { QueryKey, UseQueryOptions } from "@tanstack/react-query";
 import { AthenaError, useAthenaFetcher } from "@/hooks/athena_fetcher";
 import { useModule } from "@/hooks/module_context";
 
@@ -10,12 +11,16 @@ import { useModule } from "@/hooks/module_context";
  * @example
  * const { data, isLoading, error } = useConfigSchema();
  * 
- * @param options The react-query options.
+ * @param options The TanStack Query options.
  */
-export default function useConfigSchema(options: Omit<UseQueryOptions<ModuleResponse, Error, ModuleResponse>, 'queryFn'> = {}) {
+export default function useConfigSchema(
+  options: Omit<UseQueryOptions<ModuleResponse, AthenaError>, "queryFn" | "queryKey"> & {
+    queryKey?: QueryKey;
+  } = {}
+) {
   const { module } = useModule();
   const athenaFetcher = useAthenaFetcher();
-  return useQuery<ModuleResponse, AthenaError, ModuleResponse, any>({
+  return useQuery<ModuleResponse, AthenaError>({
     queryKey: ["config_schema", module?.name],
     queryFn: async () => {
       return await athenaFetcher("/config_schema");

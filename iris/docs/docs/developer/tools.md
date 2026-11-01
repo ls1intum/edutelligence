@@ -170,13 +170,12 @@ def get_tools(self, state) -> list[Callable]:
 
 Most providers gate on **data availability** rather than on the chat mode. A missing programming submission removes the repository and build-log tools whether or not the mode says `PROGRAMMING_EXERCISE_CHAT`, and the exercise list stays available in every mode because the course DTO always carries it. This is what lets a single tool set follow a chat across a context switch: after the switch Artemis sends different entity fields, and the tool set changes with them.
 
-Three providers gate on flags that `ChatPipeline.prepare_state()` computes once per request:
+Two providers gate on flags that `ChatPipeline.prepare_state()` computes once per request:
 
-| Flag                 | Set from                                                | Gates                                                    |
-| -------------------- | ------------------------------------------------------- | -------------------------------------------------------- |
-| `allow_lecture_tool` | `should_allow_lecture_tool()` — indexed lecture content | `provide_lecture_retrieval`                              |
-| `allow_faq_tool`     | `should_allow_faq_tool()` — indexed FAQ entries         | `provide_faq_retrieval`                                  |
-| `allow_memiris_tool` | User opt-in and existing memories                       | `provide_memory_search`, `provide_find_similar_memories` |
+| Flag                 | Set from                                                | Gates                       |
+| -------------------- | ------------------------------------------------------- | --------------------------- |
+| `allow_lecture_tool` | `should_allow_lecture_tool()` — indexed lecture content | `provide_lecture_retrieval` |
+| `allow_faq_tool`     | `should_allow_faq_tool()` — indexed FAQ entries         | `provide_faq_retrieval`     |
 
 `prepare_state()` exists because the first two are Weaviate round trips that both the system prompt and the tool list depend on. Resolving them once, concurrently, before either is built avoids querying twice per request.
 

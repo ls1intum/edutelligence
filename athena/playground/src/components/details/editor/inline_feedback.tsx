@@ -134,7 +134,7 @@ export default function InlineFeedback({
         "mx-2 my-1 border border-gray-300 rounded-lg text-sm max-w-3xl",
         ...(referenceType !== "unreferenced"
           ? [
-              "hover:outline outline-2 hover:shadow transition-all duration-200",
+              "hover:outline-2 hover:shadow-sm transition-all duration-200",
               currentCredits < 0
                 ? "outline-red-300/50"
                 : currentCredits > 0
@@ -176,7 +176,7 @@ export default function InlineFeedback({
         {isEditing && onFeedbackChange ? (
           <input
             className={twMerge(
-              "font-medium rounded pl-2.5 py-0.5 w-16 mt-2 border border-gray-300",
+              "font-medium rounded-sm pl-2.5 py-0.5 w-16 mt-2 border border-gray-300",
               (!isEditing && feedback.credits < 0) || (isEditing && credits < 0)
                 ? "bg-red-100 text-red-800"
                 : (!isEditing && feedback.credits > 0) ||
@@ -194,7 +194,7 @@ export default function InlineFeedback({
         ) : (
           <div
             className={twMerge(
-              "font-medium rounded px-2.5 py-0.5",
+              "font-medium rounded-sm px-2.5 py-0.5",
               feedback.credits < 0
                 ? "bg-red-100 text-red-800"
                 : feedback.credits > 0
@@ -209,7 +209,7 @@ export default function InlineFeedback({
           <div className="flex items-center justify-between space-x-1">
             {isEditing && onFeedbackChange ? (
               <input
-                className="font-semibold w-full border border-gray-300 rounded p-1"
+                className="font-semibold w-full border border-gray-300 rounded-sm p-1"
                 value={title}
                 placeholder="Title..."
                 onChange={(e) => setTitle(e.target.value)}
@@ -221,7 +221,7 @@ export default function InlineFeedback({
             )}
           </div>
           {feedback.structured_grading_instruction?.feedback && (
-            <div className="w-full text-orange-800 rounded px-2 py-0.5 bg-orange-100">
+            <div className="w-full text-orange-800 rounded-sm px-2 py-0.5 bg-orange-100">
               <span className="whitespace-pre-wrap">
                 {feedback.structured_grading_instruction.feedback}
               </span>
@@ -230,7 +230,7 @@ export default function InlineFeedback({
           <div>
             {isEditing && onFeedbackChange ? (
               <TextareaAutosize
-                className="w-full border border-gray-300 rounded p-1 mt-1"
+                className="w-full border border-gray-300 rounded-sm p-1 mt-1"
                 value={description}
                 placeholder="Description..."
                 onChange={(e) => setDescription(e.target.value)}
@@ -246,7 +246,7 @@ export default function InlineFeedback({
           <div className="flex flex-col space-y-1 w-24">
             <button
               className={twMerge(
-                "bg-red-100 text-red-800 rounded px-2 py-0.5 hover:bg-red-200 hover:text-red-900",
+                "bg-red-100 text-red-800 rounded-sm px-2 py-0.5 hover:bg-red-200 hover:text-red-900",
                 confirmDelete
                   ? "bg-red-500 text-white hover:bg-red-600 hover:text-white"
                   : ""
@@ -257,7 +257,7 @@ export default function InlineFeedback({
             </button>
             <button
               className={twMerge(
-                "rounded px-2 py-0.5",
+                "rounded-sm px-2 py-0.5",
                 isEditing
                   ? "bg-primary-100 text-primary-800 hover:bg-primary-200 hover:text-primary-900"
                   : "bg-yellow-100 text-yellow-800 hover:bg-yellow-200 hover:text-yellow-900"
