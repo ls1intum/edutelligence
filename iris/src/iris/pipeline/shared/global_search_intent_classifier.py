@@ -24,6 +24,12 @@ from iris.domain.search.search_intent_dto import SearchIntent
 
 logger = get_logger(__name__)
 
+# onnxruntime starts a Microsoft telemetry thread when it is imported. While the
+# interpreter shuts down, that thread can lock a mutex that is already destroyed
+# and abort the process (SIGABRT, "recursive_mutex lock failed"). Iris has no use
+# for the telemetry.
+ort.disable_telemetry_events()
+
 _LABELS = {0: SearchIntent.SKIP_AI, 1: SearchIntent.TRIGGER_AI}
 
 # Pinned to an immutable commit so the tokenizer never silently changes
