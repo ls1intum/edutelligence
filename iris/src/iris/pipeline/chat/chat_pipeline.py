@@ -49,7 +49,7 @@ from ..shared.citation_sources import (
     source_id_line,
     strip_source_markers,
 )
-from ..shared.mcq_generation_pipeline import McqGenerationPipeline
+from ..shared.mcq_generation_pipeline import MCQ_PLACEHOLDER, McqGenerationPipeline
 from ..shared.utils import datetime_to_string, format_custom_instructions
 from .code_feedback_pipeline import CodeFeedbackPipeline
 from .interaction_suggestion_pipeline import InteractionSuggestionPipeline
@@ -174,6 +174,19 @@ def _tool_activity_snapshot(
     return [item for item in activities if item.kind == ActivityKind.TOOL], activity_seq
 
 
+def _chat_draft(text: str) -> str:
+    """A streamed draft without citations and without the quiz placeholder.
+
+    The quiz arrives with the final message. A draft end that may still grow into
+    the placeholder is held back until it is complete.
+    """
+    draft = citation_free_draft(text).replace(MCQ_PLACEHOLDER, "")
+    for size in range(min(len(MCQ_PLACEHOLDER) - 1, len(draft)), 0, -1):
+        if draft.endswith(MCQ_PLACEHOLDER[:size]):
+            return draft[:-size]
+    return draft
+
+
 class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     """
     Unified chat pipeline for course, exercise, text exercise, and lecture chat contexts.
@@ -296,7 +309,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     ) -> Optional[Callable[[str], str]]:
         del state
         # Drafts carry no citations; the cite blocks arrive with the final message.
-        return citation_free_draft
+        return _chat_draft
 
     def post_agent_hook(
         self,

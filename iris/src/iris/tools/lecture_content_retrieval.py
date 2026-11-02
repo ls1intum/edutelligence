@@ -156,9 +156,8 @@ Write `query` as a self-contained search query: name the concept or
 question in full (resolve "it" or "this" from the conversation), {language},
 without filler words. You may search again with a different query when the
 first results do not cover the question, at most {limit} times per answer.
-In a lecture chat this returns content of the active lecture only, and it
-never returns lecture IDs. Use the lecture list tool to find another
-lecture and its ID.
+In a lecture chat this returns content of the active lecture only. Use the
+lecture list tool to find another lecture and its ID.
 
 Returns:
     str: Lecture slide, transcription, and segment content.

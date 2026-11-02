@@ -652,13 +652,17 @@ def extract_response_output_text(response) -> str:
 def _completed_answer_text(output_items) -> Optional[str]:
     """The answer of a response that did not complete, if it was fully written.
 
-    Returns the text only when the response has message items and every one of
+    Returns the text only when the response has answer messages and every one of
     them was written completely; otherwise None. Streamed text alone is no proof
     that the answer was complete, so a response without message items is
-    rejected.
+    rejected. A ``commentary`` message is what the model says before it goes on
+    working, not its answer, so a response that stopped after one is rejected too.
     """
     messages = [
-        item for item in output_items if getattr(item, "type", None) == "message"
+        item
+        for item in output_items
+        if getattr(item, "type", None) == "message"
+        and getattr(item, "phase", None) != "commentary"
     ]
     if not messages or any(
         getattr(item, "status", None) != "completed" for item in messages
@@ -786,6 +790,14 @@ def convert_responses_to_iris_message(
 
     status = getattr(response, "status", None)
     raise_for_failed_responses_status(response)
+    if (
+        status == "incomplete"
+        and getattr(getattr(response, "incomplete_details", None), "reason", None)
+        == "content_filter"
+    ):
+        # Like the content_filter finish reason of Chat Completions, so callers
+        # that fall back on a filtered answer recognize it (is_content_filter_error).
+        raise ContentFilterFinishReasonError()
     token_usage = create_token_usage(getattr(response, "usage", None), model)
     function_calls = [
         item for item in output_items if getattr(item, "type", None) == "function_call"

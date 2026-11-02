@@ -814,7 +814,7 @@ def test_exercise_guide_drafts_use_the_citation_free_transform():
 
     sender = pipeline._create_partial_result_sender(state)
 
-    assert sender._text_transform is citation_free_draft
+    assert sender._text_transform("A. [src:1] B. [MCQ_RESULT] C.") == "A. B.  C."
 
 
 # --------------------------------------------------------------------------- MCQ insertion paths

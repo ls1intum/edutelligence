@@ -20,6 +20,9 @@ from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
 
+# The quiz tool returns this; the chat replaces it with the quiz JSON.
+MCQ_PLACEHOLDER = "[MCQ_RESULT]"
+
 
 class McqGenerationPipeline(SubPipeline):
     """Subpipeline that generates MCQ questions as JSON using a focused prompt."""

@@ -187,6 +187,7 @@ def test_the_mcq_tool_generates_the_number_of_questions_the_agent_asks_for():
     assert pipeline.calls[-1][0] == "single"
     assert storage["mcq_json"] == VALID_SINGLE_MCQ
 
+    storage.clear()
     tool("Sorting", count=3)
     assert pipeline.calls[-1] == (
         "set",
@@ -200,8 +201,78 @@ def test_the_mcq_tool_generates_the_number_of_questions_the_agent_asks_for():
     )
     assert storage["mcq_json"] == VALID_MCQ_SET
 
+    storage.clear()
     tool("Graphs", count=50)
     assert pipeline.calls[-1][1]["count"] == MAX_QUESTIONS
+
+
+def test_a_second_quiz_call_adds_its_questions_to_the_first_quiz():
+    pipeline = _FakeToolPipeline()
+    storage = {}
+    tool = create_tool_generate_mcq_questions(pipeline, [], MagicMock(), storage)
+
+    tool("Recursion")
+    tool("Sorting", count=2)
+
+    quiz = json.loads(storage["mcq_json"])
+    assert quiz["type"] == "mcq-set"
+    assert [q["question"] for q in quiz["questions"]] == ["What is 2+2?", "Q1?", "Q2?"]
+
+
+def test_the_quiz_of_one_answer_holds_at_most_the_question_limit():
+    pipeline = _FakeToolPipeline()
+    ten = json.dumps(
+        {"type": "mcq-set", "questions": [json.loads(VALID_SINGLE_MCQ)] * 10}
+    )
+    storage = {"mcq_json": ten}
+    tool = create_tool_generate_mcq_questions(pipeline, [], MagicMock(), storage)
+
+    reply = tool("More", count=3)
+
+    assert "No question was added" in reply
+    assert not pipeline.calls
+    assert storage["mcq_json"] == ten
+
+    storage["mcq_json"] = json.dumps(
+        {"type": "mcq-set", "questions": [json.loads(VALID_SINGLE_MCQ)] * 9}
+    )
+    tool("More", count=3)
+    assert pipeline.calls[-1][0] == "single"
+
+
+class _FailingToolPipeline(_FakeToolPipeline):
+    """A quiz call that was billed by the provider but returned no valid quiz."""
+
+    def __call__(self, **kwargs):
+        self.tokens.append("usage of the failed call")
+        raise ValueError("invalid quiz JSON")
+
+
+def test_quiz_usage_is_billed_when_the_tool_returns_even_if_generation_fails():
+    pipeline = _FailingToolPipeline()
+    billed = []
+    tool = create_tool_generate_mcq_questions(
+        pipeline, [], MagicMock(), {}, track_usage=billed.append
+    )
+
+    with pytest.raises(ValueError):
+        tool("Recursion")
+
+    assert billed == ["usage of the failed call"]
+    assert not pipeline.tokens
+
+
+def test_further_quiz_placeholders_are_removed():
+    state = SimpleNamespace(
+        result="First: [MCQ_RESULT] and again [MCQ_RESULT].",
+        mcq_result_storage={"mcq_json": VALID_SINGLE_MCQ},
+    )
+
+    mcq_post_agent_hook(
+        state=state, mcq_pipeline=_FakeToolPipeline(), track_tokens=lambda *_: None
+    )
+
+    assert state.result == "First: " + VALID_SINGLE_MCQ + " and again ."
 
 
 def test_the_quiz_replaces_the_placeholder_and_its_usage_is_billed():

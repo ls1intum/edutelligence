@@ -11,7 +11,10 @@ from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
 from iris.pipeline.shared.citation_sources import strip_source_markers
-from iris.pipeline.shared.mcq_generation_pipeline import McqGenerationPipeline
+from iris.pipeline.shared.mcq_generation_pipeline import (
+    MCQ_PLACEHOLDER,
+    McqGenerationPipeline,
+)
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.retrieval.lecture.lecture_visibility import (
     is_slide_visible,
@@ -227,16 +230,18 @@ def mcq_post_agent_hook(
 ) -> None:
     """Put the quiz the agent generated with the MCQ tool into ``state.result``.
 
-    The tool returns a ``[MCQ_RESULT]`` placeholder; it is replaced with the quiz
-    JSON (or the JSON is appended when the agent did not echo the placeholder).
-    Must be called from the pipeline's ``post_agent_hook`` AFTER citations
-    and title generation, but BEFORE ``callback.send_result()``.
+    The tool returns a ``[MCQ_RESULT]`` placeholder; the first one is replaced with
+    the quiz JSON and any further ones are removed, because all calls of the turn
+    form one quiz (or the JSON is appended when the agent did not echo the
+    placeholder). Must be called from the pipeline's ``post_agent_hook`` AFTER
+    citations and title generation, but BEFORE ``callback.send_result()``.
     """
     mcq_storage = getattr(state, "mcq_result_storage", {})
     if mcq_storage.get("mcq_json"):
         mcq_json = _strip_stray_citations(mcq_storage["mcq_json"])
-        if "[MCQ_RESULT]" in state.result:
-            state.result = state.result.replace("[MCQ_RESULT]", mcq_json)
+        if MCQ_PLACEHOLDER in state.result:
+            before, after = state.result.split(MCQ_PLACEHOLDER, 1)
+            state.result = before + mcq_json + after.replace(MCQ_PLACEHOLDER, "")
         else:
             state.result = state.result + "\n" + mcq_json
     for token in mcq_pipeline.tokens:
