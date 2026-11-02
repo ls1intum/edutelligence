@@ -11,32 +11,6 @@ weaviate:
   # Optional: Weaviate API key (omit or leave empty for anonymous access).
   # api_key: "your-weaviate-api-key"
 
-memiris:
-  enabled: true
-  sleep_enabled: true
-  llm_configuration:
-    embeddings:
-      - mxbai-embed-large
-      - nomic-embed-text
-    learning_extractor:
-      local: qwen3.8-27b
-      cloud: gemma3
-    learning_deduplicator:
-      local: qwen3.8-27b
-      cloud: gemma3
-    memory_creator:
-      local: qwen3.8-27b
-      cloud: gpt-oss
-    sleep_tool_llm:
-      local: qwen3.8-27b
-      cloud: gpt-oss
-    sleep_json_llm:
-      local: qwen3.8-27b
-      cloud: gemma3
-  # Concurrent memory groups during sleep; each issues its own LLM requests.
-  # Keep it below the parallel capacity of the local model's serving lanes.
-  sleep_max_threads: 4
-
 local_llm_enabled: true # Set to false to disable local LLM support entirely
 
 langfuse:
@@ -196,7 +170,7 @@ llm_configuration:
   lecture_retrieval_pipeline:
     default:
       chat:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-low
         cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
       reranker: cohere
@@ -220,37 +194,31 @@ llm_configuration:
   faq_retrieval_pipeline:
     default:
       chat:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-low
         cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
 
   citation_pipeline:
     default:
-      chat:
-        local: qwen3.8-27b
-        cloud: oai-gpt-5-mini-minimal
+      # One call that labels all sources an answer cites; needs no reasoning.
       keyword_summary:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-nothink
         cloud: oai-gpt-5-nano-minimal
-    advanced:
-      chat:
-        local: qwen3.8-27b
-        cloud: oai-gpt-5-mini-minimal
 
   interaction_suggestion_pipeline:
     course:
       chat:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-low
         cloud: oai-gpt-5-nano-minimal
     exercise:
       chat:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-low
         cloud: oai-gpt-5-nano-minimal
 
   session_title_generation_pipeline:
     default:
       chat:
-        local: qwen3.8-27b
+        local: qwen3.8-27b-low
         cloud: oai-gpt-5-nano-minimal
 
   code_feedback_pipeline:

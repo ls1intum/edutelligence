@@ -1,18 +1,15 @@
-@tailwind components;
-@tailwind utilities;
+@reference "./globals.css";
 
 /* Styling for the rjsf form with className="schema-form" */
-@layer utilities {
-  .border-input {
-    border-color: #e2e8f0;
-  }
-  .ring-offset-background {
-    --tw-ring-offset-shadow: 0 0 #0000;
-  }
-  .ring-ring {
-    --tw-ring-opacity: 1;
-    --tw-ring-color: #4299e1;
-  }
+@utility border-input {
+  border-color: #e2e8f0;
+}
+@utility ring-offset-background {
+  --tw-ring-offset-shadow: 0 0 #0000;
+}
+@utility ring-ring {
+  --tw-ring-opacity: 1;
+  --tw-ring-color: #4299e1;
 }
 
 @layer components {
@@ -54,7 +51,7 @@
   }
   /* Input component */
   .schema-form input {
-    @apply flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-gray-500 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   /* Array elements */
@@ -113,7 +110,7 @@
     @apply prose prose-sm leading-snug max-w-none prose-slate;
   }
   .schema-form .panel.panel-danger.errors {
-    @apply bg-red-100 border border-red-400 rounded-md shadow-sm px-4 py-2 my-2;
+    @apply bg-red-100 border border-red-400 rounded-md shadow-xs px-4 py-2 my-2;
   }
   .schema-form .panel.panel-danger.errors .panel-heading {
     @apply text-lg font-semibold text-red-700;

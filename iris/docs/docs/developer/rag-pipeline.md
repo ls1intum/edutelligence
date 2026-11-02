@@ -4,7 +4,7 @@ title: RAG Pipeline
 
 # RAG Pipeline
 
-Iris uses retrieval-augmented generation (RAG) to ground lecture and FAQ responses in course content. This page describes Iris's content collections and processing. It does not describe Memiris memory schemas, which are separate tenant-aware storage owned by the [Memiris library](https://github.com/ls1intum/edutelligence/tree/main/memiris).
+Iris uses retrieval-augmented generation (RAG) to ground lecture and FAQ responses in course content. This page describes Iris's content collections and processing.
 
 Model roles, providers, and local/cloud selection belong in [LLM configuration](../admin/llm-configuration.md), the [variant system](./variant-system.md), and [developer configuration](./configuration.md), rather than this execution reference.
 
@@ -21,7 +21,7 @@ Ingestion callbacks report processing state to Artemis. Retrieval classes are in
 
 ## Iris content collections
 
-`VectorDatabase` initializes five Iris-specific collections. They are distinct from Artemis Global Search and Memiris data.
+`VectorDatabase` initializes five Iris-specific collections. They are distinct from Artemis Global Search data.
 
 | Collection              | Content                                                     |
 | ----------------------- | ----------------------------------------------------------- |
@@ -122,4 +122,3 @@ After a response uses lecture or FAQ material, the nested citation pipeline can 
 ## Boundaries
 
 - **Artemis Global Search** has its own authorization model and schemas. Iris's global-search answer path may retrieve lecture content, but it does not merge the two storage systems.
-- **Memiris** uses separate learning, memory, and relationship schemas. Iris's wrapper, memory tools, and periodic sleep scheduling are documented in the [pipeline system](./pipeline-system.md); reusable library internals live in the Memiris README.

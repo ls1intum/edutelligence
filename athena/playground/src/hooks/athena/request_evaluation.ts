@@ -2,7 +2,7 @@ import type { Exercise } from "@/model/exercise";
 import type { Submission } from "@/model/submission";
 import type ModuleResponse from "@/model/module_response";
 
-import { UseMutationOptions, useMutation } from "react-query";
+import { UseMutationOptions, useMutation } from "@tanstack/react-query";
 import { AthenaError, useAthenaFetcher } from "@/hooks/athena_fetcher";
 import { Feedback } from "@/model/feedback";
 import { useModule } from "@/hooks/module_context";
@@ -11,11 +11,11 @@ import useHealth from "@/hooks/health";
 /**
  * Requests an evaluation for an exercise and a submission given the true and predicted feedbacks from healthy Athena modules.
  *
- * @param options The react-query options.
+ * @param options The TanStack Query options.
  * @param onlyUseContextModule - If true, only the context module is used for the evaluation. Otherwise, all healthy modules are used.
  *
  * @example
- * const { data, isLoading, error, mutate } = useRequestEvaluation();
+ * const { data, isPending, error, mutate } = useRequestEvaluation();
  * mutate({ exercise, submission, trueFeedbacks, predictedFeedbacks });
  */
 export default function useRequestEvaluation(

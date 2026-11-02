@@ -1,6 +1,6 @@
 import type { ModuleMeta } from "@/model/health_response";
 
-import { Dispatch, SetStateAction, useEffect, useState } from "react";
+import { Dispatch, SetStateAction, useEffect } from "react";
 import validator from "@rjsf/validator-ajv8";
 import { getDefaultFormState } from "@rjsf/utils";
 
@@ -54,23 +54,19 @@ export default function ModuleConfigSelect({
   const CustomModuleConfigComponent =
     customModuleConfigComponents[module.name as CustomModuleConfig];
 
-  const [formKey, setFormKey] = useState(0);
   const { data, error, isLoading } = useConfigSchema();
 
   useEffect(() => {
-    if (data) {
-      const defaultFormData = getDefaultFormState(validator, data, {}, data);
+    if (data && onChangeConfig) {
+      const defaultFormData = getDefaultFormState(validator, data.data, {}, data.data);
       if (
         Object.keys(moduleConfig ?? {}).length === 0 &&
         Object.keys(defaultFormData).length !== 0
       ) {
-        if (onChangeConfig) {
-          onChangeConfig(defaultFormData);
-        }
-        setFormKey(formKey + 1);
+        onChangeConfig(defaultFormData);
       }
     }
-  }, [data, formKey, moduleConfig, onChangeConfig]);
+  }, [data, moduleConfig, onChangeConfig]);
 
   return (
     <>

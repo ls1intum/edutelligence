@@ -83,6 +83,5 @@ If you are using the on-premise AI option, responses may sometimes be less detai
 
 ## Next Steps
 
-- [Memory](./memory) — how Iris personalizes over time
 - [Privacy & Data](./privacy) — what data Iris uses and how it is protected
 - [Tips for Effective Use](./tips) — practical advice for working with Iris

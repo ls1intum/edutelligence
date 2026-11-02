@@ -18,7 +18,7 @@ export default function SendSubmissions() {
 
   const [exercise, setExercise] = useState<Exercise | undefined>(undefined);
   const { data: submissions, isLoading: isLoadingSubmissions, error: errorSubmissions } = useSubmissions(exercise);
-  const { data: response, isLoading, error, mutate, reset } = useSendSubmissions({
+  const { data: response, isPending: isLoading, error, mutate, reset } = useSendSubmissions({
     onError: (error) => {
       console.error(error);
       alert(`Failed to send submissions to Athena: ${error.message}. Is the URL correct?`);
