@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from iris.common.callback_token import CallbackToken
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.exercise_with_submissions_dto import (
@@ -651,7 +652,12 @@ def test_switch_to_lecture_is_accepted_when_lecture_list_is_empty():
 
 
 def test_send_result_carries_suggested_context_on_the_wire():
-    callback = ChatRunCallback("run-1", "https://artemis.example", None)
+    callback = ChatRunCallback(
+        "run-1",
+        "https://artemis.example",
+        None,
+        auth_token=CallbackToken("token-for-run-1"),
+    )
     suggested = SuggestedContextDTO(mode=IrisChatMode.EXERCISE, entity_id=11)
 
     with patch.object(
@@ -667,7 +673,12 @@ def test_send_result_carries_suggested_context_on_the_wire():
 
 
 def test_send_result_without_switch_omits_suggested_context():
-    callback = ChatRunCallback("run-1", "https://artemis.example", None)
+    callback = ChatRunCallback(
+        "run-1",
+        "https://artemis.example",
+        None,
+        auth_token=CallbackToken("token-for-run-1"),
+    )
 
     with patch.object(
         ChatRunCallback, "_send_status_payload", return_value=True

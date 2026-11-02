@@ -1,6 +1,8 @@
 # Dockerfile to build a container image for a Python 3.13 FastAPI application
 FROM python:3.13.3-slim
 
+ENV ORT_DISABLE_TELEMETRY=1
+
 # Install system dependencies for video transcription and model download
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
