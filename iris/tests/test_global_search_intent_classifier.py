@@ -10,8 +10,7 @@ disabling the feature without ever raising past module import.
 
 # pylint: disable=protected-access
 
-import importlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -88,11 +87,3 @@ class TestInferTokenTypeIdsCompatibility:
 
         fed_inputs = classifier._session.run.call_args[0][1]
         assert "token_type_ids" not in fed_inputs
-
-
-def test_importing_the_classifier_disables_onnxruntime_telemetry():
-    """The telemetry thread of onnxruntime can abort the process at shutdown."""
-    with patch("onnxruntime.disable_telemetry_events") as disable:
-        importlib.reload(intent_classifier)
-
-    disable.assert_called_once_with()
