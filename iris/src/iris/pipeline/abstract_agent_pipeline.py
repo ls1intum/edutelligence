@@ -717,7 +717,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         return PartialResultSender(
             state.callback.url,
-            state.callback.run_id,
+            state.dto.settings.authentication_token,
             text_transform=self.partial_text_transform(state),
         )
 
