@@ -3,7 +3,7 @@
 # This is the Dockerfile for the athena package.
 # Its output is used as a dependency in the module_* Dockerfiles.
 
-FROM python:3.11 AS athena
+FROM python:3.13 AS athena
 
 WORKDIR /code
 
