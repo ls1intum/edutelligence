@@ -234,10 +234,24 @@ def test_the_quiz_of_one_answer_holds_at_most_the_question_limit():
     assert storage["mcq_json"] == ten
 
     storage["mcq_json"] = json.dumps(
+        {"type": "mcq-set", "questions": [json.loads(VALID_SINGLE_MCQ)] * 8}
+    )
+    tool("Generate 3 questions", count=3)
+    kind, arguments = pipeline.calls[-1]
+    assert kind == "set" and arguments["count"] == 2
+    assert arguments["command"].endswith(
+        "Only 2 more questions fit into this quiz: generate exactly 2."
+    )
+
+    storage["mcq_json"] = json.dumps(
         {"type": "mcq-set", "questions": [json.loads(VALID_SINGLE_MCQ)] * 9}
     )
-    tool("More", count=3)
-    assert pipeline.calls[-1][0] == "single"
+    tool("Generate 3 questions", count=3)
+    kind, arguments = pipeline.calls[-1]
+    assert kind == "single"
+    assert arguments["command"].endswith(
+        "Only 1 more question fits into this quiz: generate exactly 1."
+    )
 
 
 class _FailingToolPipeline(_FakeToolPipeline):

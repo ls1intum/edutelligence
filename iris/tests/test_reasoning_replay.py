@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from openai import ContentFilterFinishReasonError
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.pyris_message import (  # noqa: E402
@@ -323,10 +322,12 @@ def test_a_content_filter_cut_is_reported_as_content_filter():
         incomplete_reason="content_filter",
     )
 
-    with pytest.raises(ContentFilterFinishReasonError) as raised:
+    with pytest.raises(IncompleteModelResponse) as raised:
         convert_responses_to_iris_message(response, "luna")
 
     assert is_content_filter_error(raised.value)
+    assert raised.value.token_usage.num_input_tokens == 10
+    assert raised.value.token_usage.num_output_tokens == 5
 
 
 @pytest.mark.parametrize("status", ["in_progress", "cancelled", "queued"])

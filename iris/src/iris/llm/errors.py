@@ -15,3 +15,11 @@ class IncompleteModelResponse(RuntimeError):
     def __init__(self, message: str, token_usage: Optional[TokenUsageDTO] = None):
         super().__init__(message)
         self.token_usage = token_usage
+
+
+class ContentFilteredResponse(IncompleteModelResponse):
+    """The provider's content filter stopped the response.
+
+    An incomplete response, so its usage is billed like any other; callers that
+    fall back on a filtered answer recognize it with ``is_content_filter_error``.
+    """

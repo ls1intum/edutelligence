@@ -87,7 +87,15 @@ def create_tool_generate_mcq_questions(
                 f"The quiz of this answer already has {MAX_QUESTIONS} questions, "
                 "the most it can hold. No question was added."
             )
-        count = max(1, min(count, remaining))
+        requested = max(1, count)
+        count = min(requested, remaining)
+        if count < requested:
+            # The command may still ask for the original number.
+            fit = "questions fit" if count > 1 else "question fits"
+            command = (
+                f"{command}\n\nOnly {count} more {fit} into this quiz: "
+                f"generate exactly {count}."
+            )
         try:
             lecture_content = (
                 lecture_content_supplier() if lecture_content_supplier else None

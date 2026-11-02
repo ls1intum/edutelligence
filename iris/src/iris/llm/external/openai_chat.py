@@ -42,7 +42,7 @@ from ...domain.data.json_message_content_dto import JsonMessageContentDTO
 from ...domain.data.tool_call_dto import ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
 from ...llm import CompletionArguments
-from ...llm.errors import IncompleteModelResponse
+from ...llm.errors import ContentFilteredResponse, IncompleteModelResponse
 from ...llm.external.model import ChatModel
 from ...llm.retry import RetryState
 from ...llm.structured_output import (
@@ -92,7 +92,7 @@ def is_content_filter_error(error: Exception) -> bool:
     with the ``content_filter`` finish reason. The filter judges the exact input, so resending the same
     request gets the same verdict.
     """
-    if isinstance(error, ContentFilterFinishReasonError):
+    if isinstance(error, (ContentFilterFinishReasonError, ContentFilteredResponse)):
         return True
     return isinstance(error, APIStatusError) and error.code == "content_filter"
 
@@ -790,15 +790,17 @@ def convert_responses_to_iris_message(
 
     status = getattr(response, "status", None)
     raise_for_failed_responses_status(response)
+    token_usage = create_token_usage(getattr(response, "usage", None), model)
     if (
         status == "incomplete"
         and getattr(getattr(response, "incomplete_details", None), "reason", None)
         == "content_filter"
     ):
-        # Like the content_filter finish reason of Chat Completions, so callers
-        # that fall back on a filtered answer recognize it (is_content_filter_error).
-        raise ContentFilterFinishReasonError()
-    token_usage = create_token_usage(getattr(response, "usage", None), model)
+        # Recognized by is_content_filter_error, so callers that fall back on a
+        # filtered answer do so, and billed like any other incomplete response.
+        raise ContentFilteredResponse(
+            "Responses API answer was stopped by the content filter", token_usage
+        )
     function_calls = [
         item for item in output_items if getattr(item, "type", None) == "function_call"
     ]

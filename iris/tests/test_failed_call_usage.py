@@ -18,7 +18,11 @@ import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.pipeline_enum import PipelineEnum  # noqa: E402
 from iris.common.token_usage_dto import TokenUsageDTO  # noqa: E402
 from iris.llm import CompletionArguments  # noqa: E402
-from iris.llm.errors import IncompleteModelResponse  # noqa: E402
+from iris.llm.errors import (  # noqa: E402
+    ContentFilteredResponse,
+    IncompleteModelResponse,
+)
+from iris.llm.external.openai_chat import is_content_filter_error  # noqa: E402
 from iris.llm.langchain import IrisLangchainChatModel  # noqa: E402
 from iris.llm.request_handler.request_handler_interface import (  # noqa: E402
     RequestHandler,
@@ -35,6 +39,9 @@ from iris.pipeline.shared.citation_sources import (  # noqa: E402
 )
 from iris.pipeline.shared.mcq_generation_pipeline import (  # noqa: E402
     McqGenerationPipeline,
+)
+from iris.tools.mcq_generation import (  # noqa: E402
+    create_tool_generate_mcq_questions,
 )
 from tests.test_chat_compaction import (  # noqa: E402
     _compaction_state,
@@ -138,7 +145,7 @@ def test_the_chat_bills_citation_calls_also_when_they_fail():
     assert usage in state.tokens
 
 
-def _cut_quiz_pipeline():
+def _cut_quiz_pipeline(handler=None):
     """An MCQ pipeline whose model call stops at the output limit."""
     pipeline = McqGenerationPipeline.__new__(McqGenerationPipeline)
     pipeline.implementation_id = "mcq_generation_pipeline"
@@ -146,7 +153,7 @@ def _cut_quiz_pipeline():
     pipeline.tokens = []
     pipeline.prompt_template = SimpleNamespace(render=lambda **_kwargs: "prompt")
     pipeline.llm = IrisLangchainChatModel(
-        request_handler=_CutHandler(), completion_args=CompletionArguments()
+        request_handler=handler or _CutHandler(), completion_args=CompletionArguments()
     )
     pipeline.pipeline = pipeline.llm | StrOutputParser()
     return pipeline
@@ -178,6 +185,30 @@ def test_a_cut_quiz_call_is_billed():
 
     assert [t.num_output_tokens for t in pipeline.tokens] == [600]
     assert pipeline.tokens[0].pipeline == PipelineEnum.IRIS_MCQ_GENERATION_PIPELINE
+
+
+class _FilteredHandler(_CutHandler):
+    """A request handler whose every chat call is stopped by the content filter."""
+
+    def chat(self, messages, arguments, tools):
+        raise ContentFilteredResponse(
+            "filtered", TokenUsageDTO(numInputTokens=900, numOutputTokens=40)
+        )
+
+
+def test_a_filtered_quiz_call_is_billed_in_the_run():
+    pipeline = _cut_quiz_pipeline(_FilteredHandler())
+    run_tokens = []
+    tool = create_tool_generate_mcq_questions(
+        pipeline, [], None, {}, track_usage=run_tokens.append
+    )
+
+    with pytest.raises(ContentFilteredResponse) as raised:
+        tool("One question about recursion")
+
+    assert is_content_filter_error(raised.value)
+    assert [t.num_output_tokens for t in run_tokens] == [40]
+    assert not pipeline.tokens
 
 
 def test_cut_quiz_workers_are_billed_when_no_question_comes_back():
