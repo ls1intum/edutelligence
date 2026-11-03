@@ -2,7 +2,7 @@
 LangFuse tracing module for Pyris.
 
 Provides comprehensive observability for all AI pipeline runs with proper
-nesting, metadata tracking, and LangChain integration.
+nesting and metadata tracking.
 
 Usage:
     # At application startup
@@ -15,9 +15,11 @@ Usage:
         set_current_context(ctx)
         # ... pipeline logic
 
-    # For LangChain integrations
-    callback = get_langchain_callback()
-    chain.invoke(input, config={"callbacks": [callback]})
+    # In a model client - mark the call as a generation
+    @observe(name="Model Call", as_type="generation")
+    def chat(...):
+        ...
+        record_generation(model_name, response.token_usage)
 
     # At shutdown
     shutdown_langfuse()
@@ -28,11 +30,10 @@ from iris.tracing.langfuse_tracer import (
     TracingContext,
     clear_current_context,
     get_current_context,
-    get_langchain_callback,
-    get_langchain_config,
     get_langfuse_client,
     init_langfuse,
     observe,
+    record_generation,
     set_current_context,
     shutdown_langfuse,
 )
@@ -42,11 +43,10 @@ __all__ = [
     "TracingContext",
     "clear_current_context",
     "get_current_context",
-    "get_langchain_callback",
-    "get_langchain_config",
     "get_langfuse_client",
     "init_langfuse",
     "observe",
+    "record_generation",
     "set_current_context",
     "shutdown_langfuse",
 ]

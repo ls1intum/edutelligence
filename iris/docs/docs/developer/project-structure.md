@@ -55,7 +55,7 @@ src/iris/
 common/
 ├── logging_config.py          # Structured logging with request correlation IDs
 ├── pyris_message.py           # PyrisMessage and IrisMessageRole (shared message format)
-├── message_converters.py      # Convert between Iris and LangChain message formats
+├── message_converters.py      # Normalize history messages; convert to LangChain for side pipelines
 ├── pipeline_enum.py           # PipelineEnum for token tracking
 ├── token_usage_dto.py         # TokenUsageDTO for tracking LLM costs
 ├── singleton.py               # Singleton metaclass
@@ -121,8 +121,10 @@ pipeline/
 ├── session_title_generation_pipeline.py   # Generate chat session titles
 ├── shared/                                # Shared pipeline utilities
 │   ├── citation_pipeline.py               # Citation generation sub-pipeline
-│   └── utils.py                           # Tool generation, date formatting
+│   ├── citation_sources.py                # Source ids the agent cites and the cite blocks they become
+│   └── utils.py                           # Date formatting and other helpers
 └── prompts/                               # Prompt templates
+    ├── environment.py                     # Shared Jinja environment (no HTML escaping, as_data filter)
     ├── templates/                         # Jinja2 templates (.j2 files)
     └── *.py, *.txt                        # Python prompt builders and text prompts
 ```
@@ -168,6 +170,13 @@ Abstractions over different LLM providers.
 llm/
 ├── llm_manager.py                         # Singleton that loads models from YAML config
 ├── completion_arguments.py                # CompletionArguments (temperature, etc.)
+├── iris_chat_model.py                     # IrisChatModel: tool calls and structured output for pipelines
+├── structured_output.py                   # Strict JSON schemas from Pydantic models, validation
+├── retry.py                               # Retry policy for provider calls (backoff, retry-after)
+├── errors.py                              # IncompleteModelResponse
+├── agent/                                 # Native agent loop
+│   ├── loop.py                            # AgentLoop: model, tools, step limit
+│   └── tools.py                           # AgentTool: tool schemas from typed functions
 ├── request_handler/                       # Request routing
 │   ├── model_version_request_handler.py   # Select model by version string
 │   ├── rerank_request_handler.py          # Cohere reranking
@@ -180,7 +189,7 @@ llm/
 │   ├── openai_dalle.py                    # DALL-E image generation
 │   ├── ollama.py                          # Ollama (local models)
 │   └── cohere_client.py                   # Cohere reranker client
-└── langchain/                             # LangChain adapters
+└── langchain/                             # LangChain adapter for side pipelines (no agent use)
     └── iris_langchain_chat_model.py       # IrisLangchainChatModel wrapper
 ```
 

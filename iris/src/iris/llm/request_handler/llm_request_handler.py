@@ -7,6 +7,7 @@ from iris.common.logging_config import get_logger
 from iris.common.pyris_message import PyrisMessage
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm.completion_arguments import CompletionArguments
+from iris.llm.errors import IncompleteModelResponse
 from iris.llm.external.model import (
     ChatModel,
     CompletionModel,
@@ -74,7 +75,12 @@ class LlmRequestHandler(RequestHandler):
         ],
     ) -> PyrisMessage:
         llm = self._select_model(ChatModel)
-        message = llm.chat(messages, arguments, tools)
+        try:
+            message = llm.chat(messages, arguments, tools)
+        except IncompleteModelResponse as error:
+            if error.token_usage is not None:
+                apply_model_costs(error.token_usage, llm)
+            raise
         apply_model_costs(message.token_usage, llm)
         return message
 

@@ -1,7 +1,8 @@
 import os
 
 import pytest
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+from iris.pipeline.prompts.environment import prompt_environment
 
 TEMPLATE_DIR = os.path.join(
     os.path.dirname(__file__),
@@ -17,10 +18,7 @@ NO_EXERCISES_NOTE = "No exercise of this course is released to students yet."
 
 
 def _render_template(template_name: str, context: dict) -> str:
-    env = Environment(
-        loader=FileSystemLoader(TEMPLATE_DIR),
-        autoescape=select_autoescape(["html", "xml", "j2"]),
-    )
+    env = prompt_environment(TEMPLATE_DIR)
     return env.get_template(template_name).render(context)
 
 
@@ -85,7 +83,7 @@ def test_session_title_prompt_uses_answer_language(language):
         "session_title_generation_prompt.j2", {"language": language}
     )
     assert f"The current title is not written in {language}." in rendered
-    assert f"Generate the title in {language}" in rendered
+    assert f"is written in {language}, the language of the latest answer" in rendered
 
 
 @pytest.mark.parametrize("language", ["German", "English"])

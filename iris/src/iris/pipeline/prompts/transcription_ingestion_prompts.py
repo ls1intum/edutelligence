@@ -15,6 +15,7 @@ def transcription_summary_prompt(lecture_name: str, chunk_content: str):
         1. Summarize the information in a clear and accurate manner.
         2. Do not add additional information.
         3. Only answer in complete sentences.
+        4. Keep the summary under 1,000 words.
         This is the text you should summarize:
         {safe_chunk}
     """

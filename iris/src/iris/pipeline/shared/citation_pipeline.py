@@ -1,18 +1,17 @@
-import json
 import os
-import re
 from typing import Optional
 
-from langchain_core.messages import HumanMessage
-from langchain_core.output_parsers import StrOutputParser
+from pydantic import BaseModel
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
 )
-from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.iris_chat_model import IrisChatModel
 from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.shared.citation_sources import (
     CitationSourceRegistry,
@@ -25,8 +24,23 @@ from iris.tracing import observe
 
 logger = get_logger(__name__)
 
-_JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$")
-_SOURCE_KEY_RE = re.compile(r"^(?:source\s*)?(\d+)$", re.IGNORECASE)
+# The labels only name what a source is about; its beginning shows that. A cap keeps
+# the call short when an answer cites long transcript passages.
+MAX_EXCERPT_CHARS = 1500
+
+
+class CitationLabel(BaseModel):
+    """Keyword and summary of one cited source."""
+
+    source: int
+    keyword: str
+    summary: str
+
+
+class CitationLabels(BaseModel):
+    """The labels of all cited sources, in one schema-enforced answer."""
+
+    labels: list[CitationLabel]
 
 
 def _sanitize_citation_field(value) -> str:
@@ -35,33 +49,6 @@ def _sanitize_citation_field(value) -> str:
         return ""
     cleaned = str(value).replace(":", " -").replace("]", ")").replace("[", "(")
     return " ".join(cleaned.split())
-
-
-def parse_labels(raw: str) -> dict[int, tuple[str, str]]:
-    """Read the label JSON: ``{"3": {"keyword": ..., "summary": ...}}``.
-
-    Accepts ``"Source 3"`` keys and a Markdown code fence as well. Anything unreadable yields
-    no labels, so the citations are still sent, just without keyword and summary.
-    """
-    try:
-        parsed = json.loads(_JSON_FENCE_RE.sub("", raw.strip()))
-    except (json.JSONDecodeError, TypeError):
-        logger.warning(
-            "Citation labels are not valid JSON | output_start=%r", (raw or "")[:300]
-        )
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    labels: dict[int, tuple[str, str]] = {}
-    for key, value in parsed.items():
-        match = _SOURCE_KEY_RE.match(str(key).strip())
-        if match is None or not isinstance(value, dict):
-            continue
-        labels[int(match.group(1))] = (
-            _sanitize_citation_field(value.get("keyword")),
-            _sanitize_citation_field(value.get("summary")),
-        )
-    return labels
 
 
 class CitationPipeline(SubPipeline):
@@ -95,28 +82,40 @@ class CitationPipeline(SubPipeline):
         prompt = self.label_prompt_str.format(
             language=language,
             sources="\n\n".join(
-                f"Source {source.source_id}:\n{source.content}" for source in sources
+                f"Source {source.source_id}:\n"
+                f"{source.content.strip()[:MAX_EXCERPT_CHARS]}"
+                for source in sources
             ),
         )
-        llm = IrisLangchainChatModel(
-            request_handler=LlmRequestHandler(model_id=self._label_model),
-            completion_args=CompletionArguments(temperature=0),
+        llm = IrisChatModel(
+            LlmRequestHandler(model_id=self._label_model),
+            CompletionArguments(temperature=0),
         )
         try:
-            raw = (llm | StrOutputParser()).invoke([HumanMessage(content=prompt)])
+            result = llm.structured(
+                [
+                    PyrisMessage(
+                        sender=IrisMessageRole.USER,
+                        contents=[TextMessageContentDTO(textContent=prompt)],
+                    )
+                ],
+                CitationLabels,
+            )
         finally:
             if llm.tokens is not None:
                 self._append_tokens(llm.tokens, PipelineEnum.IRIS_CITATION_PIPELINE)
-        labels = parse_labels(raw)
-        missing = [
-            source.source_id for source in sources if source.source_id not in labels
-        ]
-        if missing:
-            logger.warning(
-                "Citation labels missing | missing=%s output_start=%r",
-                missing,
-                (raw or "")[:300],
+        wanted = {source.source_id for source in sources}
+        labels = {
+            item.source: (
+                _sanitize_citation_field(item.keyword),
+                _sanitize_citation_field(item.summary),
             )
+            for item in result.labels
+            if item.source in wanted
+        }
+        missing = sorted(wanted - labels.keys())
+        if missing:
+            logger.warning("Citation labels missing | missing=%s", missing)
         return labels
 
     @observe(name="Citation Pipeline")

@@ -72,7 +72,7 @@ function start {
   export ATHENA_ENV_DIR="$(pwd)/athena-env"
   export ATHENA_TAG="$pr_tag"
   export ATHENA_DOMAIN="$domain"
-  docker compose -f docker-compose.prod.yml -f docker-compose.playground.prod.yml -f docker-compose.cofee.yml up -d --pull always --no-build
+  docker compose -f docker-compose.prod.yml -f docker-compose.playground.prod.yml -f docker-compose.cofee.yml up -d --pull always --no-build --remove-orphans
 }
 
 function stop {
