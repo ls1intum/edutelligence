@@ -29,6 +29,7 @@ from iris.common.ingestion_errors import (
     STALE_CONTENT_DELETE_FAILED,
     IngestionStageError,
 )
+from iris.common.language_codes import normalize_language
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.config import settings
@@ -46,6 +47,7 @@ from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..ingestion.ingestion_job_handler import ingestion_job_handler
 from ..llm import (
+    EMERGENCY_MAX_TOKENS,
     CompletionArguments,
     LlmRequestHandler,
 )
@@ -106,37 +108,6 @@ def detect_course_language(page_texts: list[str]) -> str:
         return detect(sample[: settings.lecture_ingestion.language_detection_max_chars])
     except LangDetectException:
         return settings.lecture_ingestion.default_language
-
-
-# Language names that older Iris versions stored on page chunks: they asked an LLM for
-# "the language of the text" and stored its free-text answer ("English", "Deutsch").
-_LEGACY_LANGUAGE_NAMES = {
-    "english": "en",
-    "englisch": "en",
-    "german": "de",
-    "deutsch": "de",
-}
-
-
-_LANGUAGE_CODE = re.compile(r"[a-z]{2}(-[a-z]{2})?")
-
-
-def normalize_language(value: Optional[str]) -> Optional[str]:
-    """Map a stored or requested course language to an ISO 639-1 code.
-
-    Current chunks store ISO codes, including the region codes language
-    detection returns for some languages ("zh-cn"); chunks written by older Iris
-    versions store the language name an LLM answered with. Both forms of the same
-    language must compare equal, or every legacy unit would be re-ingested only
-    because of the format. Anything that is neither a code nor a known name
-    returns None, so a garbage value never matches and its unit is rebuilt.
-    """
-    if not value:
-        return None
-    cleaned = value.strip().strip(".").strip().lower()
-    if _LANGUAGE_CODE.fullmatch(cleaned):
-        return cleaned
-    return _LEGACY_LANGUAGE_NAMES.get(cleaned)
 
 
 _UNICODE_BULLETS = (
@@ -293,7 +264,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.llm_chat = LlmRequestHandler(chat_model)
         self.llm_embedding = LlmRequestHandler(embedding_model)
         request_handler = LlmRequestHandler(chat_model)
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        completion_args = CompletionArguments(
+            temperature=0.2, max_tokens=EMERGENCY_MAX_TOKENS
+        )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )

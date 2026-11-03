@@ -151,3 +151,77 @@ def test_marker_notes_do_not_imply_the_spot_is_dealt_with():
 
     for note in notes:
         assert "already" not in note.lower()
+
+
+def test_quiz_only_assistant_message_is_described_for_the_model():
+    """A quiz-only answer in the history used to fail the next chat turn."""
+    from iris.common.message_converters import (  # pylint: disable=import-outside-toplevel
+        normalize_history_message,
+    )
+    from iris.common.pyris_message import (  # pylint: disable=import-outside-toplevel
+        IrisMessageRole,
+        PyrisMessage,
+    )
+    from iris.domain.data.json_message_content_dto import (  # pylint: disable=import-outside-toplevel
+        JsonMessageContentDTO,
+    )
+
+    quiz = {
+        "type": "mcq",
+        "question": "Which algorithm is stable?",
+        "options": [
+            {"text": "Selection sort", "correct": False},
+            {"text": "Insertion sort", "correct": True},
+        ],
+        "explanation": "Insertion sort keeps equal keys in order.",
+        "response": {"selectedIndex": 0, "submitted": True},
+    }
+    message = PyrisMessage(
+        sender=IrisMessageRole.ASSISTANT,
+        contents=[JsonMessageContentDTO(jsonContent=quiz)],
+    )
+
+    text = normalize_history_message(message).contents[0].text_content
+
+    assert "Quiz question shown to the student: Which algorithm is stable?" in text
+    assert "2) Insertion sort (correct)" in text
+    assert "The student answered option 1 (incorrect)." in text
+
+
+def test_intro_and_quiz_set_are_both_kept():
+    from iris.common.message_converters import (  # pylint: disable=import-outside-toplevel
+        normalize_history_message,
+    )
+    from iris.common.pyris_message import (  # pylint: disable=import-outside-toplevel
+        IrisMessageRole,
+        PyrisMessage,
+    )
+    from iris.domain.data.json_message_content_dto import (  # pylint: disable=import-outside-toplevel
+        JsonMessageContentDTO,
+    )
+    from iris.domain.data.text_message_content_dto import (  # pylint: disable=import-outside-toplevel
+        TextMessageContentDTO,
+    )
+
+    message = PyrisMessage(
+        sender=IrisMessageRole.ASSISTANT,
+        contents=[
+            TextMessageContentDTO(textContent="Here are two questions."),
+            JsonMessageContentDTO(
+                jsonContent={
+                    "type": "mcq-set",
+                    "questions": [
+                        {"question": "Q1?", "options": []},
+                        {"question": "Q2?", "options": []},
+                    ],
+                }
+            ),
+        ],
+    )
+
+    text = normalize_history_message(message).contents[0].text_content
+
+    assert text.startswith("Here are two questions.")
+    assert "Quiz question 1 shown to the student: Q1?" in text
+    assert "Quiz question 2 shown to the student: Q2?" in text
+    assert "has not answered it yet" in text

@@ -111,20 +111,13 @@ The lecture case is deliberately lenient. An empty `lectures` field means Artemi
 
 ## How Agents Select Tools
 
-When `AbstractAgentPipeline` runs, it calls the pipeline's `get_tools()` method to get a list of tool closures. These are converted to LangChain `StructuredTool` objects via `generate_structured_tools_from_functions()` in `pipeline/shared/utils.py`.
+When `AbstractAgentPipeline` runs, it calls the pipeline's `get_tools()` method to get a list of tool closures. `AgentTool.from_function()` in `llm/agent/tools.py` turns each closure into a tool definition:
 
-The LangChain `create_tool_calling_agent` then formats the tool schemas (name, description, parameters) as part of the LLM prompt. The LLM decides which tools to call based on the conversation context and the tool descriptions.
+- **Name**: the function name.
+- **Description**: the docstring.
+- **Parameters**: a JSON schema built from the type hints with Pydantic. Every parameter is listed as required and parameters with a default value are nullable, so the schema also works with `strict: true`. When the model sends `null`, the function's default is used.
 
-```python
-# From abstract_agent_pipeline.py
-def _create_agent_executor(self, llm, prompt, tool_functions):
-    tools = generate_structured_tools_from_functions(tool_functions)
-    agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
-    return agent_executor, tools
-```
-
-The agent loop iterates: the LLM outputs a tool call, the executor runs the tool function, feeds the result back to the LLM, and repeats until the LLM produces a final text response.
+The [agent loop](./pipeline-system.md#the-agent-loop) sends these definitions to the model, runs the tools the model calls, and gives the results back to the model until it writes a final answer. Arguments are validated against the type hints before the tool runs. Invalid arguments, an unknown tool name, or an exception inside the tool become text the model reads, so it can correct the call or answer without that tool.
 
 ## Tool Providers
 
@@ -181,7 +174,7 @@ Two providers gate on flags that `ChatPipeline.prepare_state()` computes once pe
 
 The two viewing-context tools gate on `state.lecture_contexts`, which `prepare_state()` also fills. Both additionally require `allow_lecture_tool`: a viewing context must not become a way around the gate that decides whether this course has lecture content at all. `provide_combined_view_point_out()` resolves the context through `get_combined_view_context()`, the same function the `can_point_out_in_combined_view` prompt flag derives from, so the prompt can never advertise a tool the provider withheld.
 
-One provider bypasses the whole mechanism: when `prepare_state()` detects MCQ intent, `get_tools()` returns an empty list, because the agent only has to write a short intro while the MCQ sub-pipeline runs in parallel.
+Quizzes go through the same mechanism: the agent decides whether a message asks for quiz questions and calls `generate_mcq_questions` with a command and a `count` (1 to 10). There is no keyword detection. With `count` above 1 the MCQ sub-pipeline writes the questions on distinct subtopics in parallel and returns one `mcq-set`. The tool returns a `[MCQ_RESULT]` placeholder, which `mcq_post_agent_hook()` replaces with the quiz JSON before the answer is sent.
 
 ## Creating a New Tool
 
