@@ -86,7 +86,7 @@ jobs:
           poetry run coverage combine .coverage.programming_module_programming_llm .coverage.text_module_text_llm .coverage.modeling_module_modeling_llm
           poetry run coverage html --rcfile=.coveragerc -d test-results/combined_html
           
-          # Display combined coverage report in CI and capture for PR comment
+          # Display combined coverage report in CI and capture for the job summary
           echo "📊 Combined Coverage Report:"
           echo "============================"
           python3 combine_coverage.py --summary test-results/combined_coverage.xml test-results/programming_module_programming_llm_coverage.xml test-results/text_module_text_llm_coverage.xml test-results/modeling_module_modeling_llm_coverage.xml | tee test-results/coverage_table.txt
@@ -123,6 +123,7 @@ jobs:
           path: all-test-results
       - name: Download coverage reports
         uses: actions/download-artifact@v6
+        continue-on-error: true
         with:
           name: coverage-reports
           path: coverage-reports
@@ -135,55 +136,15 @@ jobs:
           require_tests: true
           require_passed_tests: false
           detailed_summary: true
-      - name: Comment test results on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const summary = `### Athena Test Results Summary\n\n${{ steps.test-report.outputs.summary }}\n\n#### Failing Tests Summary\n\n${{ steps.test-report.outputs.detailed_summary }}`;
-            github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body: summary
-            });
-      
-      - name: Comment Coverage Table on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            
-            try {
-              // Read from the downloaded artifacts
-              const coverageTablePath = path.join(process.env.GITHUB_WORKSPACE, 'coverage-reports', 'coverage_table.txt');
-              
-              if (fs.existsSync(coverageTablePath)) {
-                const coverageTable = fs.readFileSync(coverageTablePath, 'utf8');
-                
-                const comment = `### 📊 Detailed Coverage Table
-            
-            ${coverageTable}`;
-                
-                github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.payload.pull_request.number,
-                  body: comment
-                });
-              } else {
-                console.log('Coverage table file not found at:', coverageTablePath);
-                // List files in the coverage-reports directory for debugging
-                const coverageReportsDir = path.join(process.env.GITHUB_WORKSPACE, 'coverage-reports');
-                if (fs.existsSync(coverageReportsDir)) {
-                  const files = fs.readdirSync(coverageReportsDir);
-                  console.log('Files in coverage-reports:', files);
-                } else {
-                  console.log('coverage-reports directory not found');
-                }
-              }
-            } catch (error) {
-              console.log('Error reading coverage table:', error.message);
-            }
+      - name: Add coverage results to job summary
+        if: always()
+        run: |
+          {
+            echo '### 📊 Detailed Coverage Table'
+            echo
+            if [ -f coverage-reports/coverage_table.txt ]; then
+              cat coverage-reports/coverage_table.txt
+            else
+              echo 'Coverage report unavailable; see the test job logs.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
