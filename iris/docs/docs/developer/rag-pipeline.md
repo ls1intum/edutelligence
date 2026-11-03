@@ -14,7 +14,7 @@ The RAG lifecycle has two separate phases:
 
 ```text
 Ingestion: Artemis webhook -> Iris ingestion pipeline -> Iris Weaviate collections
-Retrieval: user query -> rewrite/HyDE -> vector retrieval -> reranking -> agent tool result -> optional citations
+Retrieval: search query written by the agent -> vector retrieval -> reranking -> agent tool result (with source ids) -> citations
 ```
 
 Ingestion callbacks report processing state to Artemis. Retrieval classes are internal `SubPipeline` implementations: the owning chat or global-search-answer pipeline decides when to invoke them and owns the final callback.
@@ -87,17 +87,16 @@ The unified update pipeline can generate a missing transcription, resume from a 
 
 ## Lecture retrieval
 
-`LectureRetrieval` is an internal `SubPipeline` used by relevant Iris agents. It assembles a `LectureRetrievalDTO` through these stages:
+`LectureRetrieval` is an internal `SubPipeline` used by the chat, tutor suggestion and autonomous tutor agents through the lecture tool. The agent writes the search query itself as the tool argument: a self-contained query in the language of the course material. The chat looks that language up once per run from the lecture unit (`course_language`) and names it in the tool description; without an answer the description asks for the material's language without naming it. The agent may search again with another query; the tool allows three searches per lecture scope (`MAX_SEARCHES_PER_SCOPE`) and answers a fourth with a request to answer from what it has. The results of all searches in the same lecture scope are kept, and a search after a context switch starts over. An empty query gets a hint instead of a search. No LLM rewrites the query, and no hypothetical answer is generated, so a lecture search makes no chat model call. `LectureRetrieval` assembles a `LectureRetrievalDTO` through these stages:
 
 1. resolve lecture-unit context and detect whether matching transcription data exists;
-2. produce page-oriented and, when applicable, transcription-oriented rewritten queries and hypothetical answers in parallel;
-3. embed each distinct generated query once and reuse those vectors across the compatible retrieval stages;
-4. retrieve page chunks, transcriptions, and lecture-unit segments in parallel;
-5. fetch surrounding page/transcription content for matching segments and remove duplicates;
-6. rerank applicable page and transcription results; and
-7. assemble the typed `LectureRetrievalDTO` for the calling tool or agent.
+2. embed the search query once and reuse the vector across the retrieval stages;
+3. retrieve page chunks, transcriptions, and lecture-unit segments in parallel;
+4. fetch surrounding page/transcription content for matching segments and remove duplicates;
+5. rerank applicable page and transcription results against the search query; and
+6. assemble the typed `LectureRetrievalDTO` for the calling tool or agent.
 
-Because query embeddings are reused, the lecture, segment, and transcription retrieval configurations must resolve to the same embedding model. `LectureRetrieval` validates that invariant at construction instead of silently searching incompatible vector spaces.
+Because the query embedding is reused, the lecture, segment, and transcription retrieval configurations must resolve to the same embedding model. `LectureRetrieval` validates that invariant at construction instead of silently searching incompatible vector spaces.
 
 The parallel sources have different roles:
 
@@ -107,13 +106,13 @@ The parallel sources have different roles:
 | `LectureTranscriptionRetrieval` | `LectureTranscriptions` | Matching transcription content. |
 | `LectureUnitSegmentRetrieval`   | `LectureUnitSegments`   | Combined segment material.      |
 
-Retrieval requests carry course, lecture, lecture-unit, and Artemis-instance scope. On the current default branch, individual retrievers apply a subset of that scope rather than consistently composing every supplied identifier; callers must not treat lecture-unit isolation as guaranteed until the corresponding retrieval-filter change is merged. Reranking is an Iris stage over the applicable retrieved results; its configured provider and model must not be inferred from this page.
+Retrieval requests carry course, lecture, lecture-unit, and Artemis-instance scope. On the current default branch, individual retrievers apply a subset of that scope rather than consistently composing every supplied identifier; callers must not treat lecture-unit isolation as guaranteed until the corresponding retrieval-filter change is merged. Reranking is an Iris stage over the applicable retrieved results. The reranker follows the course's local mode: the `reranker` role of the three lecture retrieval pipelines can name a `local` and a `cloud` model (the example configuration uses `qwen3-reranker-8b` on Logos and `cohere`), so a course in local mode sends neither its question nor slide text to a cloud reranker. A single model name applies to both modes. The query embedding always uses the one configured embedding model, because it must match the ingested vectors.
 
 ## FAQ retrieval and citations
 
-`FaqRetrieval` searches the `Faqs` collection for a course-scoped FAQ context. Chat modes and tools decide whether FAQ retrieval is available for a particular request.
+`FaqRetrieval` searches the `Faqs` collection of the course for the query the agent writes as the FAQ tool argument, without a rewrite step. Chat modes and tools decide whether FAQ retrieval is available for a particular request.
 
-After a response uses lecture or FAQ material, the nested citation pipeline can generate source attribution for the parent response. Citation generation is post-processing inside the parent pipeline, not an independently callable Artemis endpoint. The marker format, the keyword/summary enrichment, and what the citations are built from are documented in [citations](./citations.md).
+The retrieval tools give every slide chunk, transcript segment and FAQ they return a source id, and the chat agent cites what it uses while it answers. Turning the markers into citations is post-processing inside the chat pipeline, not an independently callable Artemis endpoint. The source ids, the cite block format and the labels are documented in [citations](./citations.md).
 
 ## Vector database lifecycle
 

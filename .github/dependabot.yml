@@ -11,7 +11,7 @@ updates:
           - "*"
   # Athena is many small poetry projects rather than one. The globs cover the
   # top level, the sibling packages beside it (assessment_module_manager,
-  # athena, evaluation, llm_core, log_viewer, tests) and the exercise modules
+  # athena, evaluation, llm_core, tests) and the exercise modules
   # two levels down. Directories without a pip manifest, such as the docs and
   # playground npm projects, are simply skipped.
   - package-ecosystem: "pip"

@@ -19,6 +19,7 @@ import pytest
 import requests as http_requests_module
 
 from iris.common.boot_id import BOOT_ID
+from iris.common.callback_token import CallbackToken
 from iris.ingestion.ingestion_job_handler import IngestionJobHandler
 from iris.ingestion.worker import IngestionWorker, _ActiveRun
 
@@ -262,8 +263,10 @@ class TestHeartbeat:
             return_value=_response(body={"revokedJobTokens": []}),
         ) as post:
             _heartbeat_and_wait(worker)
+        # The same run ids under both names: activeJobTokens is the name older Artemis versions read.
         assert post.call_args.kwargs["json"] == {
             "bootId": BOOT_ID,
+            "activeRunIds": ["alive"],
             "activeJobTokens": ["alive"],
         }
 
@@ -292,6 +295,21 @@ class TestHeartbeat:
         with patch(
             "iris.ingestion.worker.http_requests.post",
             return_value=_response(body={"revokedJobTokens": ["revoked"]}),
+        ):
+            _heartbeat_and_wait(worker)
+        run.cancel_event.set.assert_called_once()
+
+    def test_revoked_run_id_signals_the_run_s_cancel_event(self):
+        # Artemis versions with plain run ids answer under revokedRunIds.
+        worker = IngestionWorker()
+        worker.register_upstream("http://a:8080", "key-a")
+        _run(worker, "revoked", "http://a:8080")
+        run = worker._active["revoked"]  # pylint: disable=protected-access
+        with patch(
+            "iris.ingestion.worker.http_requests.post",
+            return_value=_response(
+                body={"revokedRunIds": ["revoked"], "revokedJobTokens": ["revoked"]}
+            ),
         ):
             _heartbeat_and_wait(worker)
         run.cancel_event.set.assert_called_once()
@@ -342,16 +360,26 @@ def _start_environment(handler):
 
 @contextmanager
 def _failure_callbacks(construct_error=None):
-    """Replace IngestionStatusCallback; ``reported`` collects (constructor args, message)."""
-    reported = []
+    """Replace IngestionStatusCallback; ``reported`` collects (constructor args, message).
+
+    ``reported.tokens`` collects the callback token each reporting callback was given.
+    """
+
+    class _Reported(list):
+        tokens: list = []
+
+    reported = _Reported()
+    reported.tokens = []
 
     class _Callback:
-        def __init__(self, run_id, base_url, lecture_unit_id=None):
+        def __init__(self, run_id, base_url, lecture_unit_id=None, *, auth_token):
             if construct_error is not None:
                 raise construct_error
             self.args = (run_id, base_url, lecture_unit_id)
+            self.auth_token = auth_token
 
         def fail(self, message):
+            reported.tokens.append(self.auth_token)
             reported.append((self.args, message))
 
     with patch(
@@ -386,7 +414,8 @@ class TestStartJob:
         worker._active["tok-12345678"] = pending  # pylint: disable=protected-access
         dto = SimpleNamespace(
             settings=SimpleNamespace(
-                authentication_token="tok-12345678",
+                authentication_token=CallbackToken("tok-12345678"),
+                callback_run_id="tok-12345678",
                 artemis_base_url="https://artemis.example",
             ),
             lecture_unit=SimpleNamespace(course_id=1, lecture_id=2, lecture_unit_id=3),
@@ -467,6 +496,23 @@ class TestBatchStart:
             return upstream, worker._claim_from(  # pylint: disable=protected-access
                 upstream, len(jobs)
             )
+
+    def test_runs_are_tracked_and_reported_by_run_id_with_the_token_kept_apart(self):
+        worker = IngestionWorker()
+        # Invalid (no Artemis base URL), so it is reported; it carries a run id of its own.
+        bad = {"settings": {"authenticationToken": "secret-bad", "runId": "run-bad"}}
+        good = _job("secret-good")
+        good["settings"]["runId"] = "run-good"
+        with _failure_callbacks() as reported:
+            _, started = self._claim(worker, [bad, good])
+            assert _wait_for(lambda: len(reported) == 1)
+        assert started == 1
+        # The worker's runs are keyed and heartbeated by run id, never by the token.
+        assert list(worker._active) == ["run-good"]  # pylint: disable=protected-access
+        (run_id, _, _), _ = reported[0]
+        assert run_id == "run-bad"
+        # The report presents the bad run's own token: not its run id, not another run's token.
+        assert reported.tokens == [CallbackToken("secret-bad")]
 
     def test_bad_job_does_not_block_the_good_one_and_is_reported_once(self):
         worker = IngestionWorker()
