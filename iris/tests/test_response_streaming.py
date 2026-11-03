@@ -918,7 +918,10 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     assert sender.url.endswith("/chat/runs/run-1/status")
     assert sender.auth_token == CallbackToken("run-1")
     # Chat drafts carry no citations: markers are removed before a partial is posted.
-    assert sender.text_transform is citation_free_draft
+    assert sender.text_transform("A. [src:1] B.") == citation_free_draft(
+        "A. [src:1] B."
+    )
+    assert sender.text_transform("Quiz: [MCQ_RESULT]") == "Quiz: "
     created_args[0].stream_handler("Hello")
     assert sender.deltas == ["Hello"]
     assert events.index("sender.start") < events.index("sender.stop")
@@ -1061,3 +1064,14 @@ def test_exercise_streaming_suppresses_ok_sentinel_deltas():
         delta for sender in details.sender_instances for delta in sender.deltas
     ] == []
     assert details.callback.send_result.call_args_list[0].args[0] == "agent answer"
+
+
+def test_chat_drafts_hide_the_quiz_placeholder_also_while_it_is_written():
+    # pylint: disable=import-outside-toplevel
+    from iris.pipeline.chat.chat_pipeline import _chat_draft
+
+    assert _chat_draft("Here is your quiz: [MCQ_RESULT] Good luck") == (
+        "Here is your quiz:  Good luck"
+    )
+    assert _chat_draft("Here is your quiz: [MCQ_RE") == "Here is your quiz: "
+    assert _chat_draft("A list [1, 2]") == "A list [1, 2]"

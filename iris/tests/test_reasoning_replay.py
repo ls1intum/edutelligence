@@ -23,6 +23,7 @@ from iris.llm.external.openai_chat import (  # noqa: E402
     convert_responses_to_iris_message,
     convert_to_open_ai_messages,
     convert_to_responses_input,
+    is_content_filter_error,
 )
 from iris.llm.iris_chat_model import IrisChatModel  # noqa: E402
 
@@ -261,6 +262,72 @@ def test_a_completed_commentary_does_not_carry_an_incomplete_answer():
 
     with pytest.raises(IncompleteModelResponse):
         convert_responses_to_iris_message(response, "luna")
+
+
+def test_a_completed_commentary_alone_is_not_an_answer():
+    # The model said what it will do next and was cut while reasoning on.
+    response = _response(
+        "incomplete",
+        [
+            _item(
+                type="message",
+                status="completed",
+                phase="commentary",
+                content=[_item(type="output_text", text="Let me work this out.")],
+            ),
+            _item(type="reasoning", status="incomplete"),
+        ],
+        incomplete_reason="max_output_tokens",
+    )
+
+    with pytest.raises(IncompleteModelResponse):
+        convert_responses_to_iris_message(response, "luna")
+
+
+def test_a_completed_final_answer_after_commentary_is_kept():
+    response = _response(
+        "incomplete",
+        [
+            _item(
+                type="message",
+                status="completed",
+                phase="commentary",
+                content=[_item(type="output_text", text="Let me check. ")],
+            ),
+            _item(
+                type="message",
+                status="completed",
+                phase="final_answer",
+                content=[_item(type="output_text", text="It is 4.")],
+            ),
+        ],
+        incomplete_reason="max_output_tokens",
+    )
+
+    message = convert_responses_to_iris_message(response, "luna")
+
+    assert message.contents[0].text_content == "It is 4."
+
+
+def test_a_content_filter_cut_is_reported_as_content_filter():
+    response = _response(
+        "incomplete",
+        [
+            _item(
+                type="message",
+                status="incomplete",
+                content=[_item(type="output_text", text="Part")],
+            )
+        ],
+        incomplete_reason="content_filter",
+    )
+
+    with pytest.raises(IncompleteModelResponse) as raised:
+        convert_responses_to_iris_message(response, "luna")
+
+    assert is_content_filter_error(raised.value)
+    assert raised.value.token_usage.num_input_tokens == 10
+    assert raised.value.token_usage.num_output_tokens == 5
 
 
 @pytest.mark.parametrize("status", ["in_progress", "cancelled", "queued"])

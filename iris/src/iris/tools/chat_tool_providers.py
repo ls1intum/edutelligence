@@ -350,6 +350,10 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
         )
         return lecture_content
 
+    def track_usage(usage) -> None:
+        # Read when the tool runs: the run's usage list is bound when the run starts.
+        state.tokens.append(usage)
+
     return create_tool_generate_mcq_questions(
         state.mcq_pipeline,
         state.dto.chat_history,
@@ -357,6 +361,7 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
         state.mcq_result_storage,
         previous_reply_language(state.dto.chat_history, state.dto.user.lang_key),
         lecture_content_supplier=lecture_content_supplier,
+        track_usage=track_usage,
     )
 
 

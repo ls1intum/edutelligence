@@ -36,13 +36,6 @@
             "module": "module_programming_themisml"
         },
         {
-            "name": "Module Programming APTED",
-            "type": "python",
-            "request": "launch",
-            "cwd": "${workspaceFolder}/modules/programming/module_programming_apted",
-            "module": "module_programming_apted"
-        },
-        {
             "name": "Module Text LLM",
             "type": "python",
             "request": "launch",

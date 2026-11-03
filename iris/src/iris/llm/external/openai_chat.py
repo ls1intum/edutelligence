@@ -42,7 +42,7 @@ from ...domain.data.json_message_content_dto import JsonMessageContentDTO
 from ...domain.data.tool_call_dto import ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
 from ...llm import CompletionArguments
-from ...llm.errors import IncompleteModelResponse
+from ...llm.errors import ContentFilteredResponse, IncompleteModelResponse
 from ...llm.external.model import ChatModel
 from ...llm.retry import RetryState
 from ...llm.structured_output import (
@@ -92,7 +92,7 @@ def is_content_filter_error(error: Exception) -> bool:
     with the ``content_filter`` finish reason. The filter judges the exact input, so resending the same
     request gets the same verdict.
     """
-    if isinstance(error, ContentFilterFinishReasonError):
+    if isinstance(error, (ContentFilterFinishReasonError, ContentFilteredResponse)):
         return True
     return isinstance(error, APIStatusError) and error.code == "content_filter"
 
@@ -652,13 +652,17 @@ def extract_response_output_text(response) -> str:
 def _completed_answer_text(output_items) -> Optional[str]:
     """The answer of a response that did not complete, if it was fully written.
 
-    Returns the text only when the response has message items and every one of
+    Returns the text only when the response has answer messages and every one of
     them was written completely; otherwise None. Streamed text alone is no proof
     that the answer was complete, so a response without message items is
-    rejected.
+    rejected. A ``commentary`` message is what the model says before it goes on
+    working, not its answer, so a response that stopped after one is rejected too.
     """
     messages = [
-        item for item in output_items if getattr(item, "type", None) == "message"
+        item
+        for item in output_items
+        if getattr(item, "type", None) == "message"
+        and getattr(item, "phase", None) != "commentary"
     ]
     if not messages or any(
         getattr(item, "status", None) != "completed" for item in messages
@@ -787,6 +791,16 @@ def convert_responses_to_iris_message(
     status = getattr(response, "status", None)
     raise_for_failed_responses_status(response)
     token_usage = create_token_usage(getattr(response, "usage", None), model)
+    if (
+        status == "incomplete"
+        and getattr(getattr(response, "incomplete_details", None), "reason", None)
+        == "content_filter"
+    ):
+        # Recognized by is_content_filter_error, so callers that fall back on a
+        # filtered answer do so, and billed like any other incomplete response.
+        raise ContentFilteredResponse(
+            "Responses API answer was stopped by the content filter", token_usage
+        )
     function_calls = [
         item for item in output_items if getattr(item, "type", None) == "function_call"
     ]
