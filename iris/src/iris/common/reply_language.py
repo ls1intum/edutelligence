@@ -101,6 +101,7 @@ _NON_PROSE = [
     re.compile(r"```.*?(```|$)", re.DOTALL),  # code blocks
     re.compile(r"`[^`]*`"),  # inline code
     re.compile(r"\[cite:[^\]]*\]"),  # citation markers
+    re.compile(r"\[src:\d+\]"),  # source markers written by the chat agent
     re.compile(r"\]\([^)]*\)"),  # link targets
     re.compile(r"https?://\S+"),
 ]

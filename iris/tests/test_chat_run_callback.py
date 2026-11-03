@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import requests
 
+from iris.common.callback_token import CallbackToken
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind, ActivityState
 from iris.web.status.status_update import ChatRunCallback
 
@@ -18,7 +19,12 @@ def _ok():
 
 
 def _callback() -> ChatRunCallback:
-    return ChatRunCallback("run-1", "https://artemis.example", None)
+    return ChatRunCallback(
+        "run-1",
+        "https://artemis.example",
+        None,
+        auth_token=CallbackToken("token-for-run-1"),
+    )
 
 
 def _activity(state=ActivityState.RUNNING):

@@ -55,7 +55,7 @@ export default function ModuleExperimentProgress({
           )}
         >
           <span className="font-medium">Send Submissions</span>
-          {moduleRequests.sendSubmissions.isLoading && (
+          {moduleRequests.sendSubmissions.isPending && (
             <span className="text-xs text-gray-500 animate-pulse">
               Sending{" "}
               {(experiment.trainingSubmissions?.length ?? 0) +
@@ -107,7 +107,7 @@ export default function ModuleExperimentProgress({
             )}
           >
             <span className="font-medium">Sending Training Feedback</span>
-            {moduleRequests.sendFeedbacks.isLoading && (
+            {moduleRequests.sendFeedbacks.isPending && (
               <span className="text-xs text-gray-500 animate-pulse">
                 Sending feedback for training... (
                 {data.sentTrainingSubmissions.length + 1}/
@@ -156,7 +156,7 @@ export default function ModuleExperimentProgress({
             )}
           >
             <span className="font-medium">Generating Feedback Suggestions</span>
-            {moduleRequests.requestFeedbackSuggestions.isLoading && (
+            {moduleRequests.requestFeedbackSuggestions.isPending && (
               <span className="text-xs text-gray-500 animate-pulse">
                 Generating feedback suggestions... (
                 {data.submissionsWithFeedbackSuggestions.size + 1}/
@@ -217,7 +217,7 @@ export default function ModuleExperimentProgress({
             )}
           >
             <span className="font-medium">Run Automatic Evaluation</span>
-            {moduleRequests.requestEvaluation.isLoading && (
+            {moduleRequests.requestEvaluation.isPending && (
               <span className="text-xs text-gray-500 animate-pulse">
                 Evaluating submissions... (
                 {(submissionsWithAutomaticEvaluation?.size ?? 0) + 1}/
