@@ -5,13 +5,15 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
-
 # Bootstrap the iris package (see test_chat_latency_ordering.py for the circular import).
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.callback_token import CallbackToken
 from iris.common.pipeline_enum import PipelineEnum  # noqa: E402
-from iris.common.pyris_message import IrisMessageRole, PyrisMessage  # noqa: E402
+from iris.common.pyris_message import (  # noqa: E402
+    IrisMessageRole,
+    PyrisAIMessage,
+    PyrisMessage,
+)
 from iris.common.token_usage_dto import TokenUsageDTO  # noqa: E402
 from iris.domain.data.text_message_content_dto import (  # noqa: E402
     TextMessageContentDTO,
@@ -76,19 +78,43 @@ def test_equal_but_separate_usages_are_both_sent():
     assert _input_counts(outbox[1]) == [5]
 
 
-class _FakeExecutor:
-    """Yields agent steps; ``None`` means the step made no new LLM call."""
+class _ScriptedModel:
+    """Answers with prebuilt responses; each sets the usage the call reported."""
 
-    def __init__(self, llm, step_usages):
-        self.llm = llm
-        self.step_usages = step_usages
+    def __init__(self, script):
+        self.script = list(script)
+        self.tokens = None
+        self.request_handler = SimpleNamespace(model_id="test-model")
 
-    def iter(self, _params, callbacks=None):
-        for index, usage in enumerate(self.step_usages):
-            if usage is not None:
-                self.llm.tokens = usage
-            last = index == len(self.step_usages) - 1
-            yield {"output": "done"} if last else {"intermediate_steps": []}
+    def chat(self, messages, tools=None, tool_choice=None):
+        response, usage = self.script.pop(0)
+        self.tokens = usage
+        return response
+
+
+def _tool_call_turn():
+    return PyrisAIMessage(
+        contents=[TextMessageContentDTO(textContent="")],
+        toolCalls=[
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+            }
+        ],
+    )
+
+
+def _answer(text="done"):
+    return PyrisMessage(
+        sender=IrisMessageRole.ASSISTANT,
+        contents=[TextMessageContentDTO(textContent=text)],
+    )
+
+
+def lookup() -> str:
+    """Look something up."""
+    return "result"
 
 
 def _agent_state(llm):
@@ -98,24 +124,27 @@ def _agent_state(llm):
         callback=MagicMock(),
         activity_tracker=MagicMock(),
         tracing_context=None,
+        tools=[lookup],
+        prompt_messages=[_answer("system")],
     )
 
 
 def _pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
     pipeline = ChatPipeline.__new__(ChatPipeline)
     pipeline.chat_mode = chat_mode
-    pipeline.on_agent_step = lambda state, step: None
     return pipeline
 
 
 def test_agent_records_each_llm_call_once_with_the_chat_pipeline():
     first, second = TokenUsageDTO(numInputTokens=10), TokenUsageDTO(numInputTokens=20)
-    llm = SimpleNamespace(tokens=None)
+    # The second call reports the same usage object again (as a client that did
+    # not replace it would); it must not be billed twice.
+    llm = _ScriptedModel(
+        [(_tool_call_turn(), first), (_tool_call_turn(), first), (_answer(), second)]
+    )
     state = _agent_state(llm)
 
-    _pipeline(IrisChatMode.COURSE)._run_agent_iterations(
-        state, _FakeExecutor(llm, [first, None, second]), {}
-    )
+    assert _pipeline(IrisChatMode.COURSE)._run_agent_loop(state) == "done"
 
     assert len(state.tokens) == 2
     assert state.tokens[0] is first and state.tokens[1] is second
@@ -131,15 +160,14 @@ def test_agent_labels_exercise_and_lecture_chat_tokens():
         (IrisChatMode.LECTURE, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE),
     ]:
         usage = TokenUsageDTO(numInputTokens=1)
-        llm = SimpleNamespace(tokens=None)
-        state = _agent_state(llm)
+        state = _agent_state(_ScriptedModel([(_answer(), usage)]))
 
-        _pipeline(mode)._run_agent_iterations(state, _FakeExecutor(llm, [usage]), {})
+        _pipeline(mode)._run_agent_loop(state)
 
         assert state.tokens[0].pipeline == expected
 
 
-def test_turn_context_follows_the_history_and_precedes_the_scratchpad():
+def test_turn_context_follows_the_history():
     pipeline = _pipeline(IrisChatMode.COURSE)
     state = SimpleNamespace(
         message_history=[
@@ -150,52 +178,57 @@ def test_turn_context_follows_the_history_and_precedes_the_scratchpad():
         ]
     )
 
-    prompt = pipeline.assemble_prompt_with_history(
+    messages = pipeline.build_prompt_messages(
         state, system_prompt="Static {prompt}", turn_context="Date: {today}"
     )
-    messages = prompt.format_messages(agent_scratchpad=[])
 
-    assert [type(message) for message in messages] == [
-        SystemMessage,
-        HumanMessage,
-        SystemMessage,
+    assert [message.sender for message in messages] == [
+        IrisMessageRole.SYSTEM,
+        IrisMessageRole.USER,
+        IrisMessageRole.SYSTEM,
     ]
-    assert messages[0].content == "Static {prompt}"
-    assert messages[2].content == "Date: {today}"
+    assert messages[0].contents[0].text_content == "Static {prompt}"
+    assert messages[1].contents[0].text_content == "What is {a} heap?"
+    assert messages[2].contents[0].text_content == "Date: {today}"
 
 
 def test_no_turn_context_keeps_the_previous_layout():
     pipeline = _pipeline(IrisChatMode.COURSE)
     state = SimpleNamespace(message_history=[])
 
-    prompt = pipeline.assemble_prompt_with_history(state, system_prompt="Static")
-
-    assert len(prompt.format_messages(agent_scratchpad=[])) == 1
+    assert len(pipeline.build_prompt_messages(state, system_prompt="Static")) == 1
 
 
-def test_mcq_intro_usage_is_billed_once_with_the_chat_pipeline():
-    usage = TokenUsageDTO(numInputTokens=40, numCachedInputTokens=32)
-    llm = MagicMock()
-    llm.tokens = None
+def test_failed_run_reports_the_usage_of_every_call_once(monkeypatch):
+    """A run that dies in its second model call still bills both calls, once."""
+    from iris.llm.errors import IncompleteModelResponse
+    from iris.pipeline.abstract_agent_pipeline import AbstractAgentPipeline
 
-    def invoke(_messages):
-        llm.tokens = usage
-        return SimpleNamespace(content="Sure, here is a quiz!")
+    first = TokenUsageDTO(numInputTokens=10)
+    truncated = TokenUsageDTO(numInputTokens=20)
+    llm = _ScriptedModel([(_tool_call_turn(), first)])
 
-    llm.invoke.side_effect = invoke
-    state = _agent_state(llm)
-    state.mcq_parallel = True
-    state.prompt = MagicMock()
+    def chat_then_truncate(messages, tools=None, tool_choice=None):
+        if llm.script:
+            return _ScriptedModel.chat(llm, messages, tools, tool_choice)
+        llm.tokens = truncated
+        raise IncompleteModelResponse("truncated", token_usage=truncated)
 
-    for mode, expected in [
-        (IrisChatMode.COURSE, PipelineEnum.IRIS_CHAT_COURSE_MESSAGE),
-        (IrisChatMode.LECTURE, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE),
-    ]:
-        state.tokens = []
-        llm.tokens = None
+    llm.chat = chat_then_truncate
+    pipeline = _pipeline(IrisChatMode.COURSE)
+    callback, outbox = _callback_with_outbox()
 
-        assert _pipeline(mode).execute_agent(state) == "Sure, here is a quiz!"
+    def run(self, dto, variant, callback, local=False):
+        state = _agent_state(llm)
+        self.tokens = state.tokens
+        self._run_agent_loop(state)
 
-        assert state.tokens == [usage]
-        assert state.tokens[0].pipeline == expected
-        assert state.tokens[0].num_cached_input_tokens == 32
+    monkeypatch.setattr(AbstractAgentPipeline, "__call__", run)
+    monkeypatch.setattr(
+        "iris.web.status.status_update.capture_exception", lambda *_: None
+    )
+
+    pipeline(dto=SimpleNamespace(settings=None), variant=None, callback=callback)
+
+    assert outbox[-1]["runState"] == "FAILED"
+    assert _input_counts(outbox[-1]) == [10, 20]

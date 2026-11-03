@@ -4,8 +4,6 @@ import os
 from dataclasses import dataclass
 from typing import Callable, List, Mapping, Optional, cast
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-
 from iris.common.logging_config import get_logger
 from iris.domain.status.struggle_intervention_status_update_dto import (
     StruggleAction,
@@ -20,6 +18,7 @@ from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.tools import (
     create_tool_file_lookup_with_line_numbers,
     create_tool_get_build_logs_analysis,
@@ -354,10 +353,7 @@ class StruggleInterventionPipeline(
     def __init__(self):
         super().__init__(implementation_id=self.PIPELINE_ID)
         template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
-        self.jinja_env = Environment(
-            loader=FileSystemLoader(template_dir),
-            autoescape=select_autoescape(["html", "xml"]),
-        )
+        self.jinja_env = prompt_environment(template_dir)
         self.system_prompt_template = self.jinja_env.get_template(
             "struggle_intervention_system_prompt.j2"
         )
