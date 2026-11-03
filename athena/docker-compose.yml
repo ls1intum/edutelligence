@@ -75,14 +75,6 @@ services:
     ports:
       - "5005:5005"
 
-  module_programming_apted:
-    hostname: module-programming-apted
-    build: modules/programming/module_programming_apted
-    depends_on:
-      - athena
-    ports:
-      - "5006:5006"
-
   module_modeling_llm:
     hostname: module-modeling-llm
     build: modules/modeling/module_modeling_llm
