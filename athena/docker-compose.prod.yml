@@ -13,7 +13,14 @@ services:
       - ATHENA_DOMAIN=${ATHENA_DOMAIN:-localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
-      - ${ATHENA_TLS_DIR:?Set ATHENA_TLS_DIR to the host certificate directory}:/etc/caddy/tls:ro
+      - type: bind
+        source: ${ATHENA_TLS_CERT_FILE:?Set ATHENA_TLS_CERT_FILE to the host fullchain PEM}
+        target: /etc/caddy/fullchain.pem
+        read_only: true
+      - type: bind
+        source: ${ATHENA_TLS_KEY_FILE:?Set ATHENA_TLS_KEY_FILE to the host private key PEM}
+        target: /etc/caddy/key.pem
+        read_only: true
 
   assessment_module_manager:
     hostname: assessment-module-manager
