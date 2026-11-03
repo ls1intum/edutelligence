@@ -88,6 +88,10 @@ class FixtureLectureRetrieval:
         pages, transcripts, _ = _lecture_data(self.metadata)
         return pages, transcripts
 
+    def course_material_language(self, *_args, **_kwargs):
+        """The stored lecture language, if the scenario fixes one."""
+        return self.metadata.get("retrieval", {}).get("courseMaterialLanguage")
+
     def __call__(self, **_kwargs):
         pages, transcripts, search = _lecture_data(self.metadata)
         return LectureRetrievalDTO(

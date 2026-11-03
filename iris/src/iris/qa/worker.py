@@ -73,6 +73,11 @@ class _ScenarioRequestBudget:
         self.billing_models: dict[str, str] = json.loads(
             os.environ.get(BILLING_MODELS_ENV) or "{}"
         )
+        # One entry per model call and per agent run. They are telemetry for the
+        # report (timing, tokens per call, step limit) and never reach the judge,
+        # because model ids would reveal which candidate wrote the answer.
+        self.calls: list[dict[str, Any]] = []
+        self.agent_runs: list[dict[str, Any]] = []
         self.lock = threading.Lock()
         self.local = threading.local()
         self.stack = ExitStack()
@@ -86,13 +91,13 @@ class _ScenarioRequestBudget:
     def __enter__(self):
         from openai import RateLimitError
 
-        from iris.llm.external import openai_chat
+        from iris.llm.agent.loop import AgentLoop
         from iris.llm.request_handler.llm_request_handler import LlmRequestHandler
-        from iris.pipeline import abstract_agent_pipeline
+        from iris.llm.retry import RetryState
 
         original_chat = LlmRequestHandler.chat
-        original_retry = openai_chat._retry_after_openai_error
-        original_executor = abstract_agent_pipeline.AgentExecutor
+        original_wait = RetryState.wait
+        original_run = AgentLoop.run
 
         def budgeted_chat(handler, messages, arguments, tools):
             estimate = _request_token_upper_bound(messages, tools)
@@ -125,10 +130,18 @@ class _ScenarioRequestBudget:
                 self.reserved_output_tokens += request_limit
 
             self.local.reservation = (estimate, request_limit)
+            call_started = time.monotonic()
             try:
                 response = original_chat(handler, messages, arguments, tools)
             except Exception as error:
                 with self.lock:
+                    self.calls.append(
+                        {
+                            "model": str(getattr(handler, "model_id", "")),
+                            "seconds": round(time.monotonic() - call_started, 2),
+                            "error": f"{type(error).__name__}: {str(error)[:300]}",
+                        }
+                    )
                     if _is_prompt_refusal(error):
                         # The provider refused the prompt before generating anything, so
                         # no usage is ambiguous. The pipeline decides what the student
@@ -159,6 +172,17 @@ class _ScenarioRequestBudget:
             input_tokens = int(usage.num_input_tokens)
             output_tokens = int(usage.num_output_tokens)
             with self.lock:
+                self.calls.append(
+                    {
+                        "model": str(getattr(handler, "model_id", "")),
+                        "seconds": round(time.monotonic() - call_started, 2),
+                        "inputTokens": input_tokens,
+                        "outputTokens": output_tokens,
+                        "toolCalls": len(getattr(response, "tool_calls", None) or []),
+                        "schema": getattr(arguments, "response_schema", None)
+                        is not None,
+                    }
+                )
                 self.reserved_input_tokens -= estimate
                 self.reserved_output_tokens -= request_limit
                 if input_tokens < 0 or output_tokens < 0:
@@ -176,14 +200,12 @@ class _ScenarioRequestBudget:
                     raise RuntimeError("Scenario output-token limit was exceeded")
             return response
 
-        def accounted_retry(attempt, initial_delay, backoff_factor):
+        def accounted_wait(retry_state, error, attempt):
             # Production retries a failed attempt inside one model call and reports
             # only the usage of the attempt that succeeds. An attempt that failed
             # other than by a rate limit may still have run and been billed.
             reservation = getattr(self.local, "reservation", None)
-            if reservation is not None and not isinstance(
-                sys.exc_info()[1], RateLimitError
-            ):
+            if reservation is not None and not isinstance(error, RateLimitError):
                 with self.lock:
                     # The call's reservation stays held for the retry.
                     self._charge_reservation(*reservation)
@@ -197,24 +219,28 @@ class _ScenarioRequestBudget:
                             "Scenario token limit would be exceeded "
                             "before retrying a model call"
                         )
-            original_retry(attempt, initial_delay, backoff_factor)
+            original_wait(retry_state, error, attempt)
 
-        def budgeted_executor(*args, **kwargs):
-            configured = kwargs.get("max_iterations")
-            kwargs["max_iterations"] = (
-                min(configured, self.ceiling.max_agent_turns)
-                if configured is not None
-                else self.ceiling.max_agent_turns
-            )
-            return original_executor(*args, **kwargs)
+        def budgeted_run(loop, messages):
+            # The scenario's turn limit caps the production step limit. A run that
+            # reaches it still produces a forced final answer, which is rated like
+            # any other; the telemetry records that the limit was hit.
+            loop.max_steps = min(loop.max_steps, self.ceiling.max_agent_turns)
+            result = original_run(loop, messages)
+            with self.lock:
+                self.agent_runs.append(
+                    {
+                        "steps": result.steps,
+                        "toolCalls": result.tool_calls,
+                        "hitStepLimit": bool(result.hit_step_limit),
+                        "maxSteps": loop.max_steps,
+                    }
+                )
+            return result
 
         self.stack.enter_context(patch.object(LlmRequestHandler, "chat", budgeted_chat))
-        self.stack.enter_context(
-            patch.object(openai_chat, "_retry_after_openai_error", accounted_retry)
-        )
-        self.stack.enter_context(
-            patch.object(abstract_agent_pipeline, "AgentExecutor", budgeted_executor)
-        )
+        self.stack.enter_context(patch.object(RetryState, "wait", accounted_wait))
+        self.stack.enter_context(patch.object(AgentLoop, "run", budgeted_run))
         return self
 
     def raise_if_failed(self) -> None:
@@ -227,21 +253,20 @@ class _ScenarioRequestBudget:
         return self.stack.__exit__(exc_type, exc_value, traceback_value)
 
 
-# What LangChain's agent executor answers when it runs out of iterations.
-_ITERATION_LIMIT_MARKERS = (
-    "Agent stopped due to iteration limit",
-    "Agent stopped due to max iterations",
-)
-
-
 def _recording_callback(base):
     class RecordingCallback(base):
         def __init__(self, run_id: str, base_url: str):
+            from iris.common.callback_token import CallbackToken
+
             self.payloads: list[dict] = []
             self.timestamps: list[float] = []
             self.activities: list[dict] = []
             self.failure_exception: str | None = None
-            super().__init__(run_id, base_url)
+            # The recording callback never sends; the token only satisfies the
+            # constructor, which refuses a token equal to the run id.
+            super().__init__(
+                run_id, base_url, auth_token=CallbackToken("qa-local-only-token")
+            )
 
         def _send_status_payload(self, payload, **_kwargs):
             self.timestamps.append(time.monotonic())
@@ -396,6 +421,7 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
     )
     from iris.domain.search.global_search_dto import AccessContext
     from iris.domain.search.search_intent_dto import SearchIntent
+    from iris.domain.variant.abstract_variant import find_variant
     from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
     from iris.pipeline.chat.chat_pipeline import ChatPipeline
     from iris.pipeline.global_search_pipeline import GlobalSearchPipeline
@@ -420,9 +446,19 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
                 f"benchmark-{scenario.id}", "https://callback.invalid"
             )
             dto = ChatPipelineExecutionDTO.model_validate(payload)
-            pipeline = ChatPipeline(dto.chat_mode)
-            variant_id = "default" if model == "gpt-5.4-mini" else "advanced"
-            pipeline(dto, _variant(model, variant_id), callback, event=scenario.event)
+            is_local = bool(dto.settings and dto.settings.is_local())
+            pipeline = ChatPipeline(dto.chat_mode, local=is_local)
+            if model:
+                variant_id = "default" if model == "gpt-5.4-mini" else "advanced"
+                variant = _variant(model, variant_id)
+            else:
+                # No candidate model: route exactly like production, where the
+                # settings' local/cloud choice and variant decide every role.
+                variant = find_variant(
+                    ChatPipeline.get_variants(),
+                    (dto.settings.variant if dto.settings else None) or "default",
+                )
+            pipeline(dto, variant, callback, event=scenario.event)
             timing = _timing(callback, started)
             response, activities, terminal, artifacts = _extract_callback(
                 callback, "chat"
@@ -481,12 +517,13 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
 
     budget.raise_if_failed()
     diagnostics.update(artifacts)
-    if response and any(marker in response for marker in _ITERATION_LIMIT_MARKERS):
-        raise RuntimeError("Production agent reached its iteration limit")
     return {
         "response": response,
         "activities": activities,
         "diagnostics": diagnostics,
+        # Kept apart from the diagnostics, which the judge reads: model ids in the
+        # call list would tell the judge which candidate wrote the answer.
+        "telemetry": {"modelCalls": budget.calls, "agentRuns": budget.agent_runs},
         "usage": [_token_usage(token) for token in raw_tokens],
         "timing": timing,
         "incidents": {
@@ -544,10 +581,12 @@ def _production_context(scenario) -> dict[str, Any]:
     payload = dict(scenario.payload)
     metadata = payload.pop("qa", {}) or {}
     dto = ChatPipelineExecutionDTO.model_validate(payload)
-    pipeline = ChatPipeline(dto.chat_mode)
+    is_local = bool(dto.settings and dto.settings.is_local())
+    pipeline = ChatPipeline(dto.chat_mode, local=is_local)
 
     state = AgentPipelineExecutionState()
     state.dto = dto
+    state.local = is_local
     state.db = SimpleNamespace(client=None)
     state.message_history = list(dto.chat_history or [])
     state.lecture_content_storage = {}
@@ -703,18 +742,18 @@ def _without_ambiguous_retries():
     """
     from openai import RateLimitError
 
-    from iris.llm.external import openai_chat
+    from iris.llm.retry import RetryState
 
-    original_retry = openai_chat._retry_after_openai_error
+    original_wait = RetryState.wait
 
-    def retry(attempt, initial_delay, backoff_factor):
-        if not isinstance(sys.exc_info()[1], RateLimitError):
+    def wait(retry_state, error, attempt):
+        if not isinstance(error, RateLimitError):
             raise RuntimeError(
                 "A judge attempt failed after dispatch; its usage is ambiguous"
             )
-        original_retry(attempt, initial_delay, backoff_factor)
+        original_wait(retry_state, error, attempt)
 
-    with patch.object(openai_chat, "_retry_after_openai_error", retry):
+    with patch.object(RetryState, "wait", wait):
         yield
 
 

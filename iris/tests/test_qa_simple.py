@@ -5,6 +5,7 @@ import json
 import subprocess
 import threading
 from collections import Counter
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -79,25 +80,30 @@ def test_request_budget_caps_each_call_and_agent_iterations(monkeypatch):
             )
         )
 
-    executor_arguments = {}
-
-    def fake_executor(*_args, **kwargs):
-        executor_arguments.update(kwargs)
-        return object()
+    class FinalAnswerModel:
+        def chat(self, conversation, tools, tool_choice=None):
+            del conversation, tools, tool_choice
+            return PyrisMessage(
+                sender=IrisMessageRole.ASSISTANT,
+                contents=[TextMessageContentDTO(textContent="done")],
+                sentAt=datetime.now(),
+            )
 
     monkeypatch.setattr(LlmRequestHandler, "chat", fake_chat)
-    from iris.pipeline import (  # pylint: disable=import-outside-toplevel
-        abstract_agent_pipeline,
-    )
+    # pylint: disable=import-outside-toplevel
+    from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+    from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+    from iris.llm.agent.loop import AgentLoop
 
-    monkeypatch.setattr(abstract_agent_pipeline, "AgentExecutor", fake_executor)
+    # pylint: enable=import-outside-toplevel
+    loop = AgentLoop(model=FinalAnswerModel(), tools=[], max_steps=15)
     ceiling = TokenCeiling(
         max_agent_turns=2,
         max_input_tokens=10_000,
         max_output_tokens=150,
         max_output_tokens_per_call=100,
     )
-    with _ScenarioRequestBudget(ceiling):
+    with _ScenarioRequestBudget(ceiling) as budget:
         first = CompletionArguments()
         LlmRequestHandler.chat(object(), [{"text": "first"}], first, None)
         assert first.max_tokens == 100
@@ -110,9 +116,17 @@ def test_request_budget_caps_each_call_and_agent_iterations(monkeypatch):
             LlmRequestHandler.chat(
                 object(), [{"text": "third"}], CompletionArguments(), None
             )
-        abstract_agent_pipeline.AgentExecutor(agent=object(), tools=[])
+        result = loop.run([])
+        telemetry = (list(budget.calls), list(budget.agent_runs))
 
-    assert executor_arguments["max_iterations"] == 2
+    assert loop.max_steps == 2
+    assert result.output == "done"
+    calls, agent_runs = telemetry
+    # The third call was refused before dispatch, so it never reached the model.
+    assert [call["outputTokens"] for call in calls] == [80, 70]
+    assert agent_runs == [
+        {"steps": 1, "toolCalls": 0, "hitStepLimit": False, "maxSteps": 2}
+    ]
 
 
 def test_request_budget_reserves_concurrent_output_capacity(monkeypatch):

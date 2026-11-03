@@ -23,8 +23,7 @@ from pydantic import ValidationError
 # Establish the production package import order before importing DTOs.
 importlib.import_module("iris.pipeline.pipeline")
 
-from iris.llm import CompletionArguments  # noqa: E402
-from iris.llm.external import openai_chat  # noqa: E402
+from iris.llm import CompletionArguments, retry  # noqa: E402
 from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
 from iris.llm.request_handler.llm_request_handler import (  # noqa: E402
     LlmRequestHandler,
@@ -62,7 +61,6 @@ from iris.qa.rubric import (  # noqa: E402
 from iris.qa.run import COLLECTION_FILE, run_paid_suite  # noqa: E402
 from iris.qa.schema import Criterion, Scenario, shared_criteria  # noqa: E402
 from iris.qa.worker import (  # noqa: E402
-    _ITERATION_LIMIT_MARKERS,
     JUDGE_SYSTEM_PROMPT,
     _extract_callback,
     _judge,
@@ -673,12 +671,29 @@ def test_tokens_of_every_send_are_collected_not_only_those_of_the_terminal_send(
     assert [token["model"] for token in terminal["tokens"]] == ["agent", "title"]
 
 
-def test_the_agent_executors_own_stop_texts_count_as_iteration_limit():
-    for text in (
-        "Agent stopped due to max iterations.",
-        "Agent stopped due to iteration limit or time limit.",
-    ):
-        assert any(marker in text for marker in _ITERATION_LIMIT_MARKERS)
+def test_model_calls_are_telemetry_and_never_reach_the_judge(monkeypatch):
+    def answered(handler, messages, arguments, tools):
+        del handler, messages, arguments, tools
+        return SimpleNamespace(
+            token_usage=SimpleNamespace(num_input_tokens=5, num_output_tokens=2),
+            tool_calls=[],
+        )
+
+    monkeypatch.setattr(LlmRequestHandler, "chat", answered)
+    budget = _ScenarioRequestBudget(_budget_scenario().token_ceiling)
+    with budget:
+        LlmRequestHandler.chat(
+            SimpleNamespace(model_id="qa-secret-candidate"),
+            [{"text": "hi"}],
+            CompletionArguments(),
+            None,
+        )
+
+    assert budget.calls[0]["model"] == "qa-secret-candidate"
+    request = build_judge_request(
+        _real_chat(1)[0], "An answer", [], {"suggestions": []}
+    )
+    assert "qa-secret-candidate" not in json.dumps(request, default=str)
 
 
 def test_timing_separates_first_text_answer_and_end_of_the_pipeline():
@@ -910,7 +925,7 @@ def _openai_handler(monkeypatch, side_effect, model_id="qa-gpt-6-luna-high"):
     client = MagicMock()
     client.chat.completions.create.side_effect = side_effect
     monkeypatch.setattr(DirectOpenAIChatModel, "get_client", lambda self: client)
-    monkeypatch.setattr(openai_chat.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(retry.time, "sleep", lambda _seconds: None)
     return SimpleNamespace(
         model_id=model_id, model=model, _select_model=lambda _kind: model
     )

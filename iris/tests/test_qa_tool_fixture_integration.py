@@ -128,14 +128,15 @@ def test_retrieval_fixtures_execute_production_tool_wrappers():
     faq_dto, faq_metadata = _chat("course-deadline-conflict-moderate")
     with ScenarioAdapters(faq_metadata):
         faq_state = _state(faq_dto, faq_metadata)
-        faq_output = providers.provide_faq_retrieval(faq_state)()
+        faq_output = providers.provide_faq_retrieval(faq_state)("deadline")
     assert "official deadline is Friday" in faq_output
-    assert faq_state.faq_storage["faqs"]
 
     lecture_dto, lecture_metadata = _chat("lecture-retrieval-high")
     with ScenarioAdapters(lecture_metadata):
         lecture_state = _state(lecture_dto, lecture_metadata)
-        lecture_output = providers.provide_lecture_retrieval(lecture_state)()
+        lecture_output = providers.provide_lecture_retrieval(lecture_state)(
+            "Master Theorem"
+        )
     assert "Master Theorem" in lecture_output
     assert lecture_state.lecture_content_storage["content"]
 
@@ -144,6 +145,8 @@ def test_mcq_and_tutor_artifact_fixtures_execute_production_tool_wrappers():
     dto, metadata = _chat("course-one-mcq-moderate")
 
     class FakeMcqPipeline:
+        tokens: list = []
+
         def __call__(self, **kwargs):
             assert kwargs["language"] == "English"
             return json.dumps(
