@@ -13,6 +13,7 @@ services:
       - ATHENA_DOMAIN=${ATHENA_DOMAIN:-localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
+      - ${ATHENA_TLS_DIR:?Set ATHENA_TLS_DIR to the host certificate directory}:/etc/caddy/tls:ro
 
   assessment_module_manager:
     hostname: assessment-module-manager
