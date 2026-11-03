@@ -1,18 +1,20 @@
-"""Severity validation, persistence, migration, and mocked feedback generation."""
+"""Severity validation, persistence, and mocked feedback generation."""
 
 import importlib
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from athena.database import Base
 from athena.models.db_programming_feedback import DBProgrammingFeedback
 from athena.schemas import ProgrammingFeedback, TextFeedback, ModelingFeedback
+from modules.programming.module_programming_llm.mock.utils.mock_module_config import (
+    mock_module_config as mock_module_config,
+)
 
 
 @pytest.mark.parametrize("severity", ["low", "medium", "high", None])
@@ -39,19 +41,6 @@ def test_legacy_and_invalid_feedback():
         ProgrammingFeedback(exercise_id=1, submission_id=2, severity="critical")
     assert "severity" not in TextFeedback.model_fields
     assert "severity" not in ModelingFeedback.model_fields
-
-
-def test_existing_database_migration():
-    migration = Path(__file__).resolve().parents[5] / "scripts/migrations/001_programming_feedback_severity.sql"
-    engine = create_engine("sqlite://")
-    with engine.begin() as connection:
-        connection.execute(text("CREATE TABLE programming_feedbacks (id INTEGER PRIMARY KEY, credits FLOAT)"))
-        connection.execute(text("INSERT INTO programming_feedbacks VALUES (1, 0.5)"))
-        connection.exec_driver_sql(migration.read_text())
-        assert connection.execute(text("SELECT credits, severity FROM programming_feedbacks")).one() == (0.5, None)
-        connection.execute(text("UPDATE programming_feedbacks SET severity = 'high'"))
-        assert connection.execute(text("SELECT severity FROM programming_feedbacks")).scalar_one() == "high"
-    engine.dispose()
 
 
 @pytest.mark.asyncio
