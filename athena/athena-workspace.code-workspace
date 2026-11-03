@@ -10,9 +10,6 @@
 			"path": "athena"
 		},
 		{
-			"path": "log_viewer"
-		},
-		{
 			"path": "modules/programming/module_example"
 		},
 		{

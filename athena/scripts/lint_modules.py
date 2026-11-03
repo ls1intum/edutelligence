@@ -5,7 +5,6 @@ import sys
 
 def main():
     modules = [
-        "log_viewer",
         "assessment_module_manager",
         "athena",  # the version in this commit only, can differ for modules
         "modules/programming/module_example",
