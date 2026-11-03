@@ -1,4 +1,19 @@
-# Retired modules
+# Athena modules
+
+## Current modules
+
+| Type | Module | Purpose |
+| --- | --- | --- |
+| Programming | [`module_example`](programming/module_example/) | Example implementation used for development and tests. |
+| Programming | [`module_programming_apted`](programming/module_programming_apted/) | Suggests feedback by comparing syntax trees with APTED. |
+| Programming | [`module_programming_llm`](programming/module_programming_llm/) | Generates feedback for programming exercises with an LLM. |
+| Programming | [`module_programming_quality_llm`](programming/module_programming_quality_llm/) | Generates code quality feedback with an LLM. |
+| Programming | [`module_programming_themisml`](programming/module_programming_themisml/) | Suggests feedback using code similarity and filtering. |
+| Text | [`module_text_cofee`](text/module_text_cofee/) | Suggests feedback for text submissions using CoFee. |
+| Text | [`module_text_llm`](text/module_text_llm/) | Generates feedback for text exercises with an LLM. |
+| Modeling | [`module_modeling_llm`](modeling/module_modeling_llm/) | Generates feedback for modeling exercises with an LLM. |
+
+## Retired modules
 
 Modules removed from Athena are listed here so their last source versions remain easy to find in Git history.
 
