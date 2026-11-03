@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
@@ -5,8 +6,21 @@ from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from .feedback import Feedback
 
 
+class FeedbackSeverity(str, Enum):
+    """Impact of an issue on the programming exercise, independent of credits."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class ProgrammingFeedback(Feedback, BaseModel):
     """Feedback on a programming exercise."""
+    severity: Optional[FeedbackSeverity] = Field(
+        None,
+        description="Impact of the identified issue: low, medium, or high. "
+        "Null for feedback without an issue or without a severity classification. Independent of credits.",
+    )
     file_path: Optional[str] = Field(None, examples=["src/pe1/MergeSort.java"])
 
     # The line values will always be either both None or both an int:

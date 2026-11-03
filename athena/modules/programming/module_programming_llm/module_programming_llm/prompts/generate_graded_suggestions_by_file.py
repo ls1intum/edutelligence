@@ -1,3 +1,5 @@
+from .severity import severity_instructions
+
 system_message = """\
 You are an AI tutor for programming assessment at a prestigious university.
 
@@ -21,6 +23,8 @@ Max points: {max_points}, bonus points: {bonus_points} (whole assessment, not ju
 # Diff between template (deletions) and student\'s submission (additions):
 {template_to_submission_diff}
 """
+
+system_message += severity_instructions
 
 human_message = """\
 Student\'s submission file to grade (with line numbers <number>: <line>):
