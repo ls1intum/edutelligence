@@ -252,6 +252,10 @@ errors. A low score is benchmark data, not a command failure.
   revisions named in each report. The latter is documented in
   `baseline/2026-08-02-hard-v5-gpt56.md`; a fresh current-main run is required
   before treating either report as today's baseline.
+- `studies/local-vs-cloud-2026/` — a separate study of local open models
+  against Luna, Sol and Terra on 39 own situations. **Read its
+  `DISCLAIMER.md` before using its numbers: the stored point scores were not
+  judged blind.**
 
 Raw candidate answers stay under the local run directory. Published Markdown
 and JSON reports omit raw answers and credentials.
