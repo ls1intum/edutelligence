@@ -14,7 +14,6 @@ def main():
         "modules/text/module_text_cofee",
         "modules/programming/module_programming_themisml",
         "modules/modeling/module_modeling_llm",
-        # "module_programming_apted" skip due to an error
     ]
 
     success = True
