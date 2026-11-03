@@ -1,1 +1,1 @@
-{"athena-test1":{"label":"athena-test1.aet.cit.tum.de","status":"athena/chore/remove-log-viewer","color":"green"},"athena-test2":{"label":"athena-test2.aet.cit.tum.de","status":"athena/chore/change-caddy-to-local-certs","color":"green"}}
+{"athena-test1":{"label":"athena-test1.aet.cit.tum.de","status":"athena/chore/remove-log-viewer","color":"green"},"athena-test2":{"label":"athena-test2.aet.cit.tum.de","status":"athena/chore/change-caddy-to-local-certs","color":"red"}}
