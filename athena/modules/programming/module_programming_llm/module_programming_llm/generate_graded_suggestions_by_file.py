@@ -41,7 +41,7 @@ class FeedbackModel(BaseModel):
         None, description="Referenced line number end, or empty if unreferenced"
     )
     severity: Optional[FeedbackSeverity] = Field(
-        ..., description="Impact of the identified issue, independent of credits; null when no issue is identified."
+        None, description="Impact of the identified issue, independent of credits; null when no issue is identified."
     )
     credits: float = Field(0.0, description="Number of points received/deducted")
     grading_instruction_id: Optional[int] = Field(
