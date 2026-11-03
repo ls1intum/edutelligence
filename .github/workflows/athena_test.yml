@@ -110,6 +110,7 @@ jobs:
             athena/test-results/*_html/
             athena/test-results/combined_html/
   report:
+    name: Test results and code coverage
     runs-on: ubuntu-latest
     if: always()
     needs: [test]
@@ -140,10 +141,10 @@ jobs:
         if: always()
         run: |
           {
-            echo '### 📊 Detailed Coverage Table'
+            echo '### Coverage by package'
             echo
-            if [ -f coverage-reports/coverage_table.txt ]; then
-              cat coverage-reports/coverage_table.txt
+            if [ -f coverage-reports/coverage_table.txt ] && grep -q '^| Package | Line Rate | Branch Rate | Status |$' coverage-reports/coverage_table.txt; then
+              sed -n '/^| Package | Line Rate | Branch Rate | Status |$/,$p' coverage-reports/coverage_table.txt
             else
               echo 'Coverage report unavailable; see the test job logs.'
             fi
