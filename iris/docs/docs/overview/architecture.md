@@ -72,7 +72,7 @@ Iris uses RAG to ground responses in actual course content rather than relying s
 
 ### Retrieval (At Query Time)
 
-1. **Rewrite** the student's query to improve retrieval quality.
+1. **Search** with a query the agent writes from the conversation.
 2. **Retrieve** the most relevant chunks from Weaviate using vector similarity search.
 3. **Rerank** the retrieved chunks to surface the best matches.
 4. **Generate** a response that incorporates the retrieved content with transparent citations.

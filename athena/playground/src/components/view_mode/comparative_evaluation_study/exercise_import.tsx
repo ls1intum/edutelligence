@@ -74,12 +74,12 @@ export default function ExerciseImport(exerciseImportProps: ExerciseImportProps)
       {/* List of Imported Exercises */}
       <ul className="space-y-2">
         {exercises.length === 0 ? (
-          <li className="border p-2 rounded-md shadow-sm bg-gray-50 text-center">
+          <li className="border p-2 rounded-md shadow-xs bg-gray-50 text-center">
             No exercises added! Please add exercises with submissions and categorized feedback.
           </li>
         ) : (
           exercises.map((exercise) => (
-            <li key={exercise.id} className="flex justify-between items-center border p-2 rounded-md shadow-sm">
+            <li key={exercise.id} className="flex justify-between items-center border p-2 rounded-md shadow-xs">
               <span>{exercise.title}</span>
 
               <div className="flex space-x-2">

@@ -1,12 +1,7 @@
+import os
 from typing import List
 
-from langchain_core.messages import AIMessage
-from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.prompts import (
-    ChatPromptTemplate,
-)
-from langchain_core.runnables import Runnable
-from pydantic.v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
@@ -14,36 +9,35 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.tracing import observe
 
-from ...common.message_converters import (
-    convert_iris_message_to_langchain_message,
-)
-from ...common.pyris_message import PyrisMessage
+from ...common.message_converters import normalize_history_message
+from ...common.pyris_message import IrisMessageRole, PyrisMessage
+from ...domain.data.text_message_content_dto import TextMessageContentDTO
 from ...llm import (
     CompletionArguments,
     LlmRequestHandler,
 )
-from ...llm.langchain import IrisLangchainChatModel
+from ...llm.iris_chat_model import IrisChatModel
 from ...llm.llm_configuration import resolve_model
-from ..prompts.iris_interaction_suggestion_prompts import (
-    course_chat_begin_prompt,
-    course_chat_history_exists_prompt,
-    default_chat_begin_prompt,
-    default_chat_history_exists_prompt,
-    exercise_chat_begin_prompt,
-    exercise_chat_history_exists_prompt,
-    iris_course_suggestion_initial_system_prompt,
-    iris_default_suggestion_initial_system_prompt,
-    iris_exercise_suggestion_initial_system_prompt,
-)
 from ..sub_pipeline import SubPipeline
 
 logger = get_logger(__name__)
 
+_HISTORY_MESSAGES = 4
+
 
 class Questions(BaseModel):
+    """Follow-up questions the student may click."""
+
     questions: List[str] = Field(description="questions that students may ask")
+
+
+def _text(sender: IrisMessageRole, text: str) -> PyrisMessage:
+    return PyrisMessage(
+        sender=sender, contents=[TextMessageContentDTO(textContent=text)]
+    )
 
 
 class InteractionSuggestionPipeline(SubPipeline):
@@ -51,9 +45,7 @@ class InteractionSuggestionPipeline(SubPipeline):
     Interaction suggestion pipeline that suggests next chat interactions, either for exercises or courses.
     """
 
-    llm: IrisLangchainChatModel
-    pipeline: Runnable
-    prompt: ChatPromptTemplate
+    llm: IrisChatModel
     variant: str
     tokens: TokenUsageDTO | None
     local: bool
@@ -67,24 +59,16 @@ class InteractionSuggestionPipeline(SubPipeline):
 
         pipeline_id = "interaction_suggestion_pipeline"
         model = resolve_model(pipeline_id, variant, "chat", local=local)
-
-        request_handler = LlmRequestHandler(model_id=model)
-
-        if local:
-            completion_args = CompletionArguments(
-                temperature=0.3, response_format="JSON"
-            )
-        else:
-            completion_args = CompletionArguments(
-                temperature=0.6, response_format="JSON"
-            )
-
-        self.llm = IrisLangchainChatModel(
-            request_handler=request_handler, completion_args=completion_args
+        self.llm = IrisChatModel(
+            LlmRequestHandler(model_id=model),
+            CompletionArguments(temperature=0.3 if local else 0.6),
         )
-
-        # Create the pipeline
-        self.pipeline = self.llm | JsonOutputParser(pydantic_object=Questions)
+        template_dir = os.path.join(
+            os.path.dirname(__file__), "..", "prompts", "templates"
+        )
+        self.prompt_template = prompt_environment(template_dir).get_template(
+            "interaction_suggestion_prompt.j2"
+        )
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm}, local={self.local})"
@@ -106,77 +90,45 @@ class InteractionSuggestionPipeline(SubPipeline):
             :param kwargs: The keyword arguments
 
         """
-        iris_suggestion_initial_system_prompt = (
-            iris_default_suggestion_initial_system_prompt
-        )
-        chat_history_exists_prompt = default_chat_history_exists_prompt
-        chat_begin_prompt = default_chat_begin_prompt
-
-        if self.variant == "course":
-            iris_suggestion_initial_system_prompt = (
-                iris_course_suggestion_initial_system_prompt
-            )
-            chat_history_exists_prompt = course_chat_history_exists_prompt
-            chat_begin_prompt = course_chat_begin_prompt
-        elif self.variant == "exercise":
-            iris_suggestion_initial_system_prompt = (
-                iris_exercise_suggestion_initial_system_prompt
-            )
-            chat_history_exists_prompt = exercise_chat_history_exists_prompt
-            chat_begin_prompt = exercise_chat_begin_prompt
-
-        # Add language instruction
-        language_instruction = f"\nGenerate questions in {language}."
-        if language == "German":
-            language_instruction += " Use the 'du' form."
-
         try:
             logger.info(
                 "Running interaction suggestion pipeline (local=%s)...",
                 self.local,
             )
+            if not dto.last_message:
+                raise ValueError("No last message provided")
 
             history: List[PyrisMessage] = dto.chat_history or []
-
-            # Add the conversation to the prompt
-            chat_history_messages = [
-                convert_iris_message_to_langchain_message(message)
-                for message in history[-4:]
+            messages = [
+                _text(
+                    IrisMessageRole.SYSTEM,
+                    self.prompt_template.render(
+                        variant=self.variant,
+                        language=language,
+                        problem_statement=dto.problem_statement
+                        or "No problem statement provided.",
+                    ),
+                )
             ]
-
-            if dto.last_message:
-                last_message = AIMessage(
-                    content=dto.last_message.replace("{", "{{").replace("}", "}}"),
+            messages.extend(
+                normalize_history_message(message)
+                for message in history[-_HISTORY_MESSAGES:]
+            )
+            messages.append(_text(IrisMessageRole.ASSISTANT, dto.last_message))
+            messages.append(
+                _text(
+                    IrisMessageRole.USER,
+                    "Suggest the two follow-up questions for the conversation above.",
                 )
-                chat_history_messages.append(last_message)
-                self.prompt = ChatPromptTemplate.from_messages(
-                    [
-                        (
-                            "system",
-                            iris_suggestion_initial_system_prompt
-                            + "\n"
-                            + chat_history_exists_prompt
-                            + language_instruction,
-                        ),
-                        *chat_history_messages,
-                        ("human", chat_begin_prompt),
-                    ]
-                )
+            )
 
-                prob_st_val = dto.problem_statement or "No problem statement provided."
-                prompt_val = self.prompt.format_messages(problem_statement=prob_st_val)
-                self.prompt = ChatPromptTemplate.from_messages(prompt_val)
-
-                response: dict = (self.prompt | self.pipeline).invoke({})
-
-                # Track tokens if available
-                if hasattr(self.llm, "tokens") and self.llm.tokens:
-                    self.tokens = self.llm.tokens
-                    self.tokens.pipeline = PipelineEnum.IRIS_INTERACTION_SUGGESTION
-
-                return response["questions"]
-            else:
-                raise ValueError("No last message provided")
+            response = self.llm.structured(messages, Questions)
+            self.tokens = self.llm.tokens
+            if self.tokens is not None:
+                self.tokens.pipeline = PipelineEnum.IRIS_INTERACTION_SUGGESTION
+            return [
+                question.strip() for question in response.questions if question.strip()
+            ][:2]
 
         except Exception as e:
             logger.error(
@@ -184,4 +136,7 @@ class InteractionSuggestionPipeline(SubPipeline):
                 self.local,
                 exc_info=e,
             )
+            if self.llm.tokens is not None:
+                self.tokens = self.llm.tokens
+                self.tokens.pipeline = PipelineEnum.IRIS_INTERACTION_SUGGESTION
             return []

@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import requests
 
+from iris.common.callback_token import CallbackToken
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
@@ -27,6 +28,7 @@ def _callback() -> StatusCallback:
         url="https://artemis.example/status",
         run_id="run-1",
         status=ChatStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+        auth_token=CallbackToken("token-for-run-1"),
     )
 
 
@@ -37,6 +39,7 @@ def _ingestion_callback() -> StatusCallback:
         url="https://artemis.example/status",
         run_id="run-1",
         status=IngestionStatusUpdateDTO(run_state=RunStateEnum.RUNNING, id=7),
+        auth_token=CallbackToken("token-for-run-1"),
     )
 
 
@@ -47,6 +50,7 @@ def _global_search_callback() -> StatusCallback:
         url="https://artemis.example/status",
         run_id="run-1",
         status=GlobalSearchStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+        auth_token=CallbackToken("token-for-run-1"),
     )
 
 
@@ -58,7 +62,7 @@ def test_update_posts_running_and_fields():
     payload = post.call_args.kwargs["json"]
     assert payload["runState"] == "RUNNING"
     assert payload["result"] == "answer"
-    assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer run-1"
+    assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer token-for-run-1"
 
 
 def test_finish_is_terminal_and_last():

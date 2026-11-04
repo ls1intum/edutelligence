@@ -20,7 +20,8 @@ from iris.domain.search.global_search_dto import (
     LectureSearchResultDTO,
 )
 from iris.domain.search.search_intent_dto import SearchIntent
-from iris.llm import CompletionArguments, LlmRequestHandler
+from iris.llm import EMERGENCY_MAX_TOKENS, CompletionArguments, LlmRequestHandler
+from iris.llm.errors import IncompleteModelResponse
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.prompts.global_search_prompts import (
@@ -155,6 +156,24 @@ _SINGLE_MARKER_RE = re.compile(r"\[(\d+)\]")
 # Literal the model outputs INSTEAD of an answer when the sources cannot answer
 # the question (plain-text contract; measured 8/8 discipline on nano).
 _NO_ANSWER_SENTINEL = "!none!"
+
+
+def _sources_without_answer(
+    grounded_sources: list["LectureSearchResultDTO | EntitySourceDTO"],
+) -> GlobalSearchResponseDTO:
+    """The result when the answer call stopped at its budget.
+
+    The sources are what retrieval found, in retrieval order. Without an answer
+    there are no citation markers, and the navigation fallback is skipped: it
+    would run into the same budget.
+    """
+    logger.info("[global-search] outcome=answer_cut sources=%d", len(grounded_sources))
+    return GlobalSearchResponseDTO(
+        answer=None,
+        sources=[s for s in grounded_sources if isinstance(s, LectureSearchResultDTO)],
+        entity_sources=[s for s in grounded_sources if isinstance(s, EntitySourceDTO)],
+        citation_source_types=[],
+    )
 
 
 def _is_deliberate_refusal(raw: str) -> bool:
@@ -521,7 +540,7 @@ class GlobalSearchPipeline(SubPipeline):
         # Plain-text output (markers carry the attribution, !none! carries the
         # no-answer state) — a JSON envelope would make streamed partials
         # unrenderable fragments.
-        answer_completion_args = CompletionArguments(max_tokens=600)
+        answer_completion_args = CompletionArguments(max_tokens=EMERGENCY_MAX_TOKENS)
         self.answer_llm = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=answer_model),
             completion_args=answer_completion_args,
@@ -683,6 +702,8 @@ class GlobalSearchPipeline(SubPipeline):
         self._append_tokens(
             self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
         )
+        if getattr(self, "_answer_cut", False):
+            return _sources_without_answer(grounded_sources)
         answer, used_indices = parse_answer_response(raw, len(grounded_sources))
         used_sources = [s for i, s in enumerate(grounded_sources) if i in used_indices]
 
@@ -716,6 +737,8 @@ class GlobalSearchPipeline(SubPipeline):
                 self._append_tokens(
                     self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
                 )
+                if getattr(self, "_answer_cut", False):
+                    return _sources_without_answer(grounded_sources)
                 answer, used_indices = parse_answer_response(raw, len(entity_grounded))
                 used_sources = [
                     s for i, s in enumerate(entity_grounded) if i in used_indices
@@ -927,14 +950,21 @@ class GlobalSearchPipeline(SubPipeline):
         variables: dict[str, str] = {"context": context, "query": query}
         if not navigate:
             variables["today_line"] = _today_line(access_context)
-        if stream_handler is not None:
-            self.answer_llm.completion_args.stream_handler = _SentinelGateStreamHandler(
-                stream_handler
-            )
+        self._answer_cut = False
         try:
-            raw = (prompt | self.answer_pipeline).invoke(variables)
-        finally:
-            self.answer_llm.completion_args.stream_handler = None
+            raw = self._invoke_answer(prompt, variables, stream_handler)
+        except IncompleteModelResponse as error:
+            # The caller bills the call: the wrapper now holds its usage.
+            raw = ""
+            if stream_handler is not None:
+                # Drop any partial text of the cut call from the client.
+                stream_handler(None)
+            self._answer_cut = True
+            self._warn_cut_answer(str(error))
+        else:
+            if self._cut_without_answer(raw):
+                self._answer_cut = True
+                self._warn_cut_answer("empty text at the output limit")
         # raw_len=0 + output_tokens>0 is the fingerprint of a reasoning model
         # exhausting max_tokens on reasoning and returning an empty message
         # (finish_reason=length) — the call returns WITHOUT an exception.
@@ -950,3 +980,37 @@ class GlobalSearchPipeline(SubPipeline):
             getattr(answer_usage, "num_output_tokens", None),
         )
         return raw
+
+    def _invoke_answer(
+        self,
+        prompt: ChatPromptTemplate,
+        variables: dict[str, str],
+        stream_handler=None,
+    ) -> str:
+        """One answer call, streamed through the sentinel gate if requested."""
+        args = self.answer_llm.completion_args
+        if stream_handler is not None:
+            args.stream_handler = _SentinelGateStreamHandler(stream_handler)
+        try:
+            return (prompt | self.answer_pipeline).invoke(variables)
+        finally:
+            args.stream_handler = None
+
+    def _warn_cut_answer(self, reason: str) -> None:
+        logger.warning(
+            "[global-search] answer of model %s stopped at the emergency output "
+            "limit (%s); no answer, sources only.",
+            self.answer_llm.model_name,
+            reason,
+        )
+
+    def _cut_without_answer(self, raw: str) -> bool:
+        """Whether the last call used its whole budget and wrote no text.
+
+        Chat Completions report this as finish_reason=length with empty
+        content and no error; the Responses API raises IncompleteModelResponse.
+        """
+        if raw.strip():
+            return False
+        output_tokens = getattr(self.answer_llm.tokens, "num_output_tokens", 0) or 0
+        return output_tokens >= EMERGENCY_MAX_TOKENS

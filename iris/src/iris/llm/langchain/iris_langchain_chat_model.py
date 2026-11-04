@@ -22,6 +22,7 @@ from ...common.message_converters import (
     convert_langchain_message_to_iris_message,
 )
 from ...llm import CompletionArguments, RequestHandler
+from ...llm.errors import IncompleteModelResponse
 
 
 class IrisLangchainChatModel(BaseChatModel):
@@ -90,9 +91,16 @@ class IrisLangchainChatModel(BaseChatModel):
     ) -> ChatResult:
         iris_messages = [convert_langchain_message_to_iris_message(m) for m in messages]
         self.completion_args.stop = stop
-        iris_message = self.request_handler.chat(
-            iris_messages, self.completion_args, self.tools
-        )
+        try:
+            iris_message = self.request_handler.chat(
+                iris_messages, self.completion_args, self.tools
+            )
+        except IncompleteModelResponse as error:
+            # The call was made and is billed: tokens must describe it, not
+            # the previous call, for a caller that catches the error.
+            usage = error.token_usage or TokenUsageDTO()
+            self.tokens = usage.model_copy(update={"pipeline": PipelineEnum.NOT_SET})
+            raise
         base_message = convert_iris_message_to_langchain_message(iris_message)
         # Capture logprobs only for generations that carry text content, so a
         # final answer overwrites earlier tool-call turns (which have none).

@@ -5,9 +5,18 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris import watchdog as watchdog_module  # noqa: E402
-from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
+from iris.llm.external.openai_chat import (  # noqa: E402
+    AzureOpenAIChatModel,
+    DirectOpenAIChatModel,
+)
+from iris.llm.external.openai_embeddings import (  # noqa: E402
+    AzureOpenAIEmbeddingModel,
+    DirectOpenAIEmbeddingModel,
+)
 from iris.watchdog import (  # noqa: E402
     EXIT_CODE,
     RESTART_MESSAGE,
@@ -48,21 +57,47 @@ def test_a_lock_released_in_between_is_not_stuck(tmp_path):
     assert watchdog.check() == set()
 
 
-def test_the_real_openai_pool_lock_is_found():
-    model = DirectOpenAIChatModel(
-        id="luna-medium",
-        type="openai_chat",
-        model="gpt-test",
-        api_key="sk-test",  # pragma: allowlist secret
-        base_url="http://127.0.0.1:9/v1",
-    )
+_AZURE = {
+    "endpoint": "http://127.0.0.1:9",
+    "azure_deployment": "deployment",
+    "api_version": "2024-10-21",
+}
+
+
+def _models():
+    common = {"model": "gpt-test", "api_key": "sk-test"}  # pragma: allowlist secret
+    return [
+        DirectOpenAIChatModel(
+            id="chat", type="openai_chat", base_url="http://127.0.0.1:9/v1", **common
+        ),
+        AzureOpenAIChatModel(id="azure-chat", type="azure_chat", **_AZURE, **common),
+        DirectOpenAIEmbeddingModel(
+            id="embedding",
+            type="openai_embedding",
+            base_url="http://127.0.0.1:9/v1",
+            **common,
+        ),
+        AzureOpenAIEmbeddingModel(
+            id="azure-embedding", type="azure_embedding", **_AZURE, **common
+        ),
+    ]
+
+
+def _openai_client(model):
+    client = model._client
+    # LangChain's embeddings wrapper keeps the OpenAI client behind its resource.
+    return client if hasattr(client, "_client") else client.client._client
+
+
+@pytest.mark.parametrize("model", _models(), ids=lambda model: model.id)
+def test_the_real_pool_lock_of_every_openai_client_is_found(model):
     with patch(
         "iris.llm.llm_manager.LlmManager", return_value=MagicMock(entries=[model])
     ):
         locks = watchdog_module.model_pool_locks()
 
-    pool = model.get_client()._client._transport._pool
-    assert locks == {"luna-medium": pool._optional_thread_lock._lock}
+    pool = _openai_client(model)._client._transport._pool
+    assert locks == {model.id: pool._optional_thread_lock._lock}
 
 
 def test_trip_fails_open_runs_alerts_quietly_and_exits(tmp_path):
