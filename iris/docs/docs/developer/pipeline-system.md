@@ -63,7 +63,7 @@ Side pipelines that need data pass a Pydantic model as `CompletionArguments.resp
 
 ## Externally triggered pipelines
 
-All listed routes are authenticated and return `202 Accepted` for asynchronous work. The route normally starts a worker and the worker sends status to the Artemis base URL carried in the request.
+All listed routes are authenticated and return `202 Accepted` for asynchronous work. The route normally starts a worker and the worker sends status to the Artemis base URL carried in the request. The ingestion worker row is not a route: the worker claims those jobs from Artemis in the background, so nothing calls Iris for them.
 
 | Route or trigger                                   | Top-level pipeline                                                                                                    | Execution                                        | Result path                                                                                                                                                                                                                                                                                                       |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
