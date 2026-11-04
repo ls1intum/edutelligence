@@ -2,11 +2,16 @@ from unittest.mock import call, patch
 
 import requests
 
+from iris.common.callback_token import CallbackToken
 from iris.web.status.status_update import StruggleInterventionCallback
 
 
 def test_callback_builds_struggle_url_and_status():
-    cb = StruggleInterventionCallback(run_id="job-9", base_url="http://localhost:8080")
+    cb = StruggleInterventionCallback(
+        run_id="job-9",
+        base_url="http://localhost:8080",
+        auth_token=CallbackToken("token-for-job-9"),
+    )
     assert cb.url == (
         "http://localhost:8080/api/iris/internal/pipelines/"
         "struggle-intervention/runs/job-9/status"
@@ -25,7 +30,11 @@ class _Response:
 
 def _delivered_callback() -> StruggleInterventionCallback:
     """A callback that has already sent its terminal frame, as post_agent_hook leaves it."""
-    cb = StruggleInterventionCallback(run_id="job-9", base_url="http://localhost:8080")
+    cb = StruggleInterventionCallback(
+        run_id="job-9",
+        base_url="http://localhost:8080",
+        auth_token=CallbackToken("token-for-job-9"),
+    )
     with patch("requests.post", return_value=_Response()):
         assert cb.finish() is True
     return cb
@@ -63,7 +72,11 @@ def test_a_second_trailing_finish_is_still_reported():
 
 def test_the_trailing_finish_after_a_failed_help_request_is_absorbed_too():
     """The help_request path fails the run instead of finishing it, and the base still finishes."""
-    cb = StruggleInterventionCallback(run_id="job-9", base_url="http://localhost:8080")
+    cb = StruggleInterventionCallback(
+        run_id="job-9",
+        base_url="http://localhost:8080",
+        auth_token=CallbackToken("token-for-job-9"),
+    )
     with patch("requests.post", return_value=_Response()):
         assert (
             cb.fail("help request produced silent, which this intent forbids") is True
@@ -100,7 +113,11 @@ class _FailingResponse:
 
 def test_a_terminal_frame_artemis_rejects_once_is_retried():
     """The decision reaches Artemis on this frame or not at all, so one 5xx must not drop it."""
-    cb = StruggleInterventionCallback(run_id="job-9", base_url="http://localhost:8080")
+    cb = StruggleInterventionCallback(
+        run_id="job-9",
+        base_url="http://localhost:8080",
+        auth_token=CallbackToken("token-for-job-9"),
+    )
     cb.status.action = "ambient"
     with (
         patch("requests.post", side_effect=[_FailingResponse(), _Response()]) as post,
@@ -119,7 +136,11 @@ def test_a_terminal_frame_gives_up_after_the_bounded_retries():
     against the very constant that produced it would pass for any bound, including one someone
     lowered to a single attempt.
     """
-    cb = StruggleInterventionCallback(run_id="job-9", base_url="http://localhost:8080")
+    cb = StruggleInterventionCallback(
+        run_id="job-9",
+        base_url="http://localhost:8080",
+        auth_token=CallbackToken("token-for-job-9"),
+    )
     with (
         patch("requests.post", return_value=_FailingResponse()) as post,
         patch("time.sleep") as sleep,
@@ -132,7 +153,11 @@ def test_a_terminal_frame_gives_up_after_the_bounded_retries():
 
 def test_a_running_update_is_not_retried():
     """Only the terminal frame is delivery-critical; a heartbeat that fails is just dropped."""
-    cb = StruggleInterventionCallback(run_id="job-9", base_url="http://localhost:8080")
+    cb = StruggleInterventionCallback(
+        run_id="job-9",
+        base_url="http://localhost:8080",
+        auth_token=CallbackToken("token-for-job-9"),
+    )
     with (
         patch("requests.post", return_value=_FailingResponse()) as post,
         patch("time.sleep") as sleep,

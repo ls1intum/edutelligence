@@ -11,7 +11,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.tracing import observe
 
-from ...common.message_converters import history_text
+from ...common.message_converters import normalize_history_message
 from ...common.pyris_message import PyrisMessage
 from ...domain.data.build_log_entry import BuildLogEntryDTO
 from ...domain.data.feedback_dto import FeedbackDTO
@@ -39,12 +39,21 @@ class FileSelectionDTO(BaseModel):
         )
 
 
+def _history_text(message: PyrisMessage) -> str:
+    """The text the model reads for a history message, or "" if it has none."""
+    try:
+        return normalize_history_message(message).contents[0].text_content or ""
+    except ValueError:
+        # No content, or only content the model cannot read (an image).
+        return ""
+
+
 def _chat_history_text(chat_history: List[PyrisMessage]) -> str:
     """One line per history message that has text, a quiz widget described as text."""
     return "\n".join(
         f"{message.sender}: {text}"
         for message in chat_history
-        if (text := history_text(message))
+        if (text := _history_text(message))
     )
 
 

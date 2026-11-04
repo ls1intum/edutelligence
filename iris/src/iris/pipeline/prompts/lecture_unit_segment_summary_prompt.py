@@ -25,6 +25,7 @@ def lecture_unit_segment_summary_prompt(
         2.2. Summarize the combined information in a clear and accurate manner.
         3. Do not add additional information.
         4. Only answer in complete sentences.
+        5. Keep the summary under 1,000 words.
         This is the content of the transcription:
         {safe_transcription}
         This is the content of the slide:

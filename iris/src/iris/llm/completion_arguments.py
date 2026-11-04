@@ -1,9 +1,18 @@
+import threading
 from enum import Enum
 from typing import Callable, Optional
 
 from openai.types.shared import ReasoningEffort
 
 CompletionArgumentsResponseFormat = Enum("TEXT", "JSON")
+
+# Emergency output limit for pipelines with a short, prompt-defined output
+# (titles, query rewrites, summaries, search answers). The prompt and schema
+# control the length; this only stops a runaway generation. It is far above any
+# normal answer, so a reasoning model does not run out of tokens while it
+# reasons, and it stays below 16,384, the smallest output cap of the OpenAI
+# models in llm_config.example.yml (gpt-4o-mini), which reject larger values.
+EMERGENCY_MAX_TOKENS = 16_000
 
 
 class CompletionArguments:
@@ -41,6 +50,8 @@ class CompletionArguments:
         top_logprobs: int = None,
         stream_handler: Optional[Callable[[Optional[str]], None]] = None,
         tool_choice: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
+        response_schema: Optional[type] = None,
     ):
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -53,3 +64,8 @@ class CompletionArguments:
         # Sent only with tools, and only by the OpenAI client. "none" keeps the
         # tool list (and so the cached prompt prefix) but forbids tool calls.
         self.tool_choice = tool_choice
+        # Set when the run is cancelled; retry waits wake up and stop early.
+        self.cancel_event = cancel_event
+        # A Pydantic model the answer must follow (see iris.llm.structured_output).
+        # Takes precedence over response_format.
+        self.response_schema = response_schema
