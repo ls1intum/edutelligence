@@ -5,7 +5,9 @@ For every source write:
   (examples: "Composition", "Load Factor", "equals/hashCode", "Exam Registration").
 - "summary": 1-2 sentences with what the source is about, for example "Defines the merge step and its running time".
   Name the topics it covers, but do not state results the student may still be working out (solutions, computed
-  values, conclusions of a derivation); organizational facts such as dates may be stated. Content only; do not
+  values, conclusions of a derivation); organizational facts such as dates may be stated. Describe only what the
+  source itself contains: add no claims, explanations, causes or verdicts that it does not state, even when its
+  data would allow them, and describe an example without an outcome as that example. Content only; do not
   mention the source, slide or lecturer.
 
 Language: write keywords and summaries in {language}. Keep established technical terms and code names
