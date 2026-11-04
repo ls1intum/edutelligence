@@ -146,7 +146,7 @@ def _run_pipeline(pipeline: ChatPipeline, callback: _RecordingCallback) -> None:
             "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
             return_value=None,
         ),
-        patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel"),
+        patch("iris.pipeline.abstract_agent_pipeline.IrisChatModel"),
     ):
         pipeline(_make_dto(), variant, callback)
 
@@ -296,9 +296,10 @@ def test_mcq_provider_defers_lecture_content_fetch():
         ),
         db=MagicMock(),
         callback=MagicMock(),
-        mcq_pipeline=MagicMock(return_value='{"type": "mcq"}'),
+        mcq_pipeline=MagicMock(return_value='{"type": "mcq"}', tokens=["usage"]),
         allow_lecture_tool=True,
         pending_context_switch=None,
+        tokens=[],
     )
 
     with patch(
@@ -315,6 +316,8 @@ def test_mcq_provider_defers_lecture_content_fetch():
         state.db, 7, "", lecture_id=None, allow_lecture_tool=True
     )
     assert state.mcq_pipeline.call_args.kwargs["lecture_content"] == "LECTURE CONTENT"
+    # The quiz usage is in the run as soon as the tool returns.
+    assert state.tokens == ["usage"]
 
 
 def test_openai_chat_client_is_reused():

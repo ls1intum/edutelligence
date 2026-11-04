@@ -4,7 +4,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -28,6 +28,7 @@ from iris.web.routers.ingestion_status import router as ingestion_status_router
 from iris.web.routers.pipelines import router as pipelines_router
 from iris.web.routers.search import router as search_router
 from iris.web.routers.webhooks import router as webhooks_router
+from iris.web.validation_errors import validation_exception_handler
 
 # Initialize logging first
 setup_logging()
@@ -86,14 +87,7 @@ def custom_openapi():
 app.openapi = custom_openapi  # type: ignore[assignment]
 
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    exc_str = f"{exc}".replace("\n", " ").replace("   ", " ")
-    logger.error("Validation error | path=%s | error=%s", request.url.path, exc_str)
-    content = {"status_code": 10422, "message": exc_str, "data": None}
-    return JSONResponse(
-        content=content, status_code=status.HTTP_422_UNPROCESSABLE_ENTITY
-    )
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 
 # Paths to exclude from request logging (health checks are too noisy)

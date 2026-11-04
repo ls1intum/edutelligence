@@ -1,22 +1,13 @@
-from typing import List
+from typing import List, Optional
 
 from weaviate import WeaviateClient
-from weaviate.collections.classes.filters import Filter
 
 from iris.tracing import observe
 
 from ..common.logging_config import get_logger
-from ..common.pipeline_enum import PipelineEnum
-from ..common.pyris_message import PyrisMessage
-from ..pipeline.prompts.faq_retrieval_prompts import (
-    faq_retriever_initial_prompt,
-    write_hypothetical_answer_prompt,
-)
-from ..pipeline.prompts.lecture_retrieval_prompts import (
-    rewrite_student_query_prompt,
-)
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
-from .basic_retrieval import BaseRetrieval, merge_retrieved_chunks
+from .basic_retrieval import BaseRetrieval
+from .faq_retrieval_utils import faq_instance_filter, fetch_owned_faqs
 
 logger = get_logger(__name__)
 
@@ -24,15 +15,14 @@ logger = get_logger(__name__)
 class FaqRetrieval(BaseRetrieval):
     """FaqRetrieval handles FAQ retrieval operations using a Weaviate client.
 
-    It retrieves FAQ data based on a student's query, processes the results through multiple
-    retrieval pipelines (basic and hypothetical), and merges them to return the final FAQ list.
+    It searches the FAQs of a course for a query the agent wrote, and the FAQ
+    consistency check of the rewriting pipeline reads FAQs through it.
     """
 
-    def __init__(self, client: WeaviateClient, local: bool = False, **kwargs):
+    def __init__(self, client: WeaviateClient, **kwargs):
         super().__init__(
             client,
             init_faq_schema,
-            local=local,
             implementation_id="faq_retrieval_pipeline",
         )
 
@@ -42,49 +32,30 @@ class FaqRetrieval(BaseRetrieval):
             FaqSchema.FAQ_ID.value,
             FaqSchema.QUESTION_TITLE.value,
             FaqSchema.QUESTION_ANSWER.value,
+            FaqSchema.BASE_URL.value,
         ]
 
     @observe(name="Full Faq Retrieval")
     def __call__(
         self,
-        chat_history: list[PyrisMessage],
-        student_query: str,
-        result_limit: int,
-        course_name: str = None,
-        course_id: int = None,
-        problem_statement: str = None,
-        exercise_title: str = None,
-        base_url: str = None,
+        search_query: str,
+        course_id: int,
+        base_url: Optional[str],
+        result_limit: int = 10,
     ) -> List[dict]:
-        course_language = self.fetch_course_language(course_id)
-
-        response, response_hyde = self.run_parallel_rewrite_tasks(
-            chat_history=chat_history,
-            student_query=student_query,
-            result_limit=result_limit,
-            course_language=course_language,
-            initial_prompt=faq_retriever_initial_prompt,
-            rewrite_prompt=rewrite_student_query_prompt,
-            hypothetical_answer_prompt=write_hypothetical_answer_prompt,
-            pipeline_enum=PipelineEnum.IRIS_FAQ_RETRIEVAL_PIPELINE,
-            course_name=course_name,
-            course_id=course_id,
-        )
-
-        basic_retrieved_faqs: list[dict[str, dict]] = [
-            {"id": obj.uuid.int, "properties": obj.properties}
-            for obj in response.objects
+        """Search the course's FAQs on this Artemis instance for a query the agent wrote itself."""
+        return [
+            obj.properties
+            for obj in self._owned_faqs(
+                course_id, base_url, search_query, result_limit, hybrid_factor=0.9
+            )
         ]
-        hyde_retrieved_faqs: list[dict[str, dict]] = [
-            {"id": obj.uuid.int, "properties": obj.properties}
-            for obj in response_hyde.objects
-        ]
-        return merge_retrieved_chunks(basic_retrieved_faqs, hyde_retrieved_faqs)
 
     @observe(name="FAQ: Search in DB")
     def get_faqs_from_db(
         self,
         course_id: int,
+        base_url: Optional[str],
         search_text: str = None,
         result_limit: int = 10,
         hybrid_factor: float = 0.75,
@@ -93,34 +64,58 @@ class FaqRetrieval(BaseRetrieval):
         Retrieves FAQs from the database, optionally with a similarity search on question_title and question_answer.
 
         :param course_id: ID of the course to fetch FAQs for a specific course.
+        :param base_url: Base URL of the Artemis instance the course belongs to; without one no FAQ is returned.
         :param search_text: Optional search text used for semantic search.
         :param result_limit: Number of FAQs to return.
         :param hybrid_factor: Weighting between vector-based and keyword-based results.
         :return: List of retrieved FAQs.
         """
-        filter_weaviate = Filter.by_property("course_id").equal(course_id)
-
-        if search_text:
-            vec = self.llm_embedding.embed(search_text)
-
-            response = self.collection.query.hybrid(
-                query=search_text,
-                vector=vec,
-                alpha=hybrid_factor,
-                return_properties=self.get_schema_properties(),
-                limit=result_limit,
-                filters=filter_weaviate,
+        return [
+            {"id": obj.uuid.int, "properties": obj.properties}
+            for obj in self._owned_faqs(
+                course_id, base_url, search_text, result_limit, hybrid_factor
             )
+        ]
+
+    def _owned_faqs(
+        self,
+        course_id: int,
+        base_url: Optional[str],
+        search_text: Optional[str],
+        result_limit: int,
+        hybrid_factor: float,
+    ) -> list:
+        """The course's FAQ rows of the Artemis instance at ``base_url``, best match first.
+
+        Another instance may use the same course id, so the course id alone does not identify the
+        course. Without a base URL nothing is returned.
+        """
+        if not base_url:
+            return []
+        filters = faq_instance_filter(course_id, base_url)
+        properties = self.get_schema_properties()
+        if search_text:
+            vector = self.llm_embedding.embed(search_text)
+
+            def fetch_page(offset: int, limit: int) -> list:
+                return self.collection.query.hybrid(
+                    query=search_text,
+                    vector=vector,
+                    alpha=hybrid_factor,
+                    return_properties=properties,
+                    limit=limit,
+                    offset=offset,
+                    filters=filters,
+                ).objects
+
         else:
 
-            response = self.collection.query.fetch_objects(
-                filters=filter_weaviate,
-                limit=result_limit,
-                return_properties=self.get_schema_properties(),
-            )
+            def fetch_page(offset: int, limit: int) -> list:
+                return self.collection.query.fetch_objects(
+                    filters=filters,
+                    limit=limit,
+                    offset=offset,
+                    return_properties=properties,
+                ).objects
 
-        faqs = [
-            {"id": obj.uuid.int, "properties": obj.properties}
-            for obj in response.objects
-        ]
-        return faqs
+        return fetch_owned_faqs(fetch_page, base_url, result_limit)[0]
