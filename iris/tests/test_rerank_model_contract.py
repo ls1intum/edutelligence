@@ -20,6 +20,7 @@ from iris.llm.external.vllm_rerank import (  # noqa: E402
     DEFAULT_RERANK_INSTRUCTION,
     VllmRerankModel,
 )
+from iris.llm.request_handler import rerank_request_handler  # noqa: E402
 from iris.llm.request_handler.rerank_request_handler import (  # noqa: E402
     RerankRequestHandler,
 )
@@ -192,15 +193,13 @@ def test_request_handler_degrades_gracefully_when_the_model_id_is_not_configured
     ranked = handler.rerank("q", documents, top_n=2, content_field_name="text")
 
     assert ranked == documents[:2]
-    # A missing config entry is permanent, not the transient failure this flag exists
-    # to back off from; it must not disable reranking process-wide for every model_id.
-    # (Read through the instance: Pydantic's private-attr descriptor, not the real
-    # value, is what a bare class-level access returns before any instance sets it.)
-    assert handler._rerank_available is True
+    # A missing config entry is permanent, not the transient failure the cooldown
+    # exists to back off from; it must not start a cooldown for this model_id.
+    assert not rerank_request_handler._in_cooldown("not-a-configured-model")
 
 
 def test_missing_model_id_does_not_disable_a_different_working_reranker():
-    RerankRequestHandler._rerank_available = True  # isolate from other tests' state
+    rerank_request_handler.reset_rerank_cooldowns()  # isolate from other tests' state
     missing = RerankRequestHandler.model_construct(
         model_id="not-a-configured-model",
         llm_manager=type("_Manager", (), {"get_llm_by_id": lambda self, _id: None})(),
@@ -223,3 +222,44 @@ def test_missing_model_id_does_not_disable_a_different_working_reranker():
     # ran, rather than the unranked fallback the missing-model handler would have
     # left every subsequent handler stuck on if the class-wide flag had flipped.
     assert ranked == [documents[2], documents[0]]
+
+
+class _FailingReranker:
+    def rerank(self, query, documents, top_n):
+        raise RuntimeError("service unavailable")
+
+
+def test_failure_starts_a_cooldown_for_that_model_only_and_it_expires(monkeypatch):
+    rerank_request_handler.reset_rerank_cooldowns()
+    failing = RerankRequestHandler.model_construct(
+        model_id="flaky-model",
+        llm_manager=type(
+            "_Manager", (), {"get_llm_by_id": lambda self, _id: _FailingReranker()}
+        )(),
+    )
+    working = RerankRequestHandler.model_construct(
+        model_id="a-working-model",
+        llm_manager=type(
+            "_Manager", (), {"get_llm_by_id": lambda self, _id: _StubReranker()}
+        )(),
+    )
+    documents = [_Doc("a"), _Doc("b"), _Doc("c")]
+
+    assert failing.rerank("q", documents, top_n=2, content_field_name="text") == (
+        documents[:2]
+    )
+    assert rerank_request_handler._in_cooldown("flaky-model")
+    # Another reranker keeps working while the flaky one cools down.
+    assert working.rerank("q", documents, top_n=2, content_field_name="text") == [
+        documents[2],
+        documents[0],
+    ]
+
+    # Once the cooldown has passed, the reranker is tried again.
+    clock = [0.0]
+    monkeypatch.setattr(rerank_request_handler.time, "monotonic", lambda: clock[0])
+    rerank_request_handler.reset_rerank_cooldowns()
+    rerank_request_handler._start_cooldown("flaky-model")
+    clock[0] = rerank_request_handler.RERANK_FAILURE_COOLDOWN_SECONDS + 1
+    assert not rerank_request_handler._in_cooldown("flaky-model")
+    rerank_request_handler.reset_rerank_cooldowns()

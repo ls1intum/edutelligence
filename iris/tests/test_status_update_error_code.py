@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock
 
+from iris.common.callback_token import CallbackToken
 from iris.domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
 )
@@ -43,6 +44,7 @@ def test_ingestion_callback_fail_sends_error_code_in_error_object(monkeypatch):
     cb = IngestionStatusCallback(
         run_id="test-run",
         base_url="http://localhost",
+        auth_token=CallbackToken("token-for-test-run"),
     )
 
     cb.fail("video is private", code="YOUTUBE_PRIVATE")
@@ -79,6 +81,7 @@ def test_ingestion_callback_finish_sends_display_page_numbers_in_dedicated_field
     cb = IngestionStatusCallback(
         run_id="test-run",
         base_url="http://localhost",
+        auth_token=CallbackToken("token-for-test-run"),
     )
 
     cb.finish(display_page_numbers=[3, 4, -1])

@@ -8,13 +8,11 @@ def main():
         "llm_core",
         "assessment_module_manager",
         "athena",
-        "log_viewer",
         "modules/programming/module_example",
         "modules/programming/module_programming_llm",
         "modules/text/module_text_llm",
         "modules/text/module_text_cofee",
         "modules/programming/module_programming_themisml",
-        "modules/programming/module_programming_apted",
         "modules/modeling/module_modeling_llm",
     ]
 
