@@ -341,15 +341,11 @@ Instruction-tuned embedding models such as Qwen3-Embedding expect a search query
   model: "Qwen/Qwen3-Embedding-8B"
   base_url: "https://your-logos-instance/v1"
   api_key: "<your-logos-api-key>"
-  retrieval_instruction: >-
-    Instruct: Given a search query from a university student, retrieve
-    relevant passages from lecture materials that answer or cover the
-    query
-    Query:
+  retrieval_instruction: "Instruct: Given a search query from a university student, retrieve relevant passages from lecture materials that answer or cover the query\nQuery: "
   cost_per_million_input_token: 0
 ```
 
-Do not set `retrieval_instruction` on a plain OpenAI or Azure model: it has no instruction protocol and would embed the instruction as part of the query.
+Iris puts the value directly in front of the query, so keep the newline before `Query:` and the space after it, as in `QWEN3_RETRIEVAL_INSTRUCTION`; a folded YAML scalar (`>-`) would remove both. Do not set `retrieval_instruction` on a plain OpenAI or Azure model: it has no instruction protocol and would embed the instruction as part of the query.
 
 :::info TUM-internal deployment
 The TUM deployment embeds all Iris collections with Qwen3-Embedding-8B through Logos, the LLM gateway that Artemis also uses for its global search index. Global search reranks with Qwen3-Reranker-8B through Logos. Other deployments can use any of the embedding and reranker types above.

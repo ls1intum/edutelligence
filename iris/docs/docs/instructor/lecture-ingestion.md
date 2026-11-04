@@ -23,7 +23,7 @@ There is nothing to trigger. Artemis sends a lecture unit to Iris on its own whe
 - when you replace its file, which uploads a new version; and
 - when you change its video link.
 
-A file whose content is unchanged, such as a deck saved again from the slide editor, keeps its version and is not processed again. Artemis also checks the index regularly and sends a unit again when its content is missing, incomplete or outdated, for example after Iris was unavailable. You do not have to watch for that either.
+A file whose content is unchanged keeps its version and is not processed again. Artemis also checks the index regularly and sends a unit again when its content is missing, incomplete or outdated, for example after Iris was unavailable. You do not have to watch for that either.
 
 Units in tutorial lectures are not processed. Any other unit is processed only if Iris can read something from it: a PDF, or a video it can transcribe. A unit that only links a video on another site is marked as not indexed, and is processed automatically once it gets a PDF or a supported video.
 
