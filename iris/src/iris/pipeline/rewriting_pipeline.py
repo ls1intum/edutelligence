@@ -117,8 +117,12 @@ class RewritingPipeline(Pipeline):
         suggestions = []
 
         if self.variant_id == "faq":
+            settings = dto.execution.settings
             faqs = self.faq_retriever.get_faqs_from_db(
-                course_id=dto.course_id, search_text=response, result_limit=10
+                course_id=dto.course_id,
+                base_url=settings.artemis_base_url if settings else None,
+                search_text=response,
+                result_limit=10,
             )
             consistency_result = self.check_faq_consistency(faqs, final_result)
             faq_type = consistency_result.get("type", "").lower()
