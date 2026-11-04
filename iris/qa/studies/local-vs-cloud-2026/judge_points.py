@@ -24,7 +24,8 @@ from pathlib import Path
 
 from study_paths import DATA, IRIS
 
-SALT = "landtag-2026-10-27"
+# Salt for the opaque bundle ids; changing it changes every id.
+SALT = "local-vs-cloud-2026"
 SCHEMA = {
     "type": "object",
     "properties": {
