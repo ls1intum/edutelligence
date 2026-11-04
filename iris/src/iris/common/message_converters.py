@@ -98,6 +98,11 @@ def normalize_history_message(iris_message: PyrisMessage) -> PyrisMessage:
             raise ValueError(f"Unknown message role: {iris_message.sender}")
 
 
+# A quiz holds at most 10 questions (tools/mcq_generation.py); this bounds what one
+# stored widget can cost in every later prompt, whatever its texts hold.
+MAX_QUIZ_DESCRIPTION_CHARS = 12_000
+
+
 def _content_text(content) -> str:
     """The text a model reads for one message content (text, or a described quiz)."""
     if isinstance(content, TextMessageContentDTO):
@@ -156,10 +161,9 @@ def _quiz_set_responses(json_content: dict) -> dict[int, Any]:
     responses = json_content.get("responses")
     by_index: dict[int, Any] = {}
     for response in responses if isinstance(responses, list) else []:
-        if isinstance(response, dict) and isinstance(
-            response.get("questionIndex"), int
-        ):
-            by_index[response["questionIndex"]] = response
+        index = response.get("questionIndex") if isinstance(response, dict) else None
+        if isinstance(index, int) and not isinstance(index, bool):
+            by_index[index] = response
     return by_index
 
 
@@ -207,6 +211,8 @@ def describe_json_content(json_content) -> str:
         return json.dumps(json_content, ensure_ascii=False)[:2000]
     quiz = _describe_quiz(json_content)
     if quiz is not None:
+        if len(quiz) > MAX_QUIZ_DESCRIPTION_CHARS:
+            return quiz[:MAX_QUIZ_DESCRIPTION_CHARS] + " [...]]"
         return quiz
     return (
         "[Structured content: "

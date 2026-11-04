@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 # Bootstrap the iris package (see test_chat_latency_ordering.py for the circular import).
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.message_converters import (  # noqa: E402
+    MAX_QUIZ_DESCRIPTION_CHARS,
     convert_iris_message_to_langchain_message,
     describe_json_content,
     normalize_history_message,
@@ -206,3 +207,31 @@ def test_the_code_feedback_history_describes_a_widget_instead_of_failing():
     assert "Quiz me on sorting" in lines[0]
     assert any("Merge sort (correct)" in line for line in lines)
     assert not any("aW1n" in line for line in lines)
+
+
+def test_a_boolean_question_index_is_not_read_as_a_number():
+    quiz_set = {
+        "type": "mcq-set",
+        "questions": [MCQ, SECOND_QUESTION],
+        "responses": [
+            {"questionIndex": 1, "selectedIndex": 1, "submitted": True},
+            {"questionIndex": True, "selectedIndex": 0, "submitted": True},
+            {"questionIndex": False, "selectedIndex": 0, "submitted": True},
+        ],
+    }
+
+    description = describe_json_content(quiz_set)
+    first, second = description.split("Quiz question 2")
+
+    assert "The student has not answered it yet." in first
+    assert "The student answered option 2 (correct)." in second
+
+
+def test_a_very_large_valid_quiz_is_clipped():
+    huge = {**MCQ, "explanation": "x" * (2 * MAX_QUIZ_DESCRIPTION_CHARS)}
+
+    description = describe_json_content(huge)
+
+    assert description.startswith("[Quiz question shown to the student")
+    assert description.endswith(" [...]]")
+    assert len(description) <= MAX_QUIZ_DESCRIPTION_CHARS + len(" [...]]")
