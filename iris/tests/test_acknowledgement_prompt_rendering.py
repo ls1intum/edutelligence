@@ -127,7 +127,7 @@ def test_the_rule_says_what_does_not_count_and_leads_a_correction_with_what_is_r
     rule = _rule(_render("COURSE_CHAT"))
 
     assert "(restating the question is not enough)" in rule
-    assert "A correction starts with what is right." in rule
+    assert "Before correcting, acknowledge what they got right." in rule
 
 
 def test_the_rule_is_one_short_bullet_and_the_only_tone_rule():
@@ -218,17 +218,30 @@ def test_the_quiz_intro_rule_only_exists_where_quizzes_are_generated(chat_mode):
 
 
 @pytest.mark.parametrize("event", [None, "build_failed", "progress_stalled"])
-def test_the_turn_context_does_not_override_the_quiz_intro(event):
+@pytest.mark.parametrize("chat_mode", CHAT_MODES)
+def test_the_turn_context_does_not_override_the_quiz_intro(chat_mode, event):
     # The per-message context is sent after the system prompt. It must not bring back a
-    # separate quiz block with its own generic intro examples.
+    # separate quiz block with its own generic intro examples. The context has the same
+    # keys as ChatPipeline's rendering of it.
+    is_programming = chat_mode == "PROGRAMMING_EXERCISE_CHAT"
+    is_text = chat_mode == "TEXT_EXERCISE_CHAT"
     rendered = _render_template(
         "chat_turn_context.j2",
         {
+            "chat_mode": chat_mode,
             "current_date": "2026-10-19",
-            "programming_language": "java" if event else "",
+            "current_view_blocks": (
+                ["Lecture unit: Sorting, page 3"] if chat_mode == "LECTURE_CHAT" else []
+            ),
+            "current_view_is_combined": chat_mode == "LECTURE_CHAT",
+            "allow_lecture_tool": True,
+            "exercise_id": 42 if is_programming or is_text else "",
+            "text_exercise_submission": "My essay draft." if is_text else "",
+            "programming_language": "java" if is_programming else "",
             "event": event,
         },
     )
 
+    assert "Current Date: 2026-10-19" in rendered
     assert "quiz" not in rendered.lower()
     assert "intro" not in rendered.lower()
