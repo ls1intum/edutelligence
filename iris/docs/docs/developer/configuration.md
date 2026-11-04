@@ -177,26 +177,43 @@ The `LlmManager` singleton reads the YAML file and creates typed model objects. 
 
 ### Parameter Reference
 
-| Parameter                       | Required     | Description                                                                     |
-| ------------------------------- | ------------ | ------------------------------------------------------------------------------- |
-| `id`                            | Yes          | Unique identifier across all models                                             |
-| `name`                          | Yes          | Human-readable display name                                                     |
-| `description`                   | Yes          | Additional description                                                          |
-| `type`                          | Yes          | Model type (see below)                                                          |
-| `model`                         | Yes          | Vendor model name — used for version matching (e.g., `gpt-5-mini`)              |
-| `api_key`                       | Provider     | API key for external providers; omit for passthrough                            |
-| `endpoint`                      | Azure/Cohere | Provider endpoint URL                                                           |
-| `host`                          | Ollama       | Ollama server host URL                                                          |
-| `base_url`                      | No           | OpenAI-compatible endpoint for `openai_chat` (e.g. Logos, vLLM)                 |
-| `extra_body`                    | No           | Provider-specific request fields, e.g. Qwen3 `chat_template_kwargs`             |
-| `leading_system_message_only`   | No           | Rewrite later system messages for templates that reject them (Qwen3.x)          |
-| `reasoning_token_allowance`     | No           | Tokens added to each pipeline's `max_tokens` for reasoning models (default `0`) |
-| `api_version`                   | Azure        | Azure API version                                                               |
-| `azure_deployment`              | Azure        | Azure deployment name                                                           |
-| `tools`                         | No           | Supported tool types (default: `[]`)                                            |
-| `cost_per_million_input_token`  | No           | Cost tracking: input token price                                                |
-| `cost_per_million_output_token` | No           | Cost tracking: output token price                                               |
-| `cost_per_1k_requests`          | No           | Cost tracking: per-request price (rerankers)                                    |
+| Parameter                       | Required     | Description                                                                            |
+| ------------------------------- | ------------ | -------------------------------------------------------------------------------------- |
+| `id`                            | Yes          | Unique identifier across all models                                                    |
+| `name`                          | Yes          | Human-readable display name                                                            |
+| `description`                   | Yes          | Additional description                                                                 |
+| `type`                          | Yes          | Model type (see below)                                                                 |
+| `model`                         | Yes          | Vendor model name — used for version matching (e.g., `gpt-5-mini`)                     |
+| `api_key`                       | Provider     | API key for external providers; omit for passthrough                                   |
+| `endpoint`                      | Azure/Cohere | Provider endpoint URL                                                                  |
+| `host`                          | Ollama       | Ollama server host URL                                                                 |
+| `base_url`                      | No           | OpenAI-compatible endpoint for `openai_chat` (e.g. Logos, vLLM)                        |
+| `extra_body`                    | No           | Provider-specific request fields, e.g. Qwen3 `chat_template_kwargs`                    |
+| `leading_system_message_only`   | No           | Rewrite later system messages for templates that reject them (Qwen3.x)                 |
+| `reasoning_token_allowance`     | No           | Tokens added to each pipeline's `max_tokens` for reasoning models (default `0`)        |
+| `request_timeout_seconds`       | No           | Client timeout per request; one retry after a timeout (default `300`)                  |
+| `api_version`                   | Azure        | Azure API version                                                                      |
+| `azure_deployment`              | Azure        | Azure deployment name                                                                  |
+| `tools`                         | No           | Supported tool types (default: `[]`)                                                   |
+| `use_responses_api`             | No           | Use the OpenAI Responses API instead of Chat Completions (`openai_chat`, `azure_chat`) |
+| `strict_tools`                  | No           | Send tool schemas with `strict: true`. Unset: on for the Responses API, off otherwise  |
+| `supports_tool_choice`          | No           | Whether the endpoint honours `tool_choice` (default `true`)                            |
+| `replay_reasoning_items`        | No           | Responses API: send encrypted reasoning items back within a tool loop (default `true`) |
+| `replay_reasoning_content`      | No           | Chat Completions: send reasoning text back with its tool-call turn (default `false`)   |
+| `supports_structured_output`    | No           | Whether the endpoint enforces a JSON schema; otherwise JSON mode (default `true`)      |
+| `cost_per_million_input_token`  | No           | Cost tracking: input token price                                                       |
+| `cost_per_million_output_token` | No           | Cost tracking: output token price                                                      |
+| `cost_per_1k_requests`          | No           | Cost tracking: per-request price (rerankers)                                           |
+
+### Output budgets and reasoning models
+
+Prompts and schemas set the output length: the session title has 2 to 5 words, the global search answer stays under 300 words, and the lecture, segment and transcription summaries stay under 1,000 words. Pipelines with such a bounded output (session title, global search answer, ingestion summaries, guide refinement) send only an emergency limit, `max_tokens` = 16,000 (`EMERGENCY_MAX_TOKENS` in `iris.llm.completion_arguments`). It stops a runaway generation and is far above any normal output, so a reasoning model does not run out of tokens while it reasons. It stays below 16,384, the smallest output cap of the OpenAI models in `llm_config.example.yml` (gpt-4o-mini); providers reject a larger `max_tokens` for such models. The chat agent itself sends no `max_tokens`.
+
+`reasoning_token_allowance` is added to the emergency limit. With the emergency limit it is normally not needed; keep the sum below the model's output cap (for gpt-4o-mini, an allowance of at most 384).
+
+On vLLM-served models (Logos), the prompt and `max_tokens` together must fit into the model's context window. The largest prompt is context window − 16,000 − `reasoning_token_allowance`. For a 131,072-token context (for example gpt-oss-120b) that is about 115,000 tokens without an allowance, and 110,976 with an allowance of 4,096. The lecture unit summary sends all segment summaries of a unit in one prompt; a unit whose summaries exceed that size fails to ingest.
+
+If a call still reaches the limit: the session title is not updated, the global search shows the sources without an answer and logs a warning, and other pipelines raise an error (handling depends on the caller). This applies to models on the Responses API (`use_responses_api: true`); on Chat Completions a cut call returns empty or truncated text instead. The limit and `reasoning_token_allowance` apply to OpenAI-type entries (`openai_chat`, `azure_chat`); Ollama entries send no token limit.
 
 ### Model Types
 

@@ -25,6 +25,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 )
 from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import (
+    EMERGENCY_MAX_TOKENS,
     CompletionArguments,
     LlmRequestHandler,
 )
@@ -94,7 +95,9 @@ class TranscriptionIngestionPipeline(SubPipeline):
         self.llm_embedding = LlmRequestHandler(embedding_model)
 
         request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        completion_args = CompletionArguments(
+            temperature=0, max_tokens=EMERGENCY_MAX_TOKENS
+        )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )

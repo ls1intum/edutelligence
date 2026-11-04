@@ -15,12 +15,12 @@ from uuid import uuid4
 from httpx import Client as HTTPXClient
 from httpx import HTTPTransport, Timeout
 from langchain_core.tools import BaseTool
-from langchain_experimental.llms.ollama_functions import convert_to_ollama_tool
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from ollama import Client, Message
 from pydantic import BaseModel, Field
 from requests.auth import HTTPBasicAuth
 
-from iris.tracing import observe
+from iris.tracing import observe, record_generation
 
 from ...common.logging_config import get_logger
 from ...common.message_converters import map_role_to_str, map_str_to_role
@@ -227,6 +227,9 @@ class OllamaModel(
     think: Optional[Union[bool, Literal["low", "medium", "high"]]] = None
     # The model's chat template accepts a system message only at the start (Qwen3.x).
     leading_system_message_only: bool = False
+    # Ollama's chat API has no tool_choice; a forced final answer omits the tools.
+    supports_tool_choice: bool = False
+    effective_strict_tools: bool = False
     _client: Client
 
     def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
@@ -286,16 +289,14 @@ class OllamaModel(
 
         for tool in tools:
             if isinstance(tool, BaseTool):
-                schema = convert_to_ollama_tool(tool)
-                tools_for_client.append({"type": "function", "function": schema})
+                tools_for_client.append(convert_to_openai_tool(tool))
             elif isinstance(tool, dict):
                 if tool.get("type") == "function":
                     tools_for_client.append(tool)
                 else:
                     tools_for_client.append({"type": "function", "function": tool})
             elif isinstance(tool, type) and issubclass(tool, BaseModel):
-                schema = convert_to_ollama_tool(tool)
-                tools_for_client.append({"type": "function", "function": schema})
+                tools_for_client.append(convert_to_openai_tool(tool))
             elif callable(tool):
                 # Plain functions: Ollama converts them from docstrings
                 tools_for_client.append(tool)
@@ -318,21 +319,25 @@ class OllamaModel(
         if self.leading_system_message_only:
             ollama_messages = keep_ollama_system_messages_leading(ollama_messages)
 
+        schema = getattr(arguments, "response_schema", None)
         response = self._client.chat(
             model=self.model,
             messages=ollama_messages,
             tools=tools_for_client,
             think=self.think,
             options=self.options,
+            format=schema.model_json_schema() if schema is not None else None,
         )
 
         msg = response.get("message", {}) or {}
-        return convert_to_iris_message(
+        message = convert_to_iris_message(
             msg,
             int(response.get("prompt_eval_count", 0) or 0),
             int(response.get("eval_count", 0) or 0),
             response.get("model", self.model),
         )
+        record_generation(self.model, message.token_usage)
+        return message
 
     @observe(name="Ollama Embedding", as_type="embedding")
     def embed(self, text: str) -> list[float]:
