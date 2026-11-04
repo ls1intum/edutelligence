@@ -180,7 +180,7 @@ If a collection already exists when Iris starts, it is reused. If it does not ex
 Every lecture and FAQ row stores the base URL of the Artemis instance that wrote it, and Iris filters by it, so several Artemis instances can share one Iris and one Weaviate. The lecture collections store the base URL twice: in `base_url`, which older versions matched word by word (a filter for `https://artemis.example` also matched `https://artemis-test.artemis.example`), and in `base_url_exact`, which matches the whole value. After an upgrade, Iris fills `base_url_exact` on older rows in the background and switches each collection to exact matching once it is complete; until then, the old matching applies. The log names each collection it filled and the base URLs it found. If two stored base URLs differ only in case or a trailing slash, the collection keeps the old matching and the log says so. Run only one Iris against a shared Weaviate while it upgrades.
 
 :::warning
-Deleting Weaviate collections means losing all indexed content. Artemis will need to re-send ingestion requests to rebuild the data. Do not delete collections unless you intend a full re-index.
+Deleting Weaviate collections means losing all indexed content. Artemis's reconciliation notices the missing content through the [ingestion census](../developer/ingestion-reliability.md#census) and queues it again, but only at its paced rate, and lecture content of courses that ended before the Artemis ingestion window is not rebuilt. Do not delete collections unless you intend a full re-index.
 :::
 
 ## Data Persistence
@@ -220,7 +220,7 @@ docker compose -f <compose-file> start weaviate
 
 ### Re-Indexing from Artemis
 
-Since all content originates from Artemis, a full re-index is always possible as an alternative to backups. Artemis can re-send lecture content and FAQs to Iris through the ingestion pipeline. This is slower but guarantees data consistency.
+Since all content originates from Artemis, a full re-index is possible as an alternative to backups. Artemis compares the census of Iris with its database and queues missing lecture units and FAQs again on its own. This is slower than restoring a backup, and it only covers courses within the Artemis ingestion window (`artemis.iris.ingestion.course-window`, two years by default) and FAQs of courses with Iris enabled.
 
 ## Port Configuration
 
