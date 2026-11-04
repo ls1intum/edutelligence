@@ -98,7 +98,7 @@ services:
       - traefik.http.services.cofee-clustering.loadbalancer.server.port=8000 # set service name this way
 
   database:
-    image: mongo:latest
+    image: mongo:8
     container_name: cofee-mongodb
     restart: unless-stopped
     expose:

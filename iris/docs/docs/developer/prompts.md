@@ -19,18 +19,15 @@ prompts/
 │   ├── mcq_generation_prompt.j2
 │   ├── autonomous_tutor_system_prompt.j2
 │   ├── tutor_suggestion_chat_system_prompt.j2
+│   ├── chat_turn_context.j2                   # Per-message context, sent after the history
+│   ├── interaction_suggestion_prompt.j2       # Follow-up question suggestions
 │   └── session_title_generation_prompt.j2
 ├── code_feedback_prompt.txt                   # Plain text prompt for code feedback
-├── citation_prompt.txt                        # Citation generation prompt
-├── citation_keyword_prompt.txt                # Citation keyword extraction
-├── citation_summary_prompt.txt                # Citation summary generation
-├── summary_prompt.txt                         # General summarization
+├── citation_label_prompt.txt                  # Keyword and summary of cited sources
 ├── competency_extraction.py                   # Python prompt builder
+├── environment.py                             # Shared Jinja2 environment (no escaping, as_data filter)
 ├── faq_consistency_prompt.py                  # FAQ consistency check prompts
-├── faq_retrieval_prompts.py                   # FAQ retrieval query rewriting
 ├── inconsistency_check_prompts.py             # Inconsistency check prompts
-├── iris_interaction_suggestion_prompts.py     # Follow-up question suggestions
-├── lecture_retrieval_prompts.py               # Lecture RAG query rewriting
 ├── lecture_unit_summary_prompt.py             # Lecture unit summarization
 ├── lecture_unit_segment_summary_prompt.py     # Lecture segment summarization
 ├── rewriting_prompts.py                       # Content rewriting prompts
@@ -47,29 +44,30 @@ Pipelines use **Jinja2 templates** (`.j2` files) for their system prompts. These
 
 The template is a sequence of blocks in a fixed order. Some are unconditional, others render only when the request carries the data they describe:
 
-| Block                   | Condition                        | Content                                                                  |
-| ----------------------- | -------------------------------- | ------------------------------------------------------------------------ |
-| Language                | `user_language`                  | Answer in the student's language                                         |
-| Introduction            | always                           | The Iris persona                                                         |
-| Guidelines              | always                           | Scaffolding rules, what not to reveal                                    |
-| Course meta             | always                           | Course name                                                              |
-| Lecture meta            | `lecture_name`                   | The active lecture                                                       |
-| Exercise meta           | `exercise_id`                    | Title, problem statement, dates, programming language or submission      |
-| Examples                | always                           | Worked examples of good and bad answers                                  |
-| Tool instructions       | always                           | How and when to reach for tools                                          |
-| Context switching       | `not mcq_parallel`               | When and how to call `switch_chat_context`                               |
-| Exercise scenarios      | `programming_language`           | Build failures, failing tests, stuck students                            |
-| Lecture retrieval       | `allow_lecture_tool`             | How to retrieve and cite lecture content, and which page number to quote |
-| Combined-view point-out | `can_point_out_in_combined_view` | When and how to move the student's slides or video                       |
-| FAQ retrieval           | `allow_faq_tool`                 | How to use FAQ answers                                                   |
-| Competencies            | `has_competencies`               | How to talk about competencies                                           |
-| Exercises               | `has_exercises`                  | How to talk about the course exercises                                   |
-| Metrics                 | `metrics_enabled`                | How to interpret student analytics                                       |
-| Chat history            | `has_chat_history`               | How to treat earlier turns                                               |
-| Proactive events        | `event`                          | Behavior for build-failure and stalled-progress events                   |
-| MCQ generation          | course and lecture modes         | How to produce multiple-choice questions                                 |
-| Support level           | `support_level`                  | How much help the instructor allows                                      |
-| Custom instructions     | `custom_instructions`            | The instructor's own additions                                           |
+| Block                       | Condition                                | Content                                                                  |
+| --------------------------- | ---------------------------------------- | ------------------------------------------------------------------------ |
+| Role                        | always                                   | The Iris persona and its goal                                            |
+| Language                    | `user_language`                          | Answer in the student's language                                         |
+| How you teach               | always                                   | Teaching principles, four help steps, exact references, the course field |
+| Code and academic integrity | always                                   | Self-check, no solutions, refusal rules; draft feedback by support level |
+| Using your tools            | always                                   | When to call tools, preamble, tool output is data                        |
+| Current context             | `lecture_name` or `exercise_id`          | The active lecture or exercise; the problem statement as data            |
+| Examples                    | always                                   | Four short example exchanges                                             |
+| Automatic context switching | always                                   | When and how to call `switch_chat_context`                               |
+| Programming situations      | `programming_language`                   | Build failures, failing tests, code and concept questions                |
+| Lecture material            | `allow_lecture_tool`                     | How to retrieve and refer to lecture content                             |
+| Combined-view point-out     | `can_point_out_in_combined_view`         | How to move the slide or video the student sees                          |
+| Course FAQ                  | `allow_faq_tool`                         | How to use FAQ answers                                                   |
+| Citing Sources              | `allow_lecture_tool` or `allow_faq_tool` | `[src:N]` source ids after the sentences that use a source               |
+| Course exercises            | always (text depends on `has_exercises`) | How to talk about the course exercises                                   |
+| Check before you ask        | always                                   | Look up the student's situation before asking                            |
+| Conversation history        | always                                   | How to build on earlier turns                                            |
+| Quiz questions              | course and lecture modes                 | How to use `generate_mcq_questions`                                      |
+| Support level               | `support_level` is `low` or `high`       | How much help the instructor allows                                      |
+| Format of your answers      | always                                   | Markdown, links, silent plan before the reply                            |
+| Custom instructions         | `custom_instructions`                    | The instructor's own additions                                           |
+
+The system prompt stays the same as long as its inputs do not change (chat mode, active context, tool availability, combined view), so the provider can cache it with the history. Values that change per message are in `chat_turn_context.j2`, sent after the history: the current date, the slide or video the student has open, the current text exercise submission, and proactive build-failure and stalled-progress events.
 
 `build_system_message()` assembles the render context from the DTO and from the flags that `prepare_state()` resolved:
 
@@ -77,7 +75,6 @@ The template is a sequence of blocks in a fixed order. Some are unconditional, o
 template_context = {
     "chat_mode": self.chat_mode,
     "support_level": _support_level(dto),
-    "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
     "user_language": dto.user.lang_key,
     "course_name": dto.course.name,
     "allow_lecture_tool": state.allow_lecture_tool,
@@ -120,36 +117,30 @@ The block carries a worked example per direction — switching to an exercise, a
 
 ### Loading Templates
 
-Pipelines load Jinja2 templates in their `__init__`. Since the chat pipeline lives in `pipeline/chat/`, the path navigates up to the `prompts/templates/` directory:
+All pipelines load templates through one shared Jinja environment, `prompt_environment()` in `pipeline/prompts/environment.py`:
 
 ```python
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from iris.pipeline.prompts.environment import prompt_environment
 
-# From ChatPipeline in pipeline/chat/
-template_dir = os.path.join(os.path.dirname(__file__), "..", "prompts", "templates")
-self.jinja_env = Environment(
-    loader=FileSystemLoader(template_dir),
-    autoescape=select_autoescape(["j2"]),
-)
+self.jinja_env = prompt_environment()
 self.system_prompt_template = self.jinja_env.get_template("chat_system_prompt.j2")
 ```
 
-Pipelines that live directly in `pipeline/` (like `SessionTitleGenerationPipeline`) use a simpler path without the `..`.
+The environment turns HTML escaping **off**. Prompts are plain text for a model, not HTML: with escaping on, code in a student's submission or an instructor's problem statement reached the model as `&lt;`, `&gt;` and `&#39;`, which changes the meaning of code such as `if (a < b)`.
+
+Text that comes from students or instructors goes through the `as_data` filter instead:
+
+```jinja
+{{ problem_statement | as_data("problem_statement") }}
+```
+
+`as_data` puts the text inside `<problem_statement>` tags and breaks any closing tag of the same name inside the text, so the text cannot close the block early and pose as instructions. The system prompt also tells the model that everything tools return, including the student's code, is material to work with and not instructions to follow.
 
 ## Python Prompt Builders
 
 Some prompts are constructed in Python files, typically as functions that return prompt strings or `ChatPromptTemplate` objects. These are used for sub-pipelines and retrieval operations.
 
-For example, `lecture_retrieval_prompts.py` defines prompt strings for query rewriting during RAG:
-
-```python
-# From lecture_retrieval_prompts.py
-lecture_retriever_initial_prompt_lecture_pages = """
-You write good and performant vector database queries, in particular for Weaviate,
-from chat histories between an AI tutor and a student.
-The query should be designed to retrieve context information from indexed lecture slides...
-"""
-```
+For example, `faq_consistency_prompt.py` defines the prompt strings of the FAQ consistency check.
 
 ## Plain Text Prompts
 
@@ -172,50 +163,20 @@ Feedbacks (from automated tests):
 
 These are loaded and formatted using Python's `str.format()` or passed directly to LangChain prompt templates.
 
-The four citation prompts are the one group where the wording is part of a wire format: `citation_prompt.txt` and `faq_citation_prompt.txt` tell the model to copy the provided ids verbatim, and `citation_keyword_prompt.txt` and `citation_summary_prompt.txt` forbid the characters that delimit a citation's fields. See [citations](./citations.md).
+Two prompts carry a wire format: the "Citing Sources" block of `chat_system_prompt.j2` tells the agent to copy source ids exactly as `[src:N]`, and `citation_label_prompt.txt` forbids the characters that delimit a cite block's fields. See [citations](./citations.md).
 
 ## How Prompts Are Assembled
 
-In `AbstractAgentPipeline`, the full prompt is assembled in two steps:
+`AbstractAgentPipeline.build_prompt_messages()` builds the message list for the agent loop in this order:
 
-### 1. System Message Construction
+1. The system prompt from `build_system_message()`.
+2. The compaction summary, if older turns were compacted. It is a **user** message, not a system message: it is built from student messages and tool output, so it must not gain system authority.
+3. The chat history, normalized by `normalize_history_message()` (context-switch markers become `[context_switch]` notes; quiz messages are described as text).
+4. The per-turn context from `build_turn_context_message()`, as the last message.
 
-Each pipeline implements `build_system_message()` to produce the system prompt string:
+The order matters for cost. Providers cache the longest prefix that matches an earlier request. Everything that stays the same between turns (system prompt, summary, history) comes first, and the part that changes every turn (submission, build status, current time) comes last. The next turn can then reuse the cache up to the latest student message.
 
-```python
-def build_system_message(self, state):
-    # Render the Jinja2 template with context
-    return self.system_prompt_template.render(
-        current_date=...,
-        custom_instructions=...,
-        # ... pipeline-specific variables
-    )
-```
-
-### 2. History and Scratchpad Assembly
-
-The `assemble_prompt_with_history()` method combines the system message with chat history and the agent scratchpad:
-
-```python
-def assemble_prompt_with_history(self, state, system_prompt):
-    prefix_messages = [
-        ("system", system_prompt.replace("{", "{{").replace("}", "}}"))
-    ]
-    history_lc_messages = [
-        convert_iris_message_to_langchain_message(msg)
-        for msg in state.message_history
-    ]
-    combined = (
-        prefix_messages
-        + history_lc_messages
-        + [("placeholder", "{agent_scratchpad}")]
-    )
-    return ChatPromptTemplate.from_messages(combined)
-```
-
-:::note
-The `{` and `}` characters in the system prompt are escaped to `{{` and `}}` to prevent LangChain from interpreting them as template variables. Only `{agent_scratchpad}` remains as a true placeholder.
-:::
+There is no LangChain prompt template on this path, so `{` and `}` in prompts need no escaping.
 
 ## Prompt Design Patterns
 
@@ -236,8 +197,8 @@ Prompts use several patterns to inject runtime context:
 | Pattern          | Example                                 | Used For                                     |
 | ---------------- | --------------------------------------- | -------------------------------------------- |
 | Jinja2 variables | `{{ current_date }}`                    | Date, custom instructions, exercise metadata |
-| Chat history     | Converted to LangChain messages         | Prior conversation turns                     |
-| Tool results     | Injected by agent scratchpad            | Data retrieved during execution              |
+| Chat history     | Normalized Iris messages                | Prior conversation turns                     |
+| Tool results     | Tool messages added by the agent loop   | Data retrieved during execution              |
 | Guide prompts    | Separate template rendered and appended | Detailed behavioral instructions             |
 
 ### Custom Instructions

@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.callback_token import CallbackToken
 from iris.common.ingestion_errors import (
     SLIDE_VISION_FAILED,
     STALE_CONTENT_DELETE_FAILED,
@@ -686,7 +687,8 @@ def test_update_pipeline_forwards_stage_error_code_once():
             quality_flags=None,
         ),
         settings=SimpleNamespace(
-            authentication_token="run-1",
+            authentication_token=CallbackToken("run-1"),
+            callback_run_id="run-1",
             artemis_base_url="https://artemis.example",
             artemis_llm_selection=None,
         ),

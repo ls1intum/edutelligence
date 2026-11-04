@@ -218,6 +218,14 @@
   api_key:
   endpoint: "your_cohere-endpoint"
   cost_per_1k_requests: 2
+# Self-hosted reranker (vLLM /rerank endpoint, e.g. on Logos) for courses in local mode.
+- id: qwen3-reranker-8b
+  type: vllm_rerank
+  model: Qwen/Qwen3-Reranker-8B
+  base_url: https://your-logos-instance/v1
+  api_key: ""
+  rerank_floor_calibrated: true
+  cost_per_1k_requests: 0
 # Deployments without a reranking service can preserve vector-search order:
 # - id: passthrough-reranker
 #   type: passthrough_reranker

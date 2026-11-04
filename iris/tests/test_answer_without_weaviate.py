@@ -34,7 +34,7 @@ def test_the_lecture_and_faq_tools_are_off_while_weaviate_fails():
     db = _db_whose_queries_fail()
 
     assert should_allow_lecture_tool(db, 7) is False
-    assert should_allow_faq_tool(db, 7) is False
+    assert should_allow_faq_tool(db, 7, "https://artemis.example") is False
 
 
 def test_the_tools_still_follow_the_index_while_weaviate_answers():
@@ -45,7 +45,7 @@ def test_the_tools_still_follow_the_index_while_weaviate_answers():
     db.faqs.query.fetch_objects.return_value = SimpleNamespace(objects=[])
 
     assert should_allow_lecture_tool(db, 7) is True
-    assert should_allow_faq_tool(db, 7) is False
+    assert should_allow_faq_tool(db, 7, "https://artemis.example") is False
 
 
 def test_an_unavailable_weaviate_is_degraded_and_iris_stays_healthy(monkeypatch):

@@ -4,6 +4,7 @@ and generic transcription failures surface as TRANSCRIPTION_FAILED."""
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, Mock, call, patch
 
+from iris.common.callback_token import CallbackToken
 from iris.domain.data.video_source_type import VideoSourceType
 from iris.pipeline.lecture_ingestion_update_pipeline import (
     LectureIngestionUpdatePipeline,
@@ -138,7 +139,8 @@ def test_metadata_baseline_is_captured_before_transcription_processing():
     dto = SimpleNamespace(
         lecture_unit=lecture_unit,
         settings=SimpleNamespace(
-            authentication_token="token",
+            authentication_token=CallbackToken("token"),
+            callback_run_id="token",
             artemis_base_url="https://artemis.example",
         ),
     )
