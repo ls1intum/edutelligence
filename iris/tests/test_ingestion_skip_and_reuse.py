@@ -191,7 +191,7 @@ def test_unit_pipeline_reuses_stored_summary_when_content_is_unchanged():
     segment_pipeline_cls.assert_not_called()
     summary_pipeline_cls.assert_not_called()
     embed.assert_not_called()
-    assert tokens == []
+    assert isinstance(tokens, list) and not tokens
     inserted = pipeline.lecture_unit_collection.data.insert.call_args.kwargs
     assert (
         inserted["properties"][LectureUnitSchema.LECTURE_UNIT_SUMMARY.value]
