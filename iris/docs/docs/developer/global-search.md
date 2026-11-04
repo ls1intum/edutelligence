@@ -50,13 +50,13 @@ All fields except `query` and `settings` are optional, and every field added lat
 
 Iris has no user or course model of its own. Artemis resolves the student's permissions into an `AccessContext` and Iris applies it as an opaque filter on every retriever call:
 
-| Field                                                | Meaning                                                                                      |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `courseIds`                                          | Every course the user can access.                                                            |
-| `editorCourseIds`, `taCourseIds`, `studentCourseIds` | The same courses, grouped by the user's role in them.                                        |
-| `staffCourseIds`                                     | Editor and tutor courses together; staff see unreleased lecture units.                       |
-| `now`                                                | The Artemis request time. Release dates are compared against it, not against the Iris clock. |
-| `unrestricted`                                       | True for administrators: no course ceiling and no release gate.                              |
+| Field                                                | Meaning                                                                                       |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `courseIds`                                          | Every course the user can access.                                                             |
+| `editorCourseIds`, `taCourseIds`, `studentCourseIds` | The same courses, grouped by the user's role in them.                                         |
+| `staffCourseIds`                                     | Editor (including instructor) and tutor courses together; staff see unreleased lecture units. |
+| `now`                                                | The Artemis request time. Release dates are compared against it, not against the Iris clock.  |
+| `unrestricted`                                       | True for administrators: no course ceiling and no release gate.                               |
 
 The retriever applies the context in three steps:
 
