@@ -19,7 +19,7 @@ User=user # TODO: change to your user
 Group=docker
 WorkingDirectory=/home/user/Athena # TODO: change to actual path
 EnvironmentFile=/home/user/Athena/.env # TODO: potentially change to actual path
-ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml -f docker-compose.playground.prod.yml -f docker-compose.cofee.yml up --pull always -d
+ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml -f docker-compose.playground.prod.yml -f docker-compose.cofee.yml up --pull always -d --remove-orphans
 ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml -f docker-compose.playground.prod.yml -f docker-compose.cofee.yml stop
 
 [Install]

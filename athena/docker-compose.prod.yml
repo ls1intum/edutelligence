@@ -13,6 +13,18 @@ services:
       - ATHENA_DOMAIN=${ATHENA_DOMAIN:-localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
+      - type: bind
+        source: ${ATHENA_TLS_CERT_FILE:?Set ATHENA_TLS_CERT_FILE to the host fullchain PEM}
+        target: /etc/caddy/fullchain.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ATHENA_TLS_KEY_FILE:?Set ATHENA_TLS_KEY_FILE to the host private key PEM}
+        target: /etc/caddy/key.pem
+        read_only: true
+        bind:
+          create_host_path: false
 
   assessment_module_manager:
     hostname: assessment-module-manager
@@ -70,22 +82,6 @@ services:
     depends_on:
       - postgres
     image: ls1tum/athena_module_programming_themisml:${ATHENA_TAG:-develop}
-
-  module_programming_apted:
-    hostname: module-programming-apted
-    env_file:
-      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_apted.env
-    depends_on:
-      - postgres
-    image: ls1tum/athena_module_programming_apted:${ATHENA_TAG:-develop}
-
-  module_programming_winnowing:
-    hostname: module-programming-winnowing
-    env_file:
-      - ${ATHENA_ENV_DIR:-./env_example}/module_programming_winnowing.env
-    depends_on:
-      - postgres
-    image: ls1tum/athena_module_programming_winnowing:${ATHENA_TAG:-develop}
 
   module_modeling_llm:
     hostname: module-modeling-llm

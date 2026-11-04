@@ -1,9 +1,10 @@
+import faulthandler
+import signal
 import threading
 import time
 from contextlib import asynccontextmanager
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -19,14 +20,15 @@ from iris.pipeline.shared.global_search_intent_classifier import (
     warm_up as warm_up_intent_classifier,
 )
 from iris.tracing import init_langfuse, shutdown_langfuse
+from iris.watchdog import watchdog
 from iris.web.routers.faq_census import router as faq_census_router
 from iris.web.routers.health.health_endpoint import router as health_router
 from iris.web.routers.ingestion_census import router as ingestion_census_router
 from iris.web.routers.ingestion_status import router as ingestion_status_router
-from iris.web.routers.memiris import router as memiris_router
 from iris.web.routers.pipelines import router as pipelines_router
 from iris.web.routers.search import router as search_router
 from iris.web.routers.webhooks import router as webhooks_router
+from iris.web.validation_errors import validation_exception_handler
 
 # Initialize logging first
 setup_logging()
@@ -38,21 +40,10 @@ settings.set_env_vars()
 sentry.init()
 init_langfuse()
 
-scheduler = BackgroundScheduler()
-
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Import here to avoid circular imports
-    from iris.common.memiris_setup import (  # noqa: E402 pylint: disable=import-outside-toplevel
-        memory_sleep_task,
-    )
-
     threading.Thread(target=warm_up_intent_classifier, daemon=True).start()
-
-    scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
-    scheduler.start()
-    logger.info("Scheduler started")
 
     # Pull-based ingestion worker: claims jobs from Artemis and heartbeats its
     # running jobs. Import here to keep the pipeline stack out of module load.
@@ -61,12 +52,14 @@ async def lifespan(_: FastAPI):
     )
 
     ingestion_worker.start()
+    if settings.watchdog_enabled:
+        watchdog.start()
+    # `docker kill -s USR1 pyris-app` writes all thread stacks to the log.
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     yield
 
     ingestion_worker.stop()
     shutdown_langfuse()
-    scheduler.shutdown()
-    logger.info("Scheduler stopped")
 
 
 app = FastAPI(default_response_class=JSONResponse, lifespan=lifespan)
@@ -94,14 +87,7 @@ def custom_openapi():
 app.openapi = custom_openapi  # type: ignore[assignment]
 
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    exc_str = f"{exc}".replace("\n", " ").replace("   ", " ")
-    logger.error("Validation error | path=%s | error=%s", request.url.path, exc_str)
-    content = {"status_code": 10422, "message": exc_str, "data": None}
-    return JSONResponse(
-        content=content, status_code=status.HTTP_422_UNPROCESSABLE_ENTITY
-    )
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 
 # Paths to exclude from request logging (health checks are too noisy)
@@ -165,7 +151,6 @@ app.include_router(webhooks_router)
 app.include_router(ingestion_status_router)
 app.include_router(ingestion_census_router)
 app.include_router(faq_census_router)
-app.include_router(memiris_router)
 app.include_router(search_router)
 
 # Initialize the LLM manager and validate configuration

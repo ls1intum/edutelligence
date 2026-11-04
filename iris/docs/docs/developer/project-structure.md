@@ -55,10 +55,9 @@ src/iris/
 common/
 ├── logging_config.py          # Structured logging with request correlation IDs
 ├── pyris_message.py           # PyrisMessage and IrisMessageRole (shared message format)
-├── message_converters.py      # Convert between Iris and LangChain message formats
+├── message_converters.py      # Normalize history messages; convert to LangChain for side pipelines
 ├── pipeline_enum.py           # PipelineEnum for token tracking
 ├── token_usage_dto.py         # TokenUsageDTO for tracking LLM costs
-├── memiris_setup.py           # Memiris (memory system) integration utilities
 ├── singleton.py               # Singleton metaclass
 ├── mastery_utils.py           # Competency mastery calculations
 └── custom_exceptions.py       # Custom exception types
@@ -86,7 +85,7 @@ domain/
 ├── ingestion/                             # Ingestion pipeline DTOs
 ├── retrieval/                             # Retrieval result DTOs
 ├── status/                                # Stage/status DTOs
-│   ├── chat_status_update_dto.py          # Chat result, suggestions, memories, activities
+│   ├── chat_status_update_dto.py          # Chat result, suggestions, activities
 │   ├── suggested_context_dto.py           # Context switch requested by the agent
 │   ├── command_dto.py                     # Generic client-command envelope (type + parameters)
 │   ├── point_out_command_dto.py           # Point-out command and its parameters
@@ -125,10 +124,12 @@ pipeline/
 ├── session_title_generation_pipeline.py   # Generate chat session titles
 ├── shared/                                # Shared pipeline utilities
 │   ├── citation_pipeline.py               # Citation generation sub-pipeline
+│   ├── citation_sources.py                # Source ids the agent cites and the cite blocks they become
 │   ├── global_search_intent_classifier.py # Decides whether a search query gets an answer
 │   ├── entity_card_renderer.py            # Renders Artemis entity candidates for the answer
-│   └── utils.py                           # Tool generation, date formatting
+│   └── utils.py                           # Date formatting and other helpers
 └── prompts/                               # Prompt templates
+    ├── environment.py                     # Shared Jinja environment (no HTML escaping, as_data filter)
     ├── templates/                         # Jinja2 templates (.j2 files)
     └── *.py, *.txt                        # Python prompt builders and text prompts
 ```
@@ -174,6 +175,13 @@ Abstractions over different LLM providers.
 llm/
 ├── llm_manager.py                         # Singleton that loads models from YAML config
 ├── completion_arguments.py                # CompletionArguments (temperature, etc.)
+├── iris_chat_model.py                     # IrisChatModel: tool calls and structured output for pipelines
+├── structured_output.py                   # Strict JSON schemas from Pydantic models, validation
+├── retry.py                               # Retry policy for provider calls (backoff, retry-after)
+├── errors.py                              # IncompleteModelResponse
+├── agent/                                 # Native agent loop
+│   ├── loop.py                            # AgentLoop: model, tools, step limit
+│   └── tools.py                           # AgentTool: tool schemas from typed functions
 ├── request_handler/                       # Request routing
 │   ├── model_version_request_handler.py   # Select model by version string
 │   ├── rerank_request_handler.py          # Cohere reranking
@@ -186,7 +194,7 @@ llm/
 │   ├── openai_dalle.py                    # DALL-E image generation
 │   ├── ollama.py                          # Ollama (local models)
 │   └── cohere_client.py                   # Cohere reranker client
-└── langchain/                             # LangChain adapters
+└── langchain/                             # LangChain adapter for side pipelines (no agent use)
     └── iris_langchain_chat_model.py       # IrisLangchainChatModel wrapper
 ```
 
@@ -229,7 +237,6 @@ web/
 │   ├── ingestion_census.py                # Per-course lecture ingestion census
 │   ├── faq_census.py                      # FAQ ingestion census
 │   ├── search.py                          # Lecture content search for global search
-│   ├── memiris.py                         # Memory management endpoints
 │   └── health/                            # Health check endpoint
 ├── status/
 │   ├── status_update.py                   # Status callback implementations

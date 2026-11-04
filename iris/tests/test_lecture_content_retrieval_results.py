@@ -90,8 +90,6 @@ def _retrieval_tool(transcription, storage=None, segment=None):
         course_id=1,
         base_url="http://example.com",
         callback=None,
-        query_text="query",
-        history=[],
         lecture_content_storage={} if storage is None else storage,
     )
 
@@ -125,7 +123,7 @@ def test_transcription_page_is_the_printed_number_not_a_point_out_id():
     slide, not its index in the deck. It is worth naming to the student, so it appears as "Page: N",
     but offering it as a point-out id would navigate to whichever slide sits at that index instead.
     """
-    transcription_section = _retrieval_tool(_transcription())().split(
+    transcription_section = _retrieval_tool(_transcription())("query").split(
         "Lecture transcription content:"
     )[1]
 
@@ -141,9 +139,9 @@ def test_unit_segment_page_is_the_printed_number_not_a_point_out_id():
     Pointing runs off the page chunks and the transcriptions instead; the printed number stays,
     since that is what ties a summary back to the slide and to the passage covering it.
     """
-    segment_section = _retrieval_tool(
-        _transcription(), segment=_unit_segment()
-    )().split("Lecture segment content:")[1]
+    segment_section = _retrieval_tool(_transcription(), segment=_unit_segment())(
+        "query"
+    ).split("Lecture segment content:")[1]
 
     assert "Page: 6" in segment_section
     assert "point-out id" not in segment_section
@@ -173,7 +171,7 @@ def test_a_fractional_segment_start_can_still_be_pointed_out():
     """
     transcription = _transcription(start_time=42.4, end_time=52.0)
     storage = {}
-    results = _retrieval_tool(transcription, storage)()
+    results = _retrieval_tool(transcription, storage)("query")
     displayed = re.search(r"Video timestamp: ([0-9.]+)s", results)
     assert displayed, f"no video timestamp rendered in: {results}"
     timestamp = float(displayed.group(1))

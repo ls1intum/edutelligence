@@ -11,7 +11,7 @@ from functools import wraps
 from typing import Callable, Optional
 
 from iris.common.logging_config import get_logger
-from iris.common.reply_language import previous_reply_language
+from iris.common.reply_language import course_language_name, previous_reply_language
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.variant.variant import Variant
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
@@ -208,11 +208,25 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         course_id,
         base_url,
         state.callback,
-        state.query_text,
-        state.message_history,
         state.lecture_content_storage,
         scope_supplier=lambda: _resolve_lecture_scope(state),
+        citation_sources=getattr(state, "citation_sources", None),
+        material_language=_material_language(lecture_retriever, course_id, base_url),
     )
+
+
+def _material_language(lecture_retriever, course_id, base_url) -> Optional[str]:
+    """Name of the language of the course's lecture material, so the agent searches in it.
+
+    One Weaviate query for a single property of one lecture unit. Without an answer
+    the tool asks for the material's language without naming it.
+    """
+    try:
+        stored = lecture_retriever.course_material_language(course_id, base_url or None)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.warning("Lecture material language unknown: %s", e)
+        return None
+    return course_language_name(stored)
 
 
 def provide_lecture_list(state: State) -> Optional[Callable]:
@@ -274,8 +288,6 @@ def provide_current_view_content(state: State) -> Optional[Callable]:
 
 
 def provide_faq_retrieval(state: State) -> Optional[Callable]:
-    if not state.dto.course.name:
-        return None
     if not state.allow_faq_tool:
         return None
     course_id = state.dto.course.id
@@ -284,33 +296,9 @@ def provide_faq_retrieval(state: State) -> Optional[Callable]:
     return create_tool_faq_content_retrieval(
         faq_retriever,
         course_id,
-        state.dto.course.name,
-        state.dto.settings.artemis_base_url if state.dto.settings else "",
+        state.dto.settings.artemis_base_url if state.dto.settings else None,
         state.callback,
-        state.query_text,
-        state.message_history,
-        state.faq_storage,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Memiris providers
-# ---------------------------------------------------------------------------
-
-
-def provide_memory_search(state: State) -> Optional[Callable]:
-    if not state.allow_memiris_tool:
-        return None
-    return state.memiris_wrapper.create_tool_memory_search(
-        state.accessed_memory_storage
-    )
-
-
-def provide_find_similar_memories(state: State) -> Optional[Callable]:
-    if not state.allow_memiris_tool:
-        return None
-    return state.memiris_wrapper.create_tool_find_similar_memories(
-        state.accessed_memory_storage
+        citation_sources=getattr(state, "citation_sources", None),
     )
 
 
@@ -326,9 +314,8 @@ def provide_switch_chat_context(state: State) -> Optional[Callable]:
         if suggested_context != previous:
             # Content retrieved so far belongs to the previous effective context,
             # including a switch target that was cancelled again. Left in place, the
-            # citation pipeline could cite it in the answer about the new context.
-            # The current view needs no reset: citations skip it while a switch is
-            # pending and use it again once the switch is cancelled.
+            # point-out tool could move the student to a position of that context.
+            # Citations are not affected: the agent cites what it actually used.
             state.lecture_content_storage.pop("content", None)
 
     return create_tool_switch_chat_context(state.dto, record_switch)
@@ -363,6 +350,10 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
         )
         return lecture_content
 
+    def track_usage(usage) -> None:
+        # Read when the tool runs: the run's usage list is bound when the run starts.
+        state.tokens.append(usage)
+
     return create_tool_generate_mcq_questions(
         state.mcq_pipeline,
         state.dto.chat_history,
@@ -370,6 +361,7 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
         state.mcq_result_storage,
         previous_reply_language(state.dto.chat_history, state.dto.user.lang_key),
         lecture_content_supplier=lecture_content_supplier,
+        track_usage=track_usage,
     )
 
 
@@ -392,8 +384,6 @@ CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_feedbacks,
     provide_repository_files,
     provide_file_lookup,
-    provide_memory_search,
-    provide_find_similar_memories,
     provide_mcq_generation,
     provide_switch_chat_context,
 ]

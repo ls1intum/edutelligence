@@ -81,7 +81,7 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
 
 - **`chat_mode`** — The active context of the chat. Determines which entity fields Artemis populates.
 - **`chat_history`** — The conversation so far, as a list of `PyrisMessage` objects. May contain `CTXSWAP` and `COMMAND` markers.
-- **`user`** — The student's user information (ID, name, language preference, Memiris opt-in).
+- **`user`** — The student's user information (ID, name, language preference).
 - **`course`** — Always present, in every mode. Carries the course exercises, lectures, competencies and FAQs.
 - **`session_title`** — The current chat title (may be updated by the pipeline).
 - **`context`** — What the student is currently looking at on a lecture page (video, slides, combined view). A `model_validator` derives `lecture_unit_id` from a combined-view entry when the field is not set explicitly, which scopes RAG retrieval to that lecture unit. Artemis does not persist it: it describes one message, not the session. See [viewing context](./viewing-context.md).
@@ -154,12 +154,12 @@ The `domain/data/` directory contains models representing Artemis entities:
 
 ### Other Models
 
-| Model           | File                | Purpose                                   |
-| --------------- | ------------------- | ----------------------------------------- |
-| `UserDTO`       | `user_dto.py`       | `id`, name, `lang_key`, `memiris_enabled` |
-| `CompetencyDTO` | `competency_dto.py` | Course competency definition              |
-| `FaqDTO`        | `faq_dto.py`        | FAQ question-answer pair                  |
-| `FeatureDTO`    | `feature_dto.py`    | Variant feature description for Artemis   |
+| Model           | File                | Purpose                                 |
+| --------------- | ------------------- | --------------------------------------- |
+| `UserDTO`       | `user_dto.py`       | `id`, name, `lang_key`                  |
+| `CompetencyDTO` | `competency_dto.py` | Course competency definition            |
+| `FaqDTO`        | `faq_dto.py`        | FAQ question-answer pair                |
+| `FeatureDTO`    | `feature_dto.py`    | Variant feature description for Artemis |
 
 ## Data Flow
 
@@ -267,8 +267,6 @@ class ChatStatusUpdateDTO(StatusUpdateDTO):
     partial_result: Optional[str] = Field(alias="partialResult", default=None)
     session_title: Optional[str] = Field(alias="sessionTitle", default=None)
     suggestions: Optional[List[str]] = Field(default_factory=list)
-    accessed_memories: List[MemoryDTO] = Field(alias="accessedMemories", default=[])
-    created_memories: List[MemoryDTO] = Field(alias="createdMemories", default=[])
     activities: Optional[List[ActivityDTO]] = None
     suggested_context: Optional[SuggestedContextDTO] = Field(
         alias="suggestedContext", default=None

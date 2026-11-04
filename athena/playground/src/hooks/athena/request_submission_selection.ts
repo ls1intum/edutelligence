@@ -2,17 +2,17 @@ import type { Exercise } from "@/model/exercise";
 import type { Submission } from "@/model/submission";
 import type ModuleResponse from "@/model/module_response";
 
-import { UseMutationOptions, useMutation } from "react-query";
+import { UseMutationOptions, useMutation } from "@tanstack/react-query";
 import { AthenaError, useAthenaFetcher } from "@/hooks/athena_fetcher";
 
 /**
  * Request submission selection for an exercise from an Athena module.
  *
  * @example
- * const { data, isLoading, error, mutate } = useRequestSubmissionSelection();
+ * const { data, isPending, error, mutate } = useRequestSubmissionSelection();
  * mutate({ exercise, submissions });
  * 
- * @param options The react-query options.
+ * @param options The TanStack Query options.
  */
 export default function useRequestSubmissionSelection(
   options: Omit<

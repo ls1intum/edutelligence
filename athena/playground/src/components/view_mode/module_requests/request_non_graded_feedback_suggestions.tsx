@@ -26,7 +26,7 @@ export default function RequestNonGradedFeedbackSuggestions() {
 
   const {
     data: response,
-    isLoading,
+    isPending: isLoading,
     error,
     mutate,
     reset,

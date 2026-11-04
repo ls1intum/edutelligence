@@ -28,13 +28,13 @@ export function getUISchema(
 ) {
   const paths = toPathSchema(validator, schema, undefined, schema);
   function recursiveSetValueForPaths(property: string, paths: PathSchema) {
-    const properties = Object.keys(paths).filter((path) => path !== "$name");
-    if (properties.length === 0) {
+    const children = Object.entries(paths).filter(([path]) => path !== "$name");
+    if (children.length === 0) {
       return value(property);
     }
     return {
-      ...properties.reduce((acc, property) => {
-        acc[property] = recursiveSetValueForPaths(property, paths[property]!);
+      ...children.reduce((acc, [name, path]) => {
+        acc[name] = recursiveSetValueForPaths(name, path as PathSchema);
         return acc;
       }, {} as UIOptionsType),
     };

@@ -70,10 +70,6 @@ When you first open a course with Iris enabled, you will be prompted to choose y
   </iframe>
 </div>
 
-## Enabling Memory
-
-During the AI experience selection, you can also enable **Iris Memory**. When active, Iris remembers your learning preferences and past interactions across conversations to provide more personalized support over time. Learn more on the [Memory](./memory) page.
-
 ## Next Steps
 
 - [The Iris Chat](./chat) — where to open Iris, citations, and chat history

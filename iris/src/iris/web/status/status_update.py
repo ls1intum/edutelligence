@@ -4,10 +4,13 @@ from threading import Lock
 from typing import Any, Optional
 
 import requests
-from memiris import Memory
-from memiris.api.memory_dto import MemoryDTO
 from sentry_sdk import capture_exception, capture_message
 
+from iris.common.callback_token import (
+    CallbackToken,
+    hash_run_id,
+    register_legacy_run_token,
+)
 from iris.common.logging_config import get_logger
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_status_update_dto import (
@@ -93,9 +96,23 @@ class StatusCallback:
                 )
         return False
 
-    def __init__(self, url: str, run_id: str, status: StatusUpdateDTO):
+    def __init__(
+        self,
+        url: str,
+        run_id: str,
+        status: StatusUpdateDTO,
+        *,
+        auth_token: CallbackToken,
+    ):
         self.url = url
+        # Identifies the run in logs and error reports. An Artemis that sends no run id uses the
+        # token as run id; its hash stands in for it here.
         self.run_id = run_id
+        if run_id == auth_token.reveal():
+            register_legacy_run_token(run_id)
+            self.run_id = hash_run_id(run_id)
+        # The credential for this run's callbacks; only ever sent as the Authorization header.
+        self._auth_token = auth_token
         self.status = status
         self._terminal_sent = False
         self._running_update_executor: Optional[TracedThreadPoolExecutor] = None
@@ -114,7 +131,7 @@ class StatusCallback:
             self.url,
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.run_id}",
+                "Authorization": self._auth_token.authorization_header(),
             },
             json=payload,
             timeout=timeout,
@@ -332,7 +349,7 @@ class StatusCallback:
                 command_url,
                 headers={
                     "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.run_id}",
+                    "Authorization": self._auth_token.authorization_header(),
                 },
                 json=command.model_dump(by_alias=True, exclude_none=True),
                 timeout=COMMAND_TIMEOUT_SECONDS,
@@ -363,12 +380,17 @@ class ChatRunCallback(StatusCallback):
         run_id: str,
         base_url: str,
         initial_state_unused_removed=None,
+        *,
+        auth_token: CallbackToken,
         **_kwargs,
     ):
         del initial_state_unused_removed
         url = f"{base_url}/{self.api_url}/chat/runs/{run_id}/status"
         super().__init__(
-            url, run_id, ChatStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
+            url,
+            run_id,
+            ChatStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+            auth_token=auth_token,
         )
         self._undelivered_result_fields: Optional[dict[str, Any]] = None
         # Usage already handed to Artemis. Callers pass their whole running token list on
@@ -388,7 +410,6 @@ class ChatRunCallback(StatusCallback):
         self,
         final_result,
         tokens=None,
-        accessed_memories=None,
         activities=None,
         activity_seq=None,
         suggested_context=None,
@@ -398,8 +419,6 @@ class ChatRunCallback(StatusCallback):
             "final": True,
             "tokens": tokens or [],
         }
-        if accessed_memories is not None:
-            fields["accessed_memories"] = self._memory_dtos(accessed_memories)
         if activities is not None:
             fields["activities"] = activities
         if activity_seq is not None:
@@ -445,7 +464,6 @@ class ChatRunCallback(StatusCallback):
     def finish(
         self,
         session_title=None,
-        created_memories=None,
         tokens=None,
         activities=None,
         activity_seq=None,
@@ -454,8 +472,6 @@ class ChatRunCallback(StatusCallback):
         fields: dict[str, Any] = {}
         if session_title is not None:
             fields["session_title"] = session_title
-        if created_memories is not None:
-            fields["created_memories"] = self._memory_dtos(created_memories)
         if tokens is not None:
             fields["tokens"] = tokens
         if activities is not None:
@@ -562,10 +578,6 @@ class ChatRunCallback(StatusCallback):
         return {**self._undelivered_result_fields, **fields}, True
 
     @staticmethod
-    def _memory_dtos(memories: list[Memory]) -> list[MemoryDTO]:
-        return [MemoryDTO.from_memory(memory) for memory in memories]
-
-    @staticmethod
     def _payload(
         run_state: RunStateEnum,
         error: Optional[StatusErrorDTO] = None,
@@ -581,82 +593,91 @@ class ChatRunCallback(StatusCallback):
 class CompetencyExtractionCallback(StatusCallback):
     """Status callback for competency extraction pipelines."""
 
-    def __init__(self, run_id: str, base_url: str):
+    def __init__(self, run_id: str, base_url: str, *, auth_token: CallbackToken):
         url = f"{base_url}/{self.api_url}/competency-extraction/runs/{run_id}/status"
         super().__init__(
             url,
             run_id,
             CompetencyExtractionStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+            auth_token=auth_token,
         )
 
 
 class RewritingCallback(StatusCallback):
     """Status callback for rewriting pipelines."""
 
-    def __init__(self, run_id: str, base_url: str):
+    def __init__(self, run_id: str, base_url: str, *, auth_token: CallbackToken):
         url = f"{base_url}/{self.api_url}/rewriting/runs/{run_id}/status"
         super().__init__(
-            url, run_id, RewritingStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
+            url,
+            run_id,
+            RewritingStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+            auth_token=auth_token,
         )
 
 
 class InconsistencyCheckCallback(StatusCallback):
     """Status callback for inconsistency check pipelines."""
 
-    def __init__(self, run_id: str, base_url: str):
+    def __init__(self, run_id: str, base_url: str, *, auth_token: CallbackToken):
         url = f"{base_url}/{self.api_url}/inconsistency-check/runs/{run_id}/status"
         super().__init__(
             url,
             run_id,
             InconsistencyCheckStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+            auth_token=auth_token,
         )
 
 
 class TutorSuggestionCallback(StatusCallback):
     """Status callback for tutor suggestion pipelines."""
 
-    def __init__(self, run_id: str, base_url: str):
+    def __init__(self, run_id: str, base_url: str, *, auth_token: CallbackToken):
         url = f"{base_url}/{self.api_url}/tutor-suggestion/runs/{run_id}/status"
         super().__init__(
             url,
             run_id,
             TutorSuggestionStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+            auth_token=auth_token,
         )
 
 
 class GlobalSearchCallback(StatusCallback):
     """Status callback for the global search pipeline."""
 
-    def __init__(self, run_id: str, base_url: str):
+    def __init__(self, run_id: str, base_url: str, *, auth_token: CallbackToken):
         url = f"{base_url}/{self.api_url}/global-search/runs/{run_id}/status"
         super().__init__(
             url,
             run_id,
             GlobalSearchStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+            auth_token=auth_token,
         )
 
 
 class AutonomousTutorCallback(StatusCallback):
     """Status callback for autonomous tutor pipeline."""
 
-    def __init__(self, run_id: str, base_url: str):
+    def __init__(self, run_id: str, base_url: str, *, auth_token: CallbackToken):
         url = f"{base_url}/{self.api_url}/autonomous-tutor/runs/{run_id}/status"
         super().__init__(
             url,
             run_id,
             AutonomousTutorPipelineStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+            auth_token=auth_token,
         )
 
 
 class StruggleInterventionCallback(StatusCallback):
     """Status callback for the proactive struggle-intervention pipeline."""
 
-    def __init__(self, run_id: str, base_url: str):
+    def __init__(self, run_id: str, base_url: str, *, auth_token: CallbackToken):
         url = f"{base_url}/{self.api_url}/struggle-intervention/runs/{run_id}/status"
         super().__init__(
             url,
             run_id,
             StruggleInterventionStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+            auth_token=auth_token,
         )
         self._trailing_finish_seen = False
 

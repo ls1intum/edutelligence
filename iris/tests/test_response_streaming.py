@@ -9,6 +9,7 @@ import pytest
 import requests
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.callback_token import CallbackToken  # noqa: E402
 from iris.domain.pipeline_execution_settings_dto import (  # noqa: E402
     PipelineExecutionSettingsDTO,
 )
@@ -17,6 +18,7 @@ from iris.llm import CompletionArguments  # noqa: E402
 from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
+from iris.pipeline.shared.citation_sources import citation_free_draft  # noqa: E402
 from iris.web.status.partial_result_sender import (  # noqa: E402
     PARTIAL_POST_TIMEOUT_SECONDS,
     STOP_DRAIN_TIMEOUT_SECONDS,
@@ -593,7 +595,7 @@ def test_partial_result_sender_clears_draft_on_reset_and_uses_run_state():
     with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
-            "run-1",
+            CallbackToken("run-1"),
             interval_seconds=0.01,
         )
         sender.start()
@@ -659,7 +661,7 @@ def test_stop_waits_for_in_flight_partial_post_to_drain():
     with patch("iris.web.status.partial_result_sender.requests.post", slow_post):
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
-            "run-1",
+            CallbackToken("run-1"),
             interval_seconds=0.01,
         )
         sender.start()
@@ -687,7 +689,7 @@ def test_partial_result_sender_stops_permanently_on_404():
     with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
-            "run-1",
+            CallbackToken("run-1"),
             interval_seconds=0.01,
         )
         sender.start()
@@ -720,7 +722,7 @@ def test_reset_during_in_flight_post_still_clears_draft():
     with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
         sender = PartialResultSender(
             "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
-            "run-1",
+            CallbackToken("run-1"),
             interval_seconds=0.01,
         )
         sender.start()
@@ -745,12 +747,14 @@ def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
 
     if stream_response_marker == "absent":
         settings = Settings(
-            authentication_token="run-1",
+            authentication_token=CallbackToken("run-1"),
+            callback_run_id="run-1",
             artemis_base_url="https://artemis.example",
         )
     else:
         settings = Settings(
-            authentication_token="run-1",
+            authentication_token=CallbackToken("run-1"),
+            callback_run_id="run-1",
             artemis_base_url="https://artemis.example",
             stream_response=stream_response_marker,
         )
@@ -764,7 +768,7 @@ def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
 
     return SimpleNamespace(
         chat_history=[],
-        user=SimpleNamespace(id=1, lang_key="en", memiris_enabled=False),
+        user=SimpleNamespace(id=1, lang_key="en"),
         course=SimpleNamespace(
             id=7,
             name="Test Course",
@@ -849,10 +853,11 @@ def _run_stubbed_pipeline_details(
     class FakeSender:
         """Stands in for PartialResultSender to record wiring calls."""
 
-        def __init__(self, url, run_id, interval_seconds=0.35):
+        def __init__(self, url, auth_token, interval_seconds=0.35, text_transform=None):
             self.url = url
-            self.run_id = run_id
+            self.auth_token = auth_token
             self.interval_seconds = interval_seconds
+            self.text_transform = text_transform
             self.deltas = []
             sender_instances.append(self)
 
@@ -882,13 +887,12 @@ def _run_stubbed_pipeline_details(
 
     with (
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
-        patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
         patch(
             "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
             return_value=None,
         ),
-        patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel", FakeLlm),
+        patch("iris.pipeline.abstract_agent_pipeline.IrisChatModel", FakeLlm),
         patch("iris.pipeline.abstract_agent_pipeline.PartialResultSender", FakeSender),
     ):
         pipeline(_make_dto(stream_response_marker, chat_mode), variant, callback)
@@ -912,7 +916,12 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     assert len(sender_instances) == 1
     sender = sender_instances[0]
     assert sender.url.endswith("/chat/runs/run-1/status")
-    assert sender.run_id == "run-1"
+    assert sender.auth_token == CallbackToken("run-1")
+    # Chat drafts carry no citations: markers are removed before a partial is posted.
+    assert sender.text_transform("A. [src:1] B.") == citation_free_draft(
+        "A. [src:1] B."
+    )
+    assert sender.text_transform("Quiz: [MCQ_RESULT]") == "Quiz: "
     created_args[0].stream_handler("Hello")
     assert sender.deltas == ["Hello"]
     assert events.index("sender.start") < events.index("sender.stop")
@@ -1055,3 +1064,14 @@ def test_exercise_streaming_suppresses_ok_sentinel_deltas():
         delta for sender in details.sender_instances for delta in sender.deltas
     ] == []
     assert details.callback.send_result.call_args_list[0].args[0] == "agent answer"
+
+
+def test_chat_drafts_hide_the_quiz_placeholder_also_while_it_is_written():
+    # pylint: disable=import-outside-toplevel
+    from iris.pipeline.chat.chat_pipeline import _chat_draft
+
+    assert _chat_draft("Here is your quiz: [MCQ_RESULT] Good luck") == (
+        "Here is your quiz:  Good luck"
+    )
+    assert _chat_draft("Here is your quiz: [MCQ_RE") == "Here is your quiz: "
+    assert _chat_draft("A list [1, 2]") == "A list [1, 2]"

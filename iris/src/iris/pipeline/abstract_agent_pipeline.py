@@ -3,13 +3,8 @@ from abc import ABC, abstractmethod
 from threading import Thread
 from typing import Any, Callable, Generic, List, Optional, TypeVar
 
-from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate
-from memiris.domain.memory import Memory
-
 from iris.common.logging_config import get_logger
-from iris.common.memiris_setup import MemirisWrapper
-from iris.common.message_converters import convert_iris_message_to_langchain_message
+from iris.common.message_converters import normalize_history_message
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.reply_language import reply_language
@@ -17,13 +12,16 @@ from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.compaction_dto import CompactionDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.status.activity_dto import ActivityKind
 from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm import CompletionArguments, LlmRequestHandler
-from iris.llm.langchain import IrisLangchainChatModel
+from iris.llm.agent import AgentLoop, AgentTool
+from iris.llm.iris_chat_model import IrisChatModel, message_text
+from iris.llm.llm_manager import LlmManager
 from iris.pipeline import Pipeline
-from iris.pipeline.shared.activity_callback_handler import ActivityCallbackHandler
 from iris.pipeline.shared.activity_tracker import ActivityTracker
+from iris.pipeline.shared.citation_sources import CitationSourceRegistry
 from iris.pipeline.shared.compaction import (
     CompactionSettings,
     ToolOutputBudget,
@@ -38,15 +36,15 @@ from iris.pipeline.shared.compaction import (
     summary_message_text,
     without_compactions,
 )
-from iris.pipeline.shared.utils import generate_structured_tools_from_functions
+from iris.tools.activity_metadata import curate_detail, curate_result
 from iris.tracing import (
     TracingContext,
     clear_current_context,
-    get_langchain_config,
     observe,
     set_current_context,
 )
 from iris.vector_database.database import VectorDatabase
+from iris.watchdog import track_run, untrack_run
 from iris.web.status.partial_result_sender import PartialResultSender
 from iris.web.status.status_update import StatusCallback
 
@@ -66,14 +64,13 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     dto: DTO
     variant: VARIANT
     callback: StatusCallback
-    memiris_wrapper: Optional[MemirisWrapper]
-    memiris_memory_creation_thread: Optional[Thread]
-    memiris_memory_creation_storage: list[Memory]
     message_history: list[PyrisMessage]
     tools: list[Callable]
     result: str
     llm: Any | None
-    prompt: ChatPromptTemplate | None
+    # The messages of the agent's first request: system prompt, optional summary,
+    # history and the per-turn context. Built once per run.
+    prompt_messages: list[PyrisMessage]
     tokens: List[TokenUsageDTO]
     local: bool
     tracing_context: Optional[TracingContext]
@@ -82,11 +79,8 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     # Material at the student's current viewing position, shared between the current-position tool
     # that reads it out and the point-out tool that invalidates it after moving the student.
     current_view_storage: dict
-    faq_storage: dict
-    accessed_memory_storage: list
     allow_lecture_tool: bool
     allow_faq_tool: bool
-    allow_memiris_tool: bool
     # perf_counter() timestamp of the run start, for latency span logging
     start_time: float
     # Session title generated after the final result was already delivered;
@@ -99,6 +93,8 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     # Context switch requested by the agent via the switch_chat_context tool;
     # delivered to Artemis with the final result status update.
     pending_context_switch: Optional[SuggestedContextDTO]
+    # Sources the retrieval tools handed out ids for; None in pipelines without citations.
+    citation_sources: Optional[CitationSourceRegistry]
     partial_result_sender: Optional[PartialResultSender]
     activity_tracker: ActivityTracker
     system_prompt: str
@@ -109,11 +105,6 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     first_prompt_tokens: Optional[int]
     compaction_thread: Optional[Thread]
     compaction_holder: dict[str, Any]
-
-
-def _escape_template_braces(text: str) -> str:
-    """Escape braces so ChatPromptTemplate does not read them as variables."""
-    return text.replace("{", "{{").replace("}", "}}")
 
 
 def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
@@ -132,31 +123,56 @@ def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
     return filtered
 
 
-def _visible_content_text(content: Any) -> str:
-    """Extract visible LangChain message content without reasoning metadata."""
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ""
-
-    text_parts: list[str] = []
-    for item in content:
-        if isinstance(item, str):
-            text_parts.append(item)
-            continue
-        if isinstance(item, dict) and isinstance(item.get("text"), str):
-            text_parts.append(item["text"])
-    return "".join(text_parts)
+def _text_message(sender: IrisMessageRole, text: str) -> PyrisMessage:
+    return PyrisMessage(
+        sender=sender, contents=[TextMessageContentDTO(textContent=text)]
+    )
 
 
-def _intermediate_action_text(action: Any) -> str:
-    """Extract visible assistant content from a LangChain intermediate action."""
-    message_log = getattr(action, "message_log", None)
-    if not message_log:
-        return ""
+class TrackerToolActivity:
+    """Mirrors the agent loop's tool calls into the run's ActivityTracker."""
 
-    message = message_log[-1]
-    return _visible_content_text(getattr(message, "content", "")).strip()
+    def __init__(self, tracker: ActivityTracker):
+        self._tracker = tracker
+
+    def tool_started(self, name: str, arguments: dict) -> Optional[str]:
+        try:
+            return self._tracker.start(
+                ActivityKind.TOOL, name, detail=curate_detail(name, arguments)
+            )
+        except Exception:
+            logger.exception("Activity tracking failed during tool start")
+            return None
+
+    def tool_finished(self, handle: Optional[str], name: str, output: Any) -> None:
+        if handle is None:
+            return
+        try:
+            self._tracker.finish(handle, result=curate_result(name, output))
+        except Exception:
+            logger.exception("Activity tracking failed during tool end")
+
+    def tool_failed(self, handle: Optional[str], name: str) -> None:
+        del name
+        if handle is None:
+            return
+        try:
+            self._tracker.fail(handle)
+        except Exception:
+            logger.exception("Activity tracking failed during tool error")
+
+
+def _model_capabilities(model_id: str) -> tuple[bool, bool]:
+    """Whether the configured model takes strict tool schemas and tool_choice."""
+    try:
+        llm = LlmManager().get_llm_by_id(model_id)
+    except Exception:  # configuration not loadable, e.g. in unit tests
+        return False, True
+    if llm is None:
+        return False, True
+    strict_tools = getattr(llm, "effective_strict_tools", False)
+    supports_tool_choice = getattr(llm, "supports_tool_choice", True)
+    return bool(strict_tools), bool(supports_tool_choice)
 
 
 class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
@@ -180,29 +196,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     # ========================================
 
     @abstractmethod
-    def is_memiris_memory_creation_enabled(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT]
-    ) -> bool:
-        """Return True if background memory creation should be enabled for this run."""
-
-    def _create_memiris_wrapper(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT]
-    ) -> Optional[MemirisWrapper]:
-        """The memory wrapper of this run, or None while Weaviate is unavailable.
-
-        The memory repositories make sure their collections exist when they are created, which needs Weaviate.
-        Without it the run answers without memories instead of failing.
-        """
-        try:
-            return MemirisWrapper(state.db.client, self.get_memiris_tenant(state.dto))
-        except Exception:
-            logger.warning(
-                "Memories are unavailable, Weaviate could not be reached; answering without them",
-                exc_info=True,
-            )
-            return None
-
-    @abstractmethod
     def get_tools(
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> list[Callable]:
@@ -218,7 +211,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     def build_system_message(
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> str:
-        """Return a ChatPromptTemplate containing only messages before chat history."""
+        """Return the system prompt: the part of the prompt that stays the same for a session."""
 
     def build_turn_context_message(  # pylint: disable=unused-argument
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
@@ -245,14 +238,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         Compaction then runs for models with max_input_tokens in their config.
         """
         return False
-
-    @abstractmethod
-    def get_memiris_tenant(self, dto: DTO) -> str:
-        """Return the Memiris tenant identifier for the current user."""
-
-    @abstractmethod
-    def get_memiris_reference(self, dto: DTO):
-        """Return the reference to use for the Memiris learnings created in this pipeline."""
 
     # ========================================
     # === CAN override (optional methods) ===
@@ -322,12 +307,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         if getattr(state, "first_prompt_tokens", None) is None:
             state.first_prompt_tokens = usage.num_input_tokens
 
-    def get_agent_params(  # pylint: disable=unused-argument
-        self, state: AgentPipelineExecutionState[DTO, VARIANT]
-    ) -> dict[str, Any]:
-        """Return the parameter dict passed to the agent executor."""
-        return {}
-
     def get_text_of_latest_user_message(
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> str:
@@ -337,7 +316,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         Subclasses may override this to pull from domain-specific DTOs or
         to support non-text inputs.
 
-        Returns an empty string by default, which is safe for memory creation.
+        Returns an empty string when the latest message has no text.
         """
         latest_user = self.get_latest_user_message(state)
         if (
@@ -400,65 +379,55 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 return message
         return None
 
+    def get_max_agent_steps(  # pylint: disable=unused-argument
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> int:
+        """How many model calls with tools a run may make before it must answer."""
+        return 15
+
     def execute_agent(self, state: AgentPipelineExecutionState[DTO, VARIANT]) -> str:
         """
-        Default agent execution: uses the LLM from state, prompt, tools and runs the agent loop.
+        Default agent execution: runs the native agent loop with the run's model,
+        prompt messages and tools.
 
         Subclasses customize behavior by implementing get_tools, build_system_message,
-        get_agent_params, and using on_agent_step/post_agent_hook hooks.
+        build_turn_context_message, and the pre/post agent hooks.
         """
+        result = self._run_agent_loop(state)
+        return result or ""
 
-        params = self.get_agent_params(state)
-
-        # Create and run agent using the LLM from state
-        agent_executor, _ = self._create_agent_executor(
-            llm=state.llm,
-            prompt=state.prompt,
-            tool_functions=state.tools,
-        )
-        output = self._run_agent_iterations(
-            state=state, agent_executor=agent_executor, params=params
-        )
-        return output or ""
-
-    def assemble_prompt_with_history(
+    def build_prompt_messages(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
         system_prompt: str,
         turn_context: Optional[str] = None,
-    ) -> ChatPromptTemplate:
+    ) -> list[PyrisMessage]:
         """
-        Combine the prefix prompt with converted chat history and add the agent scratchpad.
+        Combine the system prompt with the normalized chat history.
 
-        The per-turn context goes after the history: only the latest request carries it,
-        so the next turn shares everything up to the latest user message.
+        Order: system prompt, the compaction summary (as a user message), the
+        history, and the per-turn context last. Only the latest request carries
+        the per-turn context, so the next turn shares everything up to the latest
+        user message with the provider's prompt cache.
         Subclasses can override to customize how history is injected.
         """
-        prefix_messages = [("system", _escape_template_braces(system_prompt))]
+        messages = [_text_message(IrisMessageRole.SYSTEM, system_prompt)]
         summary = getattr(state, "compaction_summary", None)
         if summary:
             # A user message, not a system message: the summary is built from student
             # messages and tool output, so it must not gain system authority.
-            prefix_messages.append(
-                (
-                    "human",
-                    _escape_template_braces(summary_message_text(summary)),
+            messages.append(
+                _text_message(
+                    IrisMessageRole.USER,
+                    summary_message_text(self.sanitize_history_text(summary)),
                 )
             )
-        history_lc_messages = [
-            convert_iris_message_to_langchain_message(message)
-            for message in state.message_history
-        ]
-        turn_context_messages = (
-            [("system", _escape_template_braces(turn_context))] if turn_context else []
+        messages.extend(
+            self._history_message(message) for message in state.message_history
         )
-        combined = (
-            prefix_messages
-            + history_lc_messages
-            + turn_context_messages
-            + [("placeholder", "{agent_scratchpad}")]
-        )
-        return ChatPromptTemplate.from_messages(combined)
+        if turn_context:
+            messages.append(_text_message(IrisMessageRole.SYSTEM, turn_context))
+        return messages
 
     def prepare_state(
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
@@ -487,58 +456,71 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         """
         return state.result
 
-    def on_agent_step(  # pylint: disable=unused-argument
-        self, state: AgentPipelineExecutionState[DTO, VARIANT], step: dict[str, Any]
+    def sanitize_history_text(self, text: str) -> str:
+        """
+        Optional hook to clean earlier assistant answers and the compaction summary
+        before they go back to the agent. Must be deterministic, so the cached
+        prompt prefix stays identical across turns.
+        """
+        return text
+
+    def sanitize_narration(  # pylint: disable=unused-argument
+        self, state: AgentPipelineExecutionState[DTO, VARIANT], text: str
+    ) -> str:
+        """
+        Optional hook to clean assistant text sent between tool calls; Artemis stores it.
+        """
+        return text
+
+    def observe_model_input(  # pylint: disable=unused-argument
+        self, state: AgentPipelineExecutionState[DTO, VARIANT], text: str
     ) -> None:
         """
-        Optional hook called for every iteration step produced by the agent executor.
-        Subclasses can override to implement token accounting, progress callbacks, etc.
+        Optional hook that sees the text of every message the agent sends to the model in
+        this run: the prompt messages and each tool result after output limits.
         """
-        # Default: no-op
         return
+
+    def partial_text_transform(  # pylint: disable=unused-argument
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> Optional[Callable[[str], str]]:
+        """
+        Optional hook that returns how a streamed draft is prepared before it is sent.
+        """
+        return None
 
     # ================================================
     # === MUST NOT override (private/final methods) ===
     # ================================================
 
-    def _create_agent_executor(
-        self,
-        llm: Any,
-        prompt: ChatPromptTemplate,
-        tool_functions: list[Callable],
-    ) -> tuple[AgentExecutor, list[Any]]:
-        """
-        Build a structured-tool calling agent executor from an LLM, prompt and tool functions.
+    def _history_message(self, message: PyrisMessage) -> PyrisMessage:
+        """A stored message as the model receives it, earlier answers cleaned."""
+        normalized = normalize_history_message(message)
+        if normalized.sender != IrisMessageRole.ASSISTANT:
+            return normalized
+        text = normalized.contents[0].text_content
+        sanitized = self.sanitize_history_text(text)
+        if sanitized == text:
+            return normalized
+        # A copy: the stored history (and a tool-call message's calls) stays as it is.
+        return normalized.model_copy(
+            update={"contents": [TextMessageContentDTO(textContent=sanitized)]}
+        )
 
-        Returns the executor and the structured tools used to initialize it.
-        """
-        tools = generate_structured_tools_from_functions(tool_functions)
-        agent = create_tool_calling_agent(llm=llm, tools=tools, prompt=prompt)
-        agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
-        return agent_executor, tools
-
-    def _run_agent_iterations(
-        self,
-        state: AgentPipelineExecutionState[DTO, VARIANT],
-        agent_executor: AgentExecutor,
-        params: dict[str, Any],
+    def _run_agent_loop(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> Optional[str]:
         """
-        Execute the agent in streaming iteration mode and return the last output string.
+        Run the native agent loop and return the final answer text.
 
-        Calls on_agent_step for each step to allow subclasses to track tokens or progress.
-        Integrates with LangFuse for tracing LangChain operations.
+        Visible text the model writes next to its tool calls is sent to the student
+        once, before the tools run. Each model call's usage is recorded right after
+        the call, and tool runs are mirrored into the activity tracker.
         """
-        # Get LangFuse callbacks (None if disabled)
-        config = get_langchain_config(state.tracing_context)
-        callbacks = config.get("callbacks") if config else None
-        callbacks = list(callbacks or [])
-
-        final_output: Optional[str] = None
         emitted_intermediate_texts: set[str] = set()
 
         def emit_narration(text: str) -> None:
-            text = text.strip()
+            text = self.sanitize_narration(state, text).strip()
             if not text or text in emitted_intermediate_texts:
                 return
             emitted_intermediate_texts.add(text)
@@ -552,55 +534,32 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                     "Exception while sending intermediate message", exc_info=exc
                 )
 
-        callbacks.append(
-            ActivityCallbackHandler(state.activity_tracker, narrate=emit_narration)
+        model_id = getattr(getattr(state.llm, "request_handler", None), "model_id", "")
+        strict_tools, supports_tool_choice = _model_capabilities(model_id)
+        loop = AgentLoop(
+            model=state.llm,
+            tools=[AgentTool.from_function(tool) for tool in state.tools],
+            max_steps=self.get_max_agent_steps(state),
+            strict_tools=strict_tools,
+            supports_tool_choice=supports_tool_choice,
+            on_narration=emit_narration,
+            on_tool_output=lambda text: self.observe_model_input(state, text),
+            on_model_call=lambda: self._track_llm_usage(state),
+            activity=TrackerToolActivity(state.activity_tracker),
         )
-
-        step_count = 0
-        for step in agent_executor.iter(params, callbacks=callbacks):
-            step_count += 1
-
-            # Log tool calls from intermediate steps. The real AgentExecutorIterator
-            # yields the SINGULAR "intermediate_step" key; tests historically used the
-            # plural form, so accept both.
-            intermediate_steps = (
-                step.get("intermediate_steps") or step.get("intermediate_step") or []
-            )
-            for action, result in intermediate_steps:
-                tool_name = getattr(action, "tool", "unknown")
-                emit_narration(_intermediate_action_text(action))
-
-                # Log tool call without the full input/output (just key info)
-                result_preview = (
-                    str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
-                )
-                logger.info(
-                    "Tool call | step=%d tool=%s | result_length=%d",
-                    step_count,
-                    tool_name,
-                    len(str(result)),
-                )
-                logger.debug(
-                    "Tool result preview | tool=%s | result=%s",
-                    tool_name,
-                    result_preview,
-                )
-
-            self._track_llm_usage(state)
-
-            # Allow subclasses to process each step
-            try:
-                self.on_agent_step(state, step)
-            except Exception as exc:
-                logger.exception("Exception in on_agent_step", exc_info=exc)
-            if step.get("output") is not None:
-                final_output = step["output"]
-                logger.info(
-                    "Agent finished | steps=%d output_length=%d",
-                    step_count,
-                    len(final_output) if final_output else 0,
-                )
-        return final_output
+        for message in state.prompt_messages:
+            for content in message.contents:
+                if isinstance(content, TextMessageContentDTO) and content.text_content:
+                    self.observe_model_input(state, content.text_content)
+        result = loop.run(state.prompt_messages)
+        logger.info(
+            "Agent finished | steps=%d tool_calls=%d output_length=%d%s",
+            result.steps,
+            result.tool_calls,
+            len(result.output),
+            " (step limit reached)" if result.hit_step_limit else "",
+        )
+        return result.output
 
     def _load_history(
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
@@ -650,31 +609,39 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             return None
 
         covers_through_message_id = messages[boundary - 1].id
+        # Quoted from the answer as the model reads it in the history, cleaned the same way.
         instruction = compaction_instruction(
-            last_covered_excerpt(messages[boundary - 1])
+            last_covered_excerpt(self._history_message(messages[boundary - 1]))
         )
         model_id = state.llm.request_handler.model_id
 
         def run() -> None:
+            llm = None
             try:
-                llm = IrisLangchainChatModel(
+                llm = IrisChatModel(
                     request_handler=LlmRequestHandler(model_id=model_id),
-                    completion_args=CompletionArguments(
-                        temperature=0.5, tool_choice="none"
-                    ),
+                    completion_args=CompletionArguments(temperature=0.5),
                 )
-                if state.tools and settings.send_tools:
-                    llm.bind_tools(
-                        generate_structured_tools_from_functions(state.tools)
-                    )
-                prompt = self.assemble_prompt_with_history(
+                strict_tools, supports_tool_choice = _model_capabilities(model_id)
+                # Same tools as the agent request, so the provider reads the prefix
+                # from its cache; tool_choice "none" forbids calls. A model that
+                # ignores tool_choice gets no tools at all.
+                tools = None
+                tool_choice = None
+                if state.tools and settings.send_tools and supports_tool_choice:
+                    tools = [
+                        AgentTool.from_function(tool).openai_schema(strict_tools)
+                        for tool in state.tools
+                    ]
+                    tool_choice = "none"
+                messages = self.build_prompt_messages(
                     state, state.system_prompt, turn_context=instruction
                 )
-                response = llm.invoke(prompt.format_messages(agent_scratchpad=[]))
+                response = llm.chat(messages, tools, tool_choice=tool_choice)
                 if llm.tokens is not None:
                     llm.tokens.pipeline = PipelineEnum.IRIS_CHAT_COMPACTION
                     holder["tokens"] = llm.tokens
-                summary = parse_summary(_visible_content_text(response.content))
+                summary = parse_summary(message_text(response))
                 if summary is None:
                     logger.warning("Compaction returned no summary; history kept")
                 else:
@@ -689,6 +656,14 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                     )
             except Exception as exc:
                 logger.exception("Compaction failed", exc_info=exc)
+                # A call that stopped early reported its usage; bill it.
+                if (
+                    llm is not None
+                    and llm.tokens is not None
+                    and "tokens" not in holder
+                ):
+                    llm.tokens.pipeline = PipelineEnum.IRIS_CHAT_COMPACTION
+                    holder["tokens"] = llm.tokens
 
         thread = Thread(target=run, name="iris-compaction", daemon=True)
         thread.start()
@@ -720,7 +695,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         return PartialResultSender(
             state.callback.url,
-            state.callback.run_id,
+            state.dto.settings.authentication_token,
+            text_transform=self.partial_text_transform(state),
         )
 
     def _start_partial_result_sender(
@@ -897,27 +873,23 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.db = VectorDatabase()
         state.variant = variant
         state.callback = callback
-        state.memiris_memory_creation_thread = None
-        state.memiris_memory_creation_storage = []
         state.message_history = []
         state.tools = []
         state.result = ""
         state.llm = None
-        state.prompt = None
+        state.prompt_messages = []
         state.local = local  # Store local flag in state
         state.query_text = ""
         state.lecture_content_storage = {}
         state.current_view_storage = {}
-        state.faq_storage = {}
-        state.accessed_memory_storage = []
         state.allow_lecture_tool = False
         state.allow_faq_tool = False
-        state.allow_memiris_tool = False
         state.start_time = start_time
         state.deferred_session_title = None
         state.answer_language = None
         state.deferred_session_title_delivered = False
         state.pending_context_switch = None
+        state.citation_sources = None
         state.partial_result_sender = None
         state.system_prompt = ""
         state.compaction_settings = None
@@ -929,7 +901,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             getattr(state.callback, "activity_snapshot", lambda _items, _seq: None)
         )
         state.tracing_context = self.create_tracing_context(dto, variant)
-        state.memiris_wrapper = self._create_memiris_wrapper(state)
 
         # Set up LangFuse tracing context for this thread
         set_current_context(state.tracing_context)
@@ -937,6 +908,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         state.callback.update()
 
+        track_run(callback)
         try:
             # 1. Select the model, then prepare history, user query, LLM, prompt and tools
             selected_version = state.variant.model("chat", local)
@@ -949,12 +921,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 state.compaction_settings = get_compaction_settings(selected_version)
 
             state.message_history = _filter_empty_messages(self._load_history(state))
-            user_query = self.get_text_of_latest_user_message(state)
 
             # Create LLM from variant's model selection (local/cloud)
             completion_args = CompletionArguments(temperature=0.5)
 
-            state.llm = IrisLangchainChatModel(
+            state.llm = IrisChatModel(
                 request_handler=LlmRequestHandler(model_id=selected_version),
                 completion_args=completion_args,
             )
@@ -967,7 +938,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 turn_context = self.build_turn_context_message(  # pylint: disable=assignment-from-none
                     state
                 )
-            state.prompt = self.assemble_prompt_with_history(
+            state.prompt_messages = self.build_prompt_messages(
                 state=state, system_prompt=system_message, turn_context=turn_context
             )
 
@@ -986,21 +957,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             else:
                 logger.info("Using cloud model with tool calling support")
 
-            # 4. Start memory creation if enabled
-            if (
-                state.memiris_wrapper is not None
-                and self.is_memiris_memory_creation_enabled(state)
-            ):
-                reference = self.get_memiris_reference(dto=state.dto)
-                state.memiris_memory_creation_thread = (
-                    state.memiris_wrapper.create_memories_in_separate_thread(
-                        user_query,
-                        reference,
-                        state.memiris_memory_creation_storage,
-                        use_local=state.local,
-                    )
-                )
-
             # 7.1. Run pre agent hook
             self.pre_agent_hook(state)
 
@@ -1014,7 +970,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 if state.partial_result_sender is not None:
                     state.partial_result_sender.stop()
 
-            # Runs next to the post agent hook and memory creation, off the answer's path.
+            # Runs next to the post agent hook, off the answer's path.
             state.compaction_thread = self._start_compaction(
                 state, state.compaction_holder
             )
@@ -1031,16 +987,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 else state.deferred_session_title
             )
 
-            # 8. Wait for compaction and memory creation to finish if enabled
+            # 8. Wait for compaction to finish if enabled
             finish_fields: dict[str, Any] = {}
             compaction = self._collect_compaction(state)
             if compaction is not None:
                 finish_fields["compaction"] = compaction
-            if state.memiris_memory_creation_thread:
-                state.memiris_memory_creation_thread.join()
-                finish_fields["created_memories"] = (
-                    state.memiris_memory_creation_storage
-                )
             state.callback.finish(
                 session_title=deferred_title,
                 tokens=state.tokens,
@@ -1055,5 +1006,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 len(state.tools),
             )
         finally:
+            untrack_run(callback)
             # Clean up tracing context to prevent memory leaks
             clear_current_context()

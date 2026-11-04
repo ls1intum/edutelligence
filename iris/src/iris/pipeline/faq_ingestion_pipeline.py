@@ -13,6 +13,7 @@ from ..domain.data.faq_dto import FaqDTO
 from ..domain.variant.variant import Variant
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..llm import (
+    EMERGENCY_MAX_TOKENS,
     CompletionArguments,
     LlmRequestHandler,
 )
@@ -64,7 +65,9 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         chat_model = variant.model("chat", local)
         self.llm_embedding = LlmRequestHandler(embedding_model)
         request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        completion_args = CompletionArguments(
+            temperature=0.2, max_tokens=EMERGENCY_MAX_TOKENS
+        )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )

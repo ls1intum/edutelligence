@@ -31,9 +31,9 @@ def create_tool_get_lecture_list(
         Get the list of lectures in the course, each with its lecture ID, its
         name and the names of its lecture units.
         Use this to find the ID of a lecture, for example before switching the
-        chat context to another lecture. Lecture content retrieval only returns
-        content of the currently active lecture and never returns lecture IDs,
-        so this is the only way to identify another lecture.
+        chat context to another lecture. In a lecture chat, lecture content
+        retrieval returns only content of the active lecture, so use this list to
+        find another lecture.
         The list covers every lecture of the course; lecture units that are not
         yet released to students are omitted.
 

@@ -1024,9 +1024,8 @@ def test_a_crashing_run_still_reports_the_usage_it_accrued():
 
     with (
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
-        patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
-        patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel"),
+        patch("iris.pipeline.abstract_agent_pipeline.IrisChatModel"),
     ):
         pipeline(dto, variant, callback)
 

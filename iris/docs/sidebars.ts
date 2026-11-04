@@ -16,7 +16,6 @@ const sidebars: SidebarsConfig = {
       id: "student/how-iris-helps",
       label: "How Iris Helps You Learn",
     },
-    { type: "doc", id: "student/memory", label: "Memory" },
     { type: "doc", id: "student/privacy", label: "Privacy & Data" },
     { type: "doc", id: "student/tips", label: "Tips for Effective Use" },
   ],

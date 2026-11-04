@@ -14,6 +14,7 @@ from langdetect import DetectorFactory
 from langdetect.detector_factory import PROFILES_DIRECTORY
 from langdetect.lang_detect_exception import LangDetectException
 
+from iris.common.language_codes import normalize_language
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 
@@ -101,9 +102,19 @@ _NON_PROSE = [
     re.compile(r"```.*?(```|$)", re.DOTALL),  # code blocks
     re.compile(r"`[^`]*`"),  # inline code
     re.compile(r"\[cite:[^\]]*\]"),  # citation markers
+    re.compile(r"\[src:\d+\]"),  # source markers written by the chat agent
     re.compile(r"\]\([^)]*\)"),  # link targets
     re.compile(r"https?://\S+"),
 ]
+
+
+def course_language_name(stored: Optional[str]) -> Optional[str]:
+    """Name of a stored course language ("de", "zh-cn", or a legacy name such as "Deutsch").
+
+    None when the value is missing or unknown.
+    """
+    code = normalize_language(stored)
+    return _LANGUAGE_NAMES.get(code) if code else None
 
 
 def language_name(user_language: Optional[str]) -> str:
