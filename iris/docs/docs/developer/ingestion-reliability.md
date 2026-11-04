@@ -24,7 +24,7 @@ Lecture ingestion is a queued batch workload, so Iris consumes it like a build a
 
 ### Upstream discovery
 
-Iris is not configured with the Artemis instances it serves. Every Artemis already sends an authenticated health check, and includes its own base URL in the `X-Artemis-Base-Url` header. The health endpoint registers that URL, together with the token of the request, as an upstream. An upstream that has not announced itself for five minutes is no longer claimed from, and is removed once it owns no running jobs. After a restart, Iris relearns its upstreams within one health-check interval; until then, new jobs simply wait in the Artemis queue. Current Artemis no longer pushes lecture jobs; `POST /api/v1/webhooks/lectures/ingest` remains for callers that still do, and runs the same pipeline.
+Iris is not configured with the Artemis instances it serves. Every Artemis already sends an authenticated health check, and includes its own base URL in the `X-Artemis-Base-Url` header. The health endpoint registers that URL, together with the token of the request, as an upstream. An upstream that has not announced itself for five minutes is no longer claimed from, and is removed once it owns no running jobs. After a restart, Iris relearns its upstreams within one health-check interval; until then, new jobs simply wait in the Artemis queue. Artemis does not push lecture jobs, so the worker is the only way they reach Iris.
 
 `ingestion_worker.allowed_upstream_hosts` restricts the hosts Iris accepts as upstreams. Only well-formed http(s) URLs are accepted, and the worker does not follow redirects, so an accepted upstream cannot redirect it to a host that the list would have rejected.
 
@@ -115,18 +115,17 @@ The response also carries `currentPipelineVersion` and a course-level `truncated
 
 ## Configuration
 
-| Setting                                         | Default | Effect                                                                                                       |
-| ----------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
-| `ingestion_worker.enabled`                      | `true`  | Claims jobs from announced upstreams. Off, this process ingests no lectures; jobs wait in the Artemis queue. |
-| `ingestion_worker.capacity`                     | `2`     | Jobs this process runs at the same time.                                                                     |
-| `ingestion_worker.poll_interval_seconds`        | `2.0`   | Interval between claims.                                                                                     |
-| `ingestion_worker.heartbeat_interval_seconds`   | `5.0`   | Interval between lease renewals.                                                                             |
-| `ingestion_worker.heartbeat_timeout_seconds`    | `10.0`  | Request timeout of a heartbeat, kept well below the Artemis lease.                                           |
-| `ingestion_worker.allowed_upstream_hosts`       | `[]`    | Hosts accepted as upstreams; empty accepts every announced host.                                             |
-| `lecture_ingestion.convergence_max_escalations` | `0`     | Full rewrites a run may attempt when generations do not converge.                                            |
-| `lecture_ingestion.census_confirm_concurrency`  | `16`    | Parallel object-store reads of the census.                                                                   |
+| Setting                                         | Default | Effect                                                             |
+| ----------------------------------------------- | ------- | ------------------------------------------------------------------ |
+| `ingestion_worker.capacity`                     | `2`     | Jobs this process runs at the same time.                           |
+| `ingestion_worker.poll_interval_seconds`        | `2.0`   | Interval between claims.                                           |
+| `ingestion_worker.heartbeat_interval_seconds`   | `5.0`   | Interval between lease renewals.                                   |
+| `ingestion_worker.heartbeat_timeout_seconds`    | `10.0`  | Request timeout of a heartbeat, kept well below the Artemis lease. |
+| `ingestion_worker.allowed_upstream_hosts`       | `[]`    | Hosts accepted as upstreams; empty accepts every announced host.   |
+| `lecture_ingestion.convergence_max_escalations` | `0`     | Full rewrites a run may attempt when generations do not converge.  |
+| `lecture_ingestion.census_confirm_concurrency`  | `16`    | Parallel object-store reads of the census.                         |
 
-Switching the worker off stops ingestion on the Iris side, but not the queue: Artemis keeps queueing new and reconciled units, and every Iris whose worker is on claims them. To stop ingestion for an Artemis instance, also switch off its reconciliation; see the [Artemis administration guide](https://docs.artemis.cit.tum.de/admin/artemis-intelligence).
+The worker always runs and claims every job that Artemis queues; Iris has no switch to stop it. To stop ingestion for an Artemis instance, stop it on the Artemis side; see the [Artemis administration guide](https://docs.artemis.cit.tum.de/admin/artemis-intelligence).
 
 ## Boundaries
 

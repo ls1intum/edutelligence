@@ -247,9 +247,6 @@ class IngestionWorker:
 
     def start(self) -> None:
         """Start the claim and heartbeat loops as daemon threads."""
-        if not self._config.enabled:
-            logger.info("Ingestion worker disabled by configuration")
-            return
         for name, target in (
             ("ingestion-worker-claim", self._claim_loop),
             ("ingestion-worker-heartbeat", self._heartbeat_loop),

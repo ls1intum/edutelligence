@@ -76,7 +76,7 @@ What it actually decides, and what it does not:
 The last two rows are the ones to know. The guard asks "has this run been superseded?", not "is this run entitled to write?" — so it does **not** reject a write from a run the registry has never heard of. A pipeline constructed without a cancellation event (the `None` default, as in tests and any direct instantiation) bypasses it completely, and a run whose registration was already removed still passes. Do not reach for this guard to keep unregistered writers out; it has no way to tell one from a legitimate untracked run.
 :::
 
-Neither exception matters for the tracked path, where `add_job()` registers the event before the thread starts and `complete_job()` removes it only after the worker is done. Both the webhook route and the pull-based worker go through that path.
+Neither exception matters for the tracked path, where `add_job()` registers the event before the thread starts and `complete_job()` removes it only after the worker is done. The pull-based worker, the only way lecture ingestion jobs reach Iris, goes through that path.
 
 ### The per-unit lock
 
@@ -94,13 +94,12 @@ Ordinary failures are unaffected and keep their error classification — a trans
 
 ## Where cancellation events come from
 
-| Trigger                                                      | Path                                                                                                                                        |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| A second `POST /webhooks/lectures/ingest` for the same unit  | The route creates a fresh event and calls `add_job()`, which sets the previous one.                                                         |
-| A pull-based worker re-claiming a unit it is already running | Same `add_job()` supersession, so a reclaimed-lease retry replaces the prior run instead of racing it.                                      |
-| Artemis revoking a run on a heartbeat                        | The worker sets the run's event directly. A job still waiting to start is signalled the same way, and `add_job()` then refuses to start it. |
+| Trigger                                        | Path                                                                                                                                                                        |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A worker claiming a unit it is already running | The worker creates a fresh event and calls `add_job()`, which sets the previous one, so a newer job or a reclaimed-lease retry replaces the prior run instead of racing it. |
+| Artemis revoking a run on a heartbeat          | The worker sets the run's event directly. A job still waiting to start is signalled the same way, and `add_job()` then refuses to start it.                                 |
 
-In all three cases the stopping mechanism is the same event and the same checkpoints. A revoked run stays counted against the worker's capacity until its thread actually exits, so capacity accounting cannot drop a still-live run.
+In both cases the stopping mechanism is the same event and the same checkpoints. A revoked run stays counted against the worker's capacity until its thread actually exits, so capacity accounting cannot drop a still-live run.
 
 :::note Not every ingestion route is tracked
 Only lecture-unit ingestion goes through `IngestionJobHandler`. FAQ ingestion, FAQ deletion and lecture deletion start their own threads and are neither superseded nor cancellable.
