@@ -25,7 +25,7 @@ There is nothing to trigger. Artemis sends a lecture unit to Iris on its own whe
 
 A file whose content is unchanged, such as a deck saved again from the slide editor, keeps its version and is not processed again. Artemis also checks the index regularly and sends a unit again when its content is missing, incomplete or outdated, for example after Iris was unavailable. You do not have to watch for that either.
 
-A unit is processed only if Iris can read something from it: a PDF, or a video it can transcribe. A unit that only links a video on another site is marked as not indexed, and is processed automatically once it gets a PDF or a supported video.
+Units in tutorial lectures are not processed. Any other unit is processed only if Iris can read something from it: a PDF, or a video it can transcribe. A unit that only links a video on another site is marked as not indexed, and is processed automatically once it gets a PDF or a supported video.
 
 Ingestion does not depend on whether Iris is enabled in your course. The processed content is also used by the Artemis global search, which every student who allowed AI can use. The chat only uses it while Iris is enabled; see [Enabling Iris](./enabling-iris).
 

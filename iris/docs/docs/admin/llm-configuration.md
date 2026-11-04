@@ -259,19 +259,19 @@ For a cross-encoder served by vLLM, such as Qwen3-Reranker, behind a Jina- or Co
 
 | Field                     | Required | Description                                                                                                                                                                          |
 | ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `base_url`                | Yes      | Base URL of the server, for example a Logos instance                                                                                                                                 |
-| `rerank_path`             | No       | Path of the rerank endpoint, default `/rerank`                                                                                                                                       |
+| `base_url`                | Yes      | Base URL of the server including its version segment, for example `https://your-logos-instance/v1`                                                                                   |
+| `rerank_path`             | No       | Path appended to `base_url`, default `/rerank`                                                                                                                                       |
 | `request_timeout`         | No       | Request timeout in seconds, default `10.0`                                                                                                                                           |
 | `instruction`             | No       | Instruction folded into the query. Leave it empty when the server applies the reranker's chat template, as Logos does for Qwen3-Reranker-8B; a second instruction lowers the scores. |
 | `rerank_floor_calibrated` | No       | Set to `true` only for Qwen3-Reranker-8B, against which `global_search_rerank_floor` is calibrated. Default `false`, which skips the floor.                                          |
 
 ```yaml
-- id: "qwen3-reranker"
+- id: "qwen3-reranker-8b"
   name: "Qwen3 Reranker 8B"
   description: "Qwen3-Reranker-8B through Logos"
   type: "vllm_rerank"
   model: "Qwen/Qwen3-Reranker-8B"
-  base_url: "https://your-logos-instance"
+  base_url: "https://your-logos-instance/v1"
   api_key: "<your-logos-api-key>"
   rerank_floor_calibrated: true
   cost_per_1k_requests: 0

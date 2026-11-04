@@ -24,7 +24,7 @@ Lecture ingestion is a queued batch workload, so Iris consumes it like a build a
 
 ### Upstream discovery
 
-Iris is not configured with the Artemis instances it serves. Every Artemis already sends an authenticated health check, and includes its own base URL in the `X-Artemis-Base-Url` header. The health endpoint registers that URL, together with the token of the request, as an upstream. An upstream that stops announcing itself expires once it owns no running jobs. After a restart, Iris relearns its upstreams within one health-check interval; until then, new jobs simply wait in the Artemis queue. Current Artemis no longer pushes lecture jobs; `POST /api/v1/webhooks/lectures/ingest` remains for callers that still do, and runs the same pipeline.
+Iris is not configured with the Artemis instances it serves. Every Artemis already sends an authenticated health check, and includes its own base URL in the `X-Artemis-Base-Url` header. The health endpoint registers that URL, together with the token of the request, as an upstream. An upstream that has not announced itself for five minutes is no longer claimed from, and is removed once it owns no running jobs. After a restart, Iris relearns its upstreams within one health-check interval; until then, new jobs simply wait in the Artemis queue. Current Artemis no longer pushes lecture jobs; `POST /api/v1/webhooks/lectures/ingest` remains for callers that still do, and runs the same pipeline.
 
 `ingestion_worker.allowed_upstream_hosts` restricts the hosts Iris accepts as upstreams. Only well-formed http(s) URLs are accepted, and the worker does not follow redirects, so an accepted upstream cannot redirect it to a host that the list would have rejected.
 
@@ -32,25 +32,25 @@ Iris is not configured with the Artemis instances it serves. Every Artemis alrea
 
 The worker runs two loops against every fresh upstream, both on `POST {artemis_base_url}/api/iris/internal/ingestion/worker/...`:
 
-| Loop      | Request                                     | Response                  | Interval                                   |
-| --------- | ------------------------------------------- | ------------------------- | ------------------------------------------ |
-| Claim     | `claim` with `bootId` and `maxJobs`         | The jobs Artemis assigned | `poll_interval_seconds` (default 2 s)      |
-| Heartbeat | `heartbeat` with the tokens of running jobs | `revokedJobTokens`        | `heartbeat_interval_seconds` (default 5 s) |
+| Loop      | Request                                      | Response                  | Interval                                   |
+| --------- | -------------------------------------------- | ------------------------- | ------------------------------------------ |
+| Claim     | `claim` with `bootId` and `maxJobs`          | The jobs Artemis assigned | `poll_interval_seconds` (default 2 s)      |
+| Heartbeat | `heartbeat` with the run ids of running jobs | `revokedRunIds`           | `heartbeat_interval_seconds` (default 5 s) |
 
 `maxJobs` is the number of free slots (`ingestion_worker.capacity`, default 2), and the worker starts at most that many jobs, even if Artemis returns more. Every claimed job is reserved before the first one starts, so a slow start cannot lead to over-claiming.
 
-The heartbeat renews the lease of every running job. It is a timer, decoupled from the progress of the pipeline, so the lease never has to be sized to the unpredictable duration of a transcription or a vision call. When a worker dies, its leases stop being renewed, and Artemis reclaims the job within seconds. When Artemis has reassigned a job in the meantime, the heartbeat response names it in `revokedJobTokens`, and the worker sets the run's cancellation event; the run stops at its next checkpoint, as described in [Ingestion jobs](./ingestion-jobs.md). `bootId` lets Artemis recognize a restarted Iris, whose previous runs are gone.
+The heartbeat renews the lease of every running job. It is a timer, decoupled from the progress of the pipeline, so the lease never has to be sized to the unpredictable duration of a transcription or a vision call. When a worker dies, its leases stop being renewed, and Artemis reclaims the job within seconds. When Artemis has reassigned a job in the meantime, the heartbeat response names it in `revokedRunIds`, and the worker sets the run's cancellation event; the run stops at its next checkpoint, as described in [Ingestion jobs](./ingestion-jobs.md). `bootId` lets Artemis recognize a restarted Iris, whose previous runs are gone. The heartbeat sends the run ids as `activeRunIds`, and for older Artemis versions also as `activeJobTokens`; it reads `revokedJobTokens` when the response has no `revokedRunIds`.
 
 ## Writing a generation
 
-Every run writes its rows under its own `ingestion_run_id`, called a generation. `LectureIngestionPipeline` replaces a unit's page chunks in the following sequence:
+Every run writes its rows under its own `ingestion_run_id`, called a generation. `LectureUnitPageIngestionPipeline` (`pipeline/lecture_ingestion_pipeline.py`) replaces a unit's page chunks in the following sequence:
 
 1. embed every chunk of the new generation, before anything is written and outside the shared write lock;
-2. write the new generation under client-assigned ids and verify that the store holds it;
+2. write the new generation under client-assigned ids and check the batch result, so that an object Weaviate dropped is written again or fails the run instead of leaving a partial unit;
 3. purge every row of the unit that does not belong to this generation: the previous generation, rows written before generations existed, leftovers of crashed runs, and rows left behind by store corruption; and
 4. check that exactly one generation remains.
 
-The order is the point. All fallible LLM work is done before the first write, and the old content is only removed once the new content is verified. A crash between the write and the purge leaves both generations in the store for a moment, never an empty unit; the next run's purge, or the skip check below, which rejects mixed generations, converges the unit. Transcriptions follow the same pattern.
+The order is the point. All fallible LLM work is done before the first write, and the old content is only removed once the new content is written without errors. A crash between the write and the purge leaves both generations in the store for a moment, never an empty unit; the next run's purge, or the skip check below, which rejects mixed generations, converges the unit. Transcriptions follow the same pattern.
 
 If more than one generation is still visible after the purge, `convergence_max_escalations` (default `0`) decides whether the run deletes every row of the unit and rewrites its generation from scratch. With the default, the run fails with its verified generation intact, and the reconciliation retries it.
 
@@ -65,9 +65,12 @@ An interrupted write can leave a row that a Weaviate scan still returns, but tha
 Before it does any work, the pipeline checks whether the stored chunks are already current and complete. It skips the PDF only if every condition holds:
 
 - the stored attachment version and requested language match the request;
-- the unit holds exactly one confirmed generation;
-- the page coverage is complete; and
-- the chunk count matches the manifest recorded by the previous run.
+- every chunk has a printed slide number;
+- all chunks belong to one generation, and the object store confirms every one of them;
+- the chunks cover every page of the PDF; and
+- the chunk count per page matches the manifest recorded by the previous run.
+
+A read that reaches its row cap (`lecture_ingestion.skip_check_fetch_limit`) never counts as complete.
 
 A crash-damaged unit therefore never passes as current, and an unchanged one is not re-ingested on every reconciliation.
 
@@ -83,7 +86,7 @@ The audit reads identity properties only, never content, and makes no LLM calls.
 
 `pipeline/ingestion_quality.py` scores the page chunks of a run without an LLM call. The score is the fraction of pages that are neither empty, thin (fewer than 80 characters) nor garbled (less than half letters and digits); flags name the failing pages. The verdict is deterministic on purpose: it feeds a control loop, and a verdict that changed between identical runs would make that loop oscillate.
 
-The score and the flags are stored on the unit row together with `INGESTION_PIPELINE_VERSION` (`common/ingestion_version.py`). Artemis re-queues a low-quality unit at most once per pipeline version: bump the version when a change to prompts, models, chunking or extraction can produce a better result for unchanged content. If a re-run scores worse than the stored generation, and the stored generation passes the same structural checks as the skip check, the run keeps the stored generation.
+The score and the flags are stored on the unit row together with `INGESTION_PIPELINE_VERSION` (`common/ingestion_version.py`). Artemis re-queues a low-quality unit at most once per pipeline version: bump the version when a change to prompts, models, chunking or extraction can produce a better result for unchanged content. If such a forced re-run scores worse than the stored generation, and the stored generation passes the same structural checks as the skip check, the run keeps the stored generation.
 
 ## Census
 
@@ -98,6 +101,7 @@ It returns one `IngestionCensusUnitDTO` per lecture unit (`domain/ingestion/inge
 | Field                                               | Meaning                                                                                       |
 | --------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `contentFingerprint`                                | The fingerprint stamped on the unit row; Artemis re-ingests a unit whose fingerprint differs. |
+| `unitRowCount`                                      | Confirmed unit rows. More than one is a duplicate.                                            |
 | `generationCount`                                   | Confirmed generations among the page chunks. More than one means stale rows coexist.          |
 | `chunkCount`, `expectedChunkCount`                  | Confirmed page chunks, and the count the last run recorded.                                   |
 | `chunkPageMin`, `chunkPageMax`, `missingPageCount`  | Page coverage. A complete unit covers its pages without holes.                                |

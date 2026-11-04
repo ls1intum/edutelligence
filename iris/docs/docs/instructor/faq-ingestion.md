@@ -43,10 +43,10 @@ As your course evolves, your FAQs should too:
 - **Update existing answers** when course policies or content change
 - **Delete outdated FAQs**: Iris stops using a deleted FAQ as well
 
-Every change reaches Iris on its own. Artemis also compares the FAQs Iris holds with the accepted FAQs of your course every few minutes and sends whatever is missing or changed, so an FAQ saved while Iris was unavailable catches up without you doing anything.
+Every change reaches Iris on its own. Artemis also compares the FAQs Iris holds with the accepted FAQs of your course every ten minutes and sends whatever is missing or changed, so an FAQ saved while Iris was unavailable catches up without you doing anything.
 
 :::info
-FAQs are only sent to Iris while Iris is enabled for your course. After you enable Iris, the existing accepted FAQs follow within a few minutes.
+FAQs are only sent to Iris while Iris is enabled for your course. After you enable Iris, the existing accepted FAQs follow with the next comparisons. Each comparison sends a limited number of FAQs, so a course with many FAQs can take a while.
 :::
 
 ## How Iris Uses FAQs
