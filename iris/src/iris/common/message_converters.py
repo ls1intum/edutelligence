@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from langchain_core.messages import (
     AIMessage,
@@ -107,9 +107,22 @@ def _content_text(content) -> str:
     raise ValueError(f"Unsupported message content: {type(content).__name__}")
 
 
-def _describe_mcq(question: dict, number: Optional[int] = None) -> str:
+def _is_quiz_question(question: Any) -> bool:
+    """Whether a stored quiz question has the shape the description reads."""
+    if not isinstance(question, dict) or not isinstance(question.get("question"), str):
+        return False
+    options = question.get("options", [])
+    return isinstance(options, list) and all(
+        isinstance(option, dict) and isinstance(option.get("text", ""), str)
+        for option in options
+    )
+
+
+def _describe_mcq(
+    question: dict, number: Optional[int] = None, response: Any = None
+) -> str:
     label = "Quiz question" if number is None else f"Quiz question {number}"
-    question_text = question.get("question", "")
+    question_text = question["question"]
     lines = [f"{label} shown to the student: {question_text}"]
     options = question.get("options") or []
     for index, option in enumerate(options, start=1):
@@ -119,11 +132,12 @@ def _describe_mcq(question: dict, number: Optional[int] = None) -> str:
     explanation = question.get("explanation")
     if explanation:
         lines.append(f"  Explanation: {explanation}")
-    response = question.get("response") or {}
+    response = response if isinstance(response, dict) else {}
     selected = response.get("selectedIndex")
     if (
         response.get("submitted")
         and isinstance(selected, int)
+        and not isinstance(selected, bool)
         and 0 <= selected < len(options)
     ):
         verdict = "correct" if options[selected].get("correct") else "incorrect"
@@ -133,27 +147,67 @@ def _describe_mcq(question: dict, number: Optional[int] = None) -> str:
     return "\n".join(lines)
 
 
+def _quiz_set_responses(json_content: dict) -> dict[int, Any]:
+    """The student's answers of a quiz set by question index.
+
+    Artemis stores them next to the questions, as ``responses`` entries with a
+    ``questionIndex``, not inside each question.
+    """
+    responses = json_content.get("responses")
+    by_index: dict[int, Any] = {}
+    for response in responses if isinstance(responses, list) else []:
+        if isinstance(response, dict) and isinstance(
+            response.get("questionIndex"), int
+        ):
+            by_index[response["questionIndex"]] = response
+    return by_index
+
+
+def _describe_quiz(json_content: dict) -> Optional[str]:
+    """The quiz in a widget as text, or None if the widget is not a readable quiz."""
+    kind = json_content.get("type")
+    if kind == "mcq" and _is_quiz_question(json_content):
+        return (
+            "["
+            + _describe_mcq(json_content, response=json_content.get("response"))
+            + "]"
+        )
+    if kind == "mcq-set":
+        questions = json_content.get("questions")
+        if (
+            not isinstance(questions, list)
+            or not questions
+            or not all(_is_quiz_question(question) for question in questions)
+        ):
+            return None
+        responses = _quiz_set_responses(json_content)
+        return (
+            "["
+            + "\n".join(
+                _describe_mcq(
+                    question,
+                    index + 1,
+                    responses.get(index, question.get("response")),
+                )
+                for index, question in enumerate(questions)
+            )
+            + "]"
+        )
+    return None
+
+
 def describe_json_content(json_content) -> str:
     """Describe structured message content (quiz widgets) as text for the model.
 
     Without this, an assistant message that only consists of a quiz could not be
-    sent to the model at all, and the follow-up turn failed.
+    sent to the model at all, and the follow-up turn failed. Content that is not a
+    readable quiz is kept as clipped JSON, so no stored widget can fail a run.
     """
     if not isinstance(json_content, dict):
         return json.dumps(json_content, ensure_ascii=False)[:2000]
-    kind = json_content.get("type")
-    if kind == "mcq":
-        return "[" + _describe_mcq(json_content) + "]"
-    if kind == "mcq-set":
-        questions = json_content.get("questions") or []
-        return (
-            "["
-            + "\n".join(
-                _describe_mcq(question, number)
-                for number, question in enumerate(questions, start=1)
-            )
-            + "]"
-        )
+    quiz = _describe_quiz(json_content)
+    if quiz is not None:
+        return quiz
     return (
         "[Structured content: "
         + json.dumps(json_content, ensure_ascii=False)[:2000]

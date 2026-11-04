@@ -4,7 +4,8 @@ Artemis stores a generated multiple-choice question as JSON content of Iris' mes
 back in the history of every later run. The answers a student gives are stored in the same JSON.
 """
 
-from langchain_core.messages import HumanMessage
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 
 # Bootstrap the iris package (see test_chat_latency_ordering.py for the circular import).
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
@@ -39,6 +40,14 @@ MCQ = {
     ],
     "explanation": "Merge sort keeps equal elements in their original order.",
 }
+SECOND_QUESTION = {
+    "question": "What is the worst case of insertion sort?",
+    "options": [
+        {"text": "O(n)", "correct": False},
+        {"text": "O(n^2)", "correct": True},
+    ],
+    "explanation": "Every element moves past every other element.",
+}
 
 
 def _message(sender, *contents) -> PyrisMessage:
@@ -62,9 +71,90 @@ def test_a_single_question_lists_options_correct_answer_and_explanation():
     assert "The student has not answered it yet." in description
 
 
+def test_the_answers_of_a_question_set_are_read_where_artemis_stores_them():
+    # Artemis' saveMcqResponse writes the answers of a set to the root "responses" list.
+    quiz_set = {
+        "type": "mcq-set",
+        "questions": [MCQ, SECOND_QUESTION],
+        "responses": [
+            {"questionIndex": 1, "selectedIndex": 0, "submitted": True},
+            {"questionIndex": 0, "selectedIndex": 1, "submitted": True},
+        ],
+    }
+
+    description = describe_json_content(quiz_set)
+    first, second = description.split("Quiz question 2")
+
+    assert "Quiz question 1 shown to the student" in first
+    assert "The student answered option 2 (correct)." in first
+    assert "The student answered option 1 (incorrect)." in second
+
+
+def test_an_unsubmitted_or_missing_set_answer_counts_as_not_answered():
+    quiz_set = {
+        "type": "mcq-set",
+        "questions": [MCQ, SECOND_QUESTION],
+        "responses": [{"questionIndex": 0, "selectedIndex": 1, "submitted": False}],
+    }
+
+    description = describe_json_content(quiz_set)
+
+    assert description.count("The student has not answered it yet.") == 2
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        {"type": "mcq", "question": 5, "options": []},
+        {"type": "mcq", "question": "Q?", "options": ["not an option"]},
+        {"type": "mcq", "question": "Q?", "options": "AB"},
+        {"type": "mcq-set", "questions": [MCQ, "broken"]},
+        {"type": "mcq-set", "questions": "broken"},
+        {"type": "mcq-set", "questions": []},
+        {"type": "something-else", "value": [1, 2]},
+    ],
+)
+def test_a_widget_that_is_not_a_readable_quiz_is_kept_as_json(content):
+    description = describe_json_content(content)
+
+    assert description.startswith("[Structured content: ")
+
+
+@pytest.mark.parametrize(
+    "response",
+    ["broken", {"selectedIndex": True, "submitted": True}, {"selectedIndex": 9}],
+)
+def test_a_broken_answer_counts_as_not_answered(response):
+    description = describe_json_content({**MCQ, "response": response})
+
+    assert "The student has not answered it yet." in description
+
+
+def test_a_set_with_broken_responses_is_still_described():
+    quiz_set = {
+        "type": "mcq-set",
+        "questions": [MCQ],
+        "responses": ["broken", {"questionIndex": "0", "selectedIndex": 1}],
+    }
+
+    description = describe_json_content(quiz_set)
+
+    assert "Quiz question 1 shown to the student" in description
+    assert "The student has not answered it yet." in description
+
+
 def test_non_object_json_is_kept_as_clipped_text():
     assert describe_json_content(["x" * 5000]).startswith('["xxx')
     assert len(describe_json_content(["x" * 5000])) == 2000
+
+
+def test_a_message_that_holds_only_a_broken_widget_still_converts():
+    message = _message(IrisMessageRole.ASSISTANT, _json({"type": "mcq-set"}))
+
+    converted = convert_iris_message_to_langchain_message(message)
+
+    assert isinstance(converted, AIMessage)
+    assert converted.content.startswith("[Structured content: ")
 
 
 def test_a_message_with_text_and_widget_keeps_every_part_in_order():
