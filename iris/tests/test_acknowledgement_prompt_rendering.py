@@ -157,6 +157,22 @@ def test_the_rule_is_the_same_text_for_every_message_so_the_prompt_stays_cacheab
     assert "{{" not in _rule(first) and "{%" not in _rule(first)
 
 
+@pytest.mark.parametrize("chat_mode", CHAT_MODES)
+def test_the_examples_open_with_an_acknowledgement(chat_mode):
+    # Few-shot examples weigh more than a rule, so they must follow it. "Who are you?"
+    # is the one exception the rule names.
+    rendered = _render(chat_mode)
+
+    assert (
+        "Only your test with an empty input still fails; the other tests already pass."
+        in rendered
+    )
+    assert "Iris: Thanks for telling me openly." in rendered
+    assert "Iris: That sounds like a nice dinner, but it's outside this course" in (
+        rendered
+    )
+
+
 @pytest.mark.parametrize("support_level", SUPPORT_LEVELS)
 def test_the_review_pass_keeps_the_acknowledgement_when_it_rewrites(support_level):
     assert (
