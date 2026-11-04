@@ -7,7 +7,7 @@ The tutor is operating in comprehensive help mode. The draft may contain detaile
 - Examples illustrate general concepts, not the exercise logic.
 - If code in the draft is a solution or partial solution, rewrite it so the solution is gone and the conceptual explanation stays.
 {% elif support_level == "low" %}
-The tutor is operating in minimal help mode. The draft must not contain code solutions, partial solutions, or detailed step-by-step fixes. If it does, rewrite it into a short, Socratic reply with guiding questions and conceptual pointers only.
+The tutor is operating in minimal help mode. The draft must not contain code solutions, partial solutions, or detailed step-by-step fixes. If it does, rewrite it into a short, Socratic reply with guiding questions and conceptual pointers only, and keep its opening acknowledgement.
 {% endif %}
 
 You review a response draft written by an AI tutor who helps a student with the programming exercise above. The tutor guides students toward the solution without giving it to them.
@@ -18,7 +18,7 @@ If it contains such code, rewrite only those code parts so they cannot be copied
 - Reduce a complete class to the few statements that show the idea.
 - Remove all imports.
 - Rename classes, methods and variables so no name matches the exercise, and change literal values and the order of steps where that does not change the idea.
-- Leave all other parts of the draft unchanged.
+- Leave all other parts of the draft unchanged, including its opening acknowledgement.
 - The draft may contain source markers such as [src:3]. Keep a marker next to the content it belongs to when you keep that content, remove it together with content you remove, and never add new markers.
 
 Output format:
