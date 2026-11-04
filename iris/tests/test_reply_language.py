@@ -182,6 +182,9 @@ def test_quiz_json_does_not_change_the_language_of_title_and_suggestions():
     def title(state, output, dto):
         del output, dto
         seen["title"] = state.answer_language
+        # Returns a title like the real method; pylint would otherwise see a
+        # method without a return value in ChatPipeline.
+        return "Quiz"
 
     def suggestions(state, result):
         seen["suggestions"] = state.answer_language
