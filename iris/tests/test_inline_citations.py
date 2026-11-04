@@ -216,7 +216,7 @@ def test_lecture_tool_output_is_unchanged_without_a_registry():
 def _faq_tool(registry=None):
     retriever = MagicMock(return_value=[_faq(), _faq(302, "Aids?", "One A4 sheet.")])
     return create_tool_faq_content_retrieval(
-        retriever, 1, MagicMock(), citation_sources=registry
+        retriever, 1, "https://artemis.example", MagicMock(), citation_sources=registry
     )
 
 

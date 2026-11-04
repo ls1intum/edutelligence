@@ -1,13 +1,13 @@
-from typing import List
+from typing import List, Optional
 
 from weaviate import WeaviateClient
-from weaviate.collections.classes.filters import Filter
 
 from iris.tracing import observe
 
 from ..common.logging_config import get_logger
 from ..vector_database.faq_schema import FaqSchema, init_faq_schema
 from .basic_retrieval import BaseRetrieval
+from .faq_retrieval_utils import faq_instance_filter, fetch_owned_faqs
 
 logger = get_logger(__name__)
 
@@ -32,6 +32,7 @@ class FaqRetrieval(BaseRetrieval):
             FaqSchema.FAQ_ID.value,
             FaqSchema.QUESTION_TITLE.value,
             FaqSchema.QUESTION_ANSWER.value,
+            FaqSchema.BASE_URL.value,
         ]
 
     @observe(name="Full Faq Retrieval")
@@ -39,22 +40,22 @@ class FaqRetrieval(BaseRetrieval):
         self,
         search_query: str,
         course_id: int,
+        base_url: Optional[str],
         result_limit: int = 10,
     ) -> List[dict]:
-        """Search the course's FAQs for a query the agent wrote itself."""
-        response = self.search_in_db(
-            query=search_query,
-            hybrid_factor=0.9,
-            result_limit=result_limit,
-            schema_properties=self.get_schema_properties(),
-            course_id=course_id,
-        )
-        return [obj.properties for obj in response.objects]
+        """Search the course's FAQs on this Artemis instance for a query the agent wrote itself."""
+        return [
+            obj.properties
+            for obj in self._owned_faqs(
+                course_id, base_url, search_query, result_limit, hybrid_factor=0.9
+            )
+        ]
 
     @observe(name="FAQ: Search in DB")
     def get_faqs_from_db(
         self,
         course_id: int,
+        base_url: Optional[str],
         search_text: str = None,
         result_limit: int = 10,
         hybrid_factor: float = 0.75,
@@ -63,34 +64,58 @@ class FaqRetrieval(BaseRetrieval):
         Retrieves FAQs from the database, optionally with a similarity search on question_title and question_answer.
 
         :param course_id: ID of the course to fetch FAQs for a specific course.
+        :param base_url: Base URL of the Artemis instance the course belongs to; without one no FAQ is returned.
         :param search_text: Optional search text used for semantic search.
         :param result_limit: Number of FAQs to return.
         :param hybrid_factor: Weighting between vector-based and keyword-based results.
         :return: List of retrieved FAQs.
         """
-        filter_weaviate = Filter.by_property("course_id").equal(course_id)
-
-        if search_text:
-            vec = self.llm_embedding.embed(search_text)
-
-            response = self.collection.query.hybrid(
-                query=search_text,
-                vector=vec,
-                alpha=hybrid_factor,
-                return_properties=self.get_schema_properties(),
-                limit=result_limit,
-                filters=filter_weaviate,
+        return [
+            {"id": obj.uuid.int, "properties": obj.properties}
+            for obj in self._owned_faqs(
+                course_id, base_url, search_text, result_limit, hybrid_factor
             )
+        ]
+
+    def _owned_faqs(
+        self,
+        course_id: int,
+        base_url: Optional[str],
+        search_text: Optional[str],
+        result_limit: int,
+        hybrid_factor: float,
+    ) -> list:
+        """The course's FAQ rows of the Artemis instance at ``base_url``, best match first.
+
+        Another instance may use the same course id, so the course id alone does not identify the
+        course. Without a base URL nothing is returned.
+        """
+        if not base_url:
+            return []
+        filters = faq_instance_filter(course_id, base_url)
+        properties = self.get_schema_properties()
+        if search_text:
+            vector = self.llm_embedding.embed(search_text)
+
+            def fetch_page(offset: int, limit: int) -> list:
+                return self.collection.query.hybrid(
+                    query=search_text,
+                    vector=vector,
+                    alpha=hybrid_factor,
+                    return_properties=properties,
+                    limit=limit,
+                    offset=offset,
+                    filters=filters,
+                ).objects
+
         else:
 
-            response = self.collection.query.fetch_objects(
-                filters=filter_weaviate,
-                limit=result_limit,
-                return_properties=self.get_schema_properties(),
-            )
+            def fetch_page(offset: int, limit: int) -> list:
+                return self.collection.query.fetch_objects(
+                    filters=filters,
+                    limit=limit,
+                    offset=offset,
+                    return_properties=properties,
+                ).objects
 
-        faqs = [
-            {"id": obj.uuid.int, "properties": obj.properties}
-            for obj in response.objects
-        ]
-        return faqs
+        return fetch_owned_faqs(fetch_page, base_url, result_limit)[0]

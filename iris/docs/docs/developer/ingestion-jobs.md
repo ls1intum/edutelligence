@@ -8,7 +8,7 @@ A lecture-unit ingestion run is long: it may download a video, transcribe it, an
 
 Two runs for one unit must not both finish. They write the same rows, so the loser can overwrite the winner's content, and whichever reports last decides what Artemis believes about a unit it has already moved on from. `IngestionJobHandler` resolves that by letting the newer run **supersede** the older one.
 
-This page covers job identity and cancellation. For what the pipelines actually do with the content, see the [RAG pipeline](./rag-pipeline.md).
+This page covers job identity and cancellation. For what the pipelines actually do with the content, see the [RAG pipeline](./rag-pipeline.md); for how jobs are claimed, written, verified and reported back to Artemis, see [Ingestion reliability](./ingestion-reliability.md).
 
 ## Job identity
 

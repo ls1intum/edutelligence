@@ -15,6 +15,7 @@ EMPTY_QUERY_REPLY = (
 def create_tool_faq_content_retrieval(
     faq_retriever: FaqRetrieval,
     course_id: int,
+    base_url: Optional[str],
     callback: StatusCallback,
     citation_sources: Optional[CitationSourceRegistry] = None,
 ) -> Callable[[str], str]:
@@ -24,6 +25,7 @@ def create_tool_faq_content_retrieval(
     Args:
         faq_retriever: FAQ retrieval instance.
         course_id: Course ID.
+        base_url: Base URL of the Artemis instance the course belongs to.
         callback: Callback for status updates.
         citation_sources: When given, every FAQ gets a source id the agent can
             cite. Pipelines without citations pass nothing and get the plain output.
@@ -49,7 +51,7 @@ def create_tool_faq_content_retrieval(
         if not query.strip():
             return EMPTY_QUERY_REPLY
         retrieved_faqs = faq_retriever(
-            search_query=query, course_id=course_id, result_limit=10
+            search_query=query, course_id=course_id, base_url=base_url, result_limit=10
         )
 
         if citation_sources is None:
