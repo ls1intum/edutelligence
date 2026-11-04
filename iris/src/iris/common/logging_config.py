@@ -164,7 +164,9 @@ def setup_logging(level: str = "INFO") -> None:
     noisy_loggers = [
         "langfuse",
         "httpcore",
+        "httpcore2",
         "httpx",
+        "httpx2",
         "openai",
         "urllib3",
         "asyncio",
