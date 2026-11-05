@@ -100,6 +100,30 @@ def test_the_real_pool_lock_of_every_openai_client_is_found(model):
     assert locks == {model.id: pool._optional_thread_lock._lock}
 
 
+@pytest.mark.parametrize("model", _models(), ids=lambda model: model.id)
+def test_the_real_pool_lock_held_by_another_thread_is_stuck(tmp_path, model):
+    # The pool lock of httpcore2 is an RLock, which has no locked() before Python 3.14.
+    lock = _openai_client(model)._client._transport._pool._optional_thread_lock._lock
+    watchdog = _watchdog(tmp_path, {model.id: lock})
+    taken, release = threading.Event(), threading.Event()
+
+    def hold():
+        with lock:
+            taken.set()
+            release.wait()
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert taken.wait(5)
+        assert watchdog.check() == set()
+        assert watchdog.check() == {model.id}
+    finally:
+        release.set()
+        holder.join()
+    assert watchdog.check() == set()
+
+
 def test_trip_fails_open_runs_alerts_quietly_and_exits(tmp_path):
     alert, exit_fn = MagicMock(), MagicMock()
     watchdog = _watchdog(tmp_path, {}, alert_fn=alert, exit_fn=exit_fn)

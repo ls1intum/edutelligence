@@ -2,7 +2,7 @@
 
 # pylint: skip-file
 
-import httpx
+import httpx2
 import pytest
 from openai import APITimeoutError, InternalServerError
 
@@ -16,16 +16,18 @@ from iris.llm.retry import MAX_ATTEMPTS, MAX_TIMEOUT_RETRIES, RetryState  # noqa
 
 @pytest.fixture
 def transport(monkeypatch):
-    """Count the HTTP requests that actually leave the client."""
+    """Count the HTTP requests that actually leave the client (openai 3 sends with httpx2)."""
     calls = {"count": 0, "mode": "error"}
 
     def send(self, request, **_kwargs):
         calls["count"] += 1
         if calls["mode"] == "timeout":
-            raise httpx.ReadTimeout("slow", request=request)
-        return httpx.Response(500, json={"error": {"message": "down"}}, request=request)
+            raise httpx2.ReadTimeout("slow", request=request)
+        return httpx2.Response(
+            500, json={"error": {"message": "down"}}, request=request
+        )
 
-    monkeypatch.setattr(httpx.Client, "send", send)
+    monkeypatch.setattr(httpx2.Client, "send", send)
     monkeypatch.setattr(RetryState, "wait", lambda self, error, attempt: None)
     return calls
 
