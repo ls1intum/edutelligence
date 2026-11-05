@@ -81,6 +81,21 @@ def _pool_lock(client: Any) -> Any:
     return None
 
 
+def _is_held(lock: Any) -> bool:
+    """Whether another thread holds the pool lock.
+
+    httpcore2 uses an RLock, which has no ``locked()`` before Python 3.14; a
+    non-blocking acquire then tells, and is released at once.
+    """
+    locked = getattr(lock, "locked", None)
+    if callable(locked):
+        return locked()
+    if lock.acquire(blocking=False):
+        lock.release()
+        return False
+    return True
+
+
 def format_thread_dump() -> str:
     """All thread stacks, identical ones folded with a count (a stall has hundreds)."""
     names = {thread.ident: thread.name for thread in threading.enumerate()}
@@ -161,7 +176,7 @@ class Watchdog:
         locks = self._locks_fn()
         held = set(locks)
         for sample in range(LOCK_SAMPLES):
-            held = {model for model in held if locks[model].locked()}
+            held = {model for model in held if _is_held(locks[model])}
             if not held:
                 break
             if sample < LOCK_SAMPLES - 1:
