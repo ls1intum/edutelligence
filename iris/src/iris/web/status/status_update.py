@@ -458,6 +458,8 @@ class ChatRunCallback(StatusCallback):
         ``activities`` is the run's step snapshot when the message was written. The steps
         that no earlier message of the run shows go along with it, so Artemis saves them on
         this message and the chat shows them between the previous message and this one.
+        They count as shown even when the POST fails: without a reply Pyris cannot tell
+        whether Artemis saved the message, and sending them again could show them twice.
         """
         if self._terminal_sent:
             self._reject_after_terminal("send_intermediate")
@@ -474,11 +476,9 @@ class ChatRunCallback(StatusCallback):
 
         payload = self._payload(run_state=RunStateEnum.RUNNING, **fields)
         self._drain_running_updates()
-        delivered = self._send_status_payload(payload)
-        # Only steps that reached Artemis count as shown; the next message takes the rest.
-        if delivered and message_activities:
+        if message_activities:
             self._mark_on_message(message_activities)
-        return delivered
+        return self._send_status_payload(payload)
 
     def send_suggestions(self, suggestions, session_title=None) -> bool:
         fields: dict[str, Any] = {"suggestions": suggestions}

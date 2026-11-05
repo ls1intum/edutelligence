@@ -222,14 +222,24 @@ def test_each_message_carries_only_the_steps_since_the_previous_message():
     assert payloads[1]["activities"] is None
 
 
-def test_steps_of_an_undelivered_interim_message_move_to_the_next_message():
+def test_steps_of_an_interim_message_without_reply_are_not_sent_again():
+    # Artemis may have saved the message although its reply was lost, so sending
+    # the steps again with the next message could show them twice.
     cb = _callback()
     with patch("requests.post") as post:
-        post.side_effect = [requests.RequestException(), _ok()]
+        post.side_effect = [requests.RequestException(), _ok(), _ok()]
         assert cb.send_intermediate("Let me check.", activities=[_step(1)]) is False
-        assert cb.send_result("answer", tokens=[], activities=[_step(1), _step(2)])
+        assert cb.send_intermediate("Now the details.", activities=[_step(1), _step(2)])
+        assert cb.send_result(
+            "answer", tokens=[], activities=[_step(1), _step(2), _step(3)]
+        )
 
-    assert _message_step_ids(post.call_args.kwargs["json"]) == ["act-1", "act-2"]
+    payloads = [call.kwargs["json"] for call in post.call_args_list]
+    assert [_message_step_ids(payload) for payload in payloads] == [
+        ["act-1"],
+        ["act-2"],
+        ["act-3"],
+    ]
 
 
 def test_messages_without_a_snapshot_carry_no_message_steps():
