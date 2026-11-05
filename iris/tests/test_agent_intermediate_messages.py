@@ -30,8 +30,8 @@ class RecordingCallback:
         self.messages = []
         self.call_log = call_log if call_log is not None else []
 
-    def send_intermediate(self, text, activities=None, activity_seq=None):
-        self.messages.append((text, activities, activity_seq))
+    def send_intermediate(self, text, activities=None):
+        self.messages.append((text, activities))
         self.call_log.append(f"intermediate:{text}")
         return True
 
@@ -120,7 +120,7 @@ def test_agent_loop_emits_visible_tool_turn_content_once():
     result = MinimalAgentPipeline()._run_agent_loop(make_state(callback, model))
 
     assert result == "Done."
-    assert callback.messages == [("Let me check first.", None, None)]
+    assert callback.messages == [("Let me check first.", [])]
 
 
 def test_agent_loop_sends_intermediate_after_partial_reset():
@@ -152,13 +152,38 @@ def test_narration_reaches_the_student_before_the_tool_starts():
 
     tracker.start = recording_start
     callback = SimpleNamespace(
-        send_intermediate=lambda text: order.append(("narrate", text))
+        send_intermediate=lambda text, activities=None: order.append(("narrate", text))
     )
     model = ScriptedModel([tool_turn("Let me check the lecture."), answer("Done.")])
 
     MinimalAgentPipeline()._run_agent_loop(make_state(callback, model, tracker=tracker))
 
     assert order == [("narrate", "Let me check the lecture."), ("tool_start", "lookup")]
+
+
+def test_each_narration_carries_the_tool_steps_that_ran_before_it():
+    callback = RecordingCallback()
+    tracker = ActivityTracker(lambda items, seq: None)
+    tracker.start(ActivityKind.COMMAND, "point_out")
+    model = ScriptedModel(
+        [
+            tool_turn("Let me look it up."),
+            tool_turn("Now the details.", call_id="call_2"),
+            answer("Done."),
+        ]
+    )
+
+    MinimalAgentPipeline()._run_agent_loop(make_state(callback, model, tracker=tracker))
+
+    first_text, first_steps = callback.messages[0]
+    second_text, second_steps = callback.messages[1]
+    assert first_text == "Let me look it up."
+    assert first_steps == []
+    assert second_text == "Now the details."
+    # Commands are not tool steps, so they never travel with a message.
+    assert [(item.name, item.state) for item in second_steps] == [
+        ("lookup", ActivityState.FINISHED)
+    ]
 
 
 def test_tool_results_go_back_to_the_model_in_order():

@@ -19,6 +19,12 @@ class ChatStatusUpdateDTO(StatusUpdateDTO):
     suggestions: Optional[List[str]] = Field(default_factory=list)
     activities: Optional[List[ActivityDTO]] = None
     activity_seq: Optional[int] = Field(alias="activitySeq", default=None)
+    # The steps that ran since the previous assistant message of this run. Artemis
+    # saves them on the message this update carries, so each message shows its own
+    # steps. ``activities`` stays the whole run, for the live view.
+    message_activities: Optional[List[ActivityDTO]] = Field(
+        alias="messageActivities", default=None
+    )
     suggested_context: Optional[SuggestedContextDTO] = Field(
         alias="suggestedContext", default=None
     )

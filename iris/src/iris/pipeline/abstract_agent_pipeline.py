@@ -527,8 +527,13 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             send_intermediate = getattr(state.callback, "send_intermediate", None)
             if send_intermediate is None:
                 return
+            # The steps so far go along, so the message shows the ones that ran before it.
+            activities, _ = state.activity_tracker.snapshot()
+            tool_activities = [
+                item for item in activities if item.kind == ActivityKind.TOOL
+            ]
             try:
-                send_intermediate(text)
+                send_intermediate(text, activities=tool_activities)
             except Exception as exc:
                 logger.exception(
                     "Exception while sending intermediate message", exc_info=exc
