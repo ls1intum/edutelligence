@@ -110,12 +110,12 @@ def test_the_real_pool_lock_held_by_another_thread_is_stuck(tmp_path, model):
     def hold():
         with lock:
             taken.set()
-            release.wait(5)
+            release.wait()
 
     holder = threading.Thread(target=hold)
     holder.start()
-    taken.wait(5)
     try:
+        assert taken.wait(5)
         assert watchdog.check() == set()
         assert watchdog.check() == {model.id}
     finally:
