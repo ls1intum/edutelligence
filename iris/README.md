@@ -124,6 +124,8 @@ most the configured number of selected-anchor reads, with query counts and time 
 
    The repository also uses [pre-commit](https://pre-commit.com/) to enforce code style and quality using a variety of
    tools.
+   pre-commit is not part of the Poetry environment. Install it once as a tool, for example with
+   `pipx install pre-commit` or `brew install pre-commit`.
    To install the pre-commit hooks, run the following command **in the edutelligence repository root`**:
 
    ```bash
