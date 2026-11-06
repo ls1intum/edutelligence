@@ -190,7 +190,7 @@ jobs:
 
                   <footer>
                       <p>
-                          &copy; 2025 Technical University of Munich, Applied Education Technologies<br>
+                          &copy; __YEAR__ Technical University of Munich, Applied Education Technologies<br>
                           <a href="https://github.com/ls1intum/edutelligence" target="_blank">View on GitHub</a>
                       </p>
                   </footer>
@@ -198,6 +198,8 @@ jobs:
           </body>
           </html>
           EOF
+          # The heredoc is quoted, so the year is filled in here at build time.
+          sed -i "s/__YEAR__/$(date -u +%Y)/" site/index.html
 
       - name: Upload combined site to GitHub Pages
         uses: actions/upload-pages-artifact@v5
