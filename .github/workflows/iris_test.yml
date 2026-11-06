@@ -42,6 +42,11 @@ jobs:
         run: poetry install
         working-directory: iris
 
+      # pre-commit is a tool, not an Iris dependency. Keeping it out of
+      # poetry.lock keeps its virtualenv dependency out as well.
+      - name: Install pre-commit
+        run: pipx install pre-commit==4.7.0
+
       - name: Run pre-commit hooks
         run: |
           # Activate poetry env

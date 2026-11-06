@@ -29,7 +29,9 @@ Black and isort are configured to be compatible with each other (`profile = "bla
 
 ### Pre-commit Hooks
 
-Install pre-commit hooks from the **monorepo root** (one level above `iris/`):
+pre-commit is not part of the Poetry environment. Install it once as a tool, for example with `pipx install pre-commit` or `brew install pre-commit`.
+
+Then install the hooks from the **monorepo root** (one level above `iris/`):
 
 ```bash
 pre-commit install

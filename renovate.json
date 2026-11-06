@@ -25,6 +25,18 @@
       "commitMessagePrefix": "`Iris`:"
     },
     {
+      "description": "Langfuse SDK 4 and newer drop update_current_trace, which Iris uses, and SDK 5 needs Langfuse server 4.59 or newer. Our server runs 3.x. Remove this rule after the server upgrade and the SDK migration.",
+      "matchFileNames": ["iris/**"],
+      "matchPackageNames": ["langfuse"],
+      "allowedVersions": "<4"
+    },
+    {
+      "description": "weaviate-client 4.x requires protobuf below 7, so a protobuf 7 update for Iris cannot be resolved.",
+      "matchFileNames": ["iris/**"],
+      "matchPackageNames": ["protobuf"],
+      "allowedVersions": "<7"
+    },
+    {
       "description": "tiktoken (via PyO3 0.22) does not build on Python 3.14 yet",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["python"],

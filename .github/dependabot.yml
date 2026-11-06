@@ -4,6 +4,14 @@ updates:
     directory: "iris"
     schedule:
       interval: "weekly"
+    # Same limits as the Iris rules in renovate.json: Langfuse SDK 4+ drops
+    # update_current_trace and SDK 5 needs a newer Langfuse server, and
+    # weaviate-client 4.x requires protobuf below 7.
+    ignore:
+      - dependency-name: "langfuse"
+        versions: [">=4"]
+      - dependency-name: "protobuf"
+        versions: [">=7"]
     groups:
       iris-python-dependencies:
         applies-to: version-updates
