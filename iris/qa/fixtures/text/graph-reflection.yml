@@ -1,0 +1,13 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+textExercise:
+  id: 9002
+  title: Graph Traversal Reflection
+  problemStatement: Compare BFS and DFS for finding routes. Discuss completeness, memory use, and when shortest-path guarantees apply.
+  startDate: 2026-05-27T08:00:00Z
+  endDate: 2026-06-10T22:00:00Z
+  exampleSolution: A confidential instructor example distinguishes unweighted shortest paths from depth-first reachability and discusses O(V) frontier memory.
+textExerciseSubmission: |
+  BFS explores neighbors first, while DFS follows one path. BFS is always faster
+  and DFS cannot find shortest paths. I think BFS uses less memory because it
+  does not recurse. Therefore BFS should be selected for every route planner.

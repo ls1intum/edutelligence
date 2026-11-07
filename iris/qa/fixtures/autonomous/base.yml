@@ -1,0 +1,31 @@
+# yamllint disable rule:line-length rule:document-start
+settings:
+  authenticationToken: qa-local-only
+  selection: CLOUD_AI
+  artemisBaseUrl: https://artemis.example.invalid
+  variant: default
+  supportLevel: moderate
+user:
+  id: 117
+  firstName: Alex
+  lastName: Morgan
+  memirisEnabled: false
+  langKey: en
+course:
+  id: 42
+  name: Algorithms and Data Structures
+  description: An undergraduate course on algorithms and data structures.
+post:
+  id: 4401
+  userID: 117
+  content: I do not understand why my insertion sort loses the zero.
+  answers:
+    - id: 4402
+      content: Did you inspect the loop boundary after shifting an element?
+      userID: 204
+      redacted: false
+qa:
+  syntheticNow: "2026-05-17T12:00:00Z"
+  retrieval:
+    lectureAvailable: false
+    faqAvailable: false
