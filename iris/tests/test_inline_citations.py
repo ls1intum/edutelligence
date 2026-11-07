@@ -589,7 +589,9 @@ def test_narration_between_tool_calls_is_sent_without_markers():
     pipeline = ChatPipeline.__new__(ChatPipeline)
     pipeline.chat_mode = IrisChatMode.COURSE
     sent = []
-    callback = SimpleNamespace(send_intermediate=sent.append)
+    callback = SimpleNamespace(
+        send_intermediate=lambda text, activities=None: sent.append(text)
+    )
     model = ScriptedModel(
         [
             tool_turn(

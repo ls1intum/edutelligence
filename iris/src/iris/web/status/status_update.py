@@ -397,6 +397,19 @@ class ChatRunCallback(StatusCallback):
         # every send, but Artemis adds each send's tokens to the trace, so each usage
         # object must be delivered exactly once.
         self._delivered_tokens: list[TokenUsageDTO] = []
+        # Ids of the steps already saved on an earlier assistant message of this run.
+        self._activity_ids_on_messages: set[str] = set()
+
+    def _new_message_activities(
+        self, activities: list[ActivityDTO]
+    ) -> list[ActivityDTO]:
+        """The steps of a run snapshot that no earlier message of this run shows yet."""
+        return [
+            item for item in activities if item.id not in self._activity_ids_on_messages
+        ]
+
+    def _mark_on_message(self, activities: list[ActivityDTO]) -> None:
+        self._activity_ids_on_messages.update(item.id for item in activities)
 
     def activity_snapshot(self, activities: list[ActivityDTO], seq: int) -> None:
         payload = self._payload(
@@ -421,6 +434,10 @@ class ChatRunCallback(StatusCallback):
         }
         if activities is not None:
             fields["activities"] = activities
+            # Marked at once: an answer that fails here is carried by the terminal send.
+            message_activities = self._new_message_activities(activities)
+            fields["message_activities"] = message_activities
+            self._mark_on_message(message_activities)
         if activity_seq is not None:
             fields["activity_seq"] = activity_seq
         if suggested_context is not None:
@@ -434,10 +451,16 @@ class ChatRunCallback(StatusCallback):
     def send_intermediate(
         self,
         text,
-        activities=None,
-        activity_seq=None,
+        activities: Optional[list[ActivityDTO]] = None,
     ) -> bool:
-        """Synchronously post a non-critical intermediate assistant message."""
+        """Synchronously post a non-critical intermediate assistant message.
+
+        ``activities`` is the run's step snapshot when the message was written. The steps
+        that no earlier message of the run shows go along with it, so Artemis saves them on
+        this message and the chat shows them between the previous message and this one.
+        They count as shown even when the POST fails: without a reply Pyris cannot tell
+        whether Artemis saved the message, and sending them again could show them twice.
+        """
         if self._terminal_sent:
             self._reject_after_terminal("send_intermediate")
             return False
@@ -446,13 +469,15 @@ class ChatRunCallback(StatusCallback):
             "result": text,
             "final": False,
         }
+        message_activities = None
         if activities is not None:
-            fields["activities"] = activities
-        if activity_seq is not None:
-            fields["activity_seq"] = activity_seq
+            message_activities = self._new_message_activities(activities)
+            fields["message_activities"] = message_activities
 
         payload = self._payload(run_state=RunStateEnum.RUNNING, **fields)
         self._drain_running_updates()
+        if message_activities:
+            self._mark_on_message(message_activities)
         return self._send_status_payload(payload)
 
     def send_suggestions(self, suggestions, session_title=None) -> bool:
