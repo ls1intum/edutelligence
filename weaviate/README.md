@@ -9,12 +9,12 @@ This setup provides:
 - **Traefik**: Reverse proxy with automatic HTTPS via Let's Encrypt
 - **API Key Authentication**: Secure access control for microservices
 
-> **Embedding model note**: Iris generate embeddings client-side and store them with `vectorizer: none`. No server-side embedding module is required by default. To enable server-side vectorization for Artemis global search, set `WEAVIATE_ENABLE_MODULES=text2vec-openai,backup-filesystem` in your `.env`.
+> **Embedding model note**: Iris generates embeddings client-side and stores them with `vectorizer: none`. No server-side embedding module is required by default. To enable server-side vectorization for Artemis global search, set `WEAVIATE_ENABLE_MODULES=text2vec-openai,backup-filesystem` in your `.env`.
 
 ## Architecture
 
 ```text
-┌─────────────────┐         ┌─────────────────┐
+                            ┌─────────────────┐
                             │    Traefik      │
                             │  Port 80/443    │
                             │  (REST + HTTPS) │

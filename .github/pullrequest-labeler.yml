@@ -6,7 +6,6 @@ athena:
   - changed-files:
       - any-glob-to-any-file: athena/**/*
 
-
 iris:
   - changed-files:
       - any-glob-to-any-file: iris/**/*

@@ -55,7 +55,7 @@ A sophisticated system designed to provide (semi-)automated assessments for vari
 
 ### AtlasML
 
-AtlasML is being retired; its source and history are available in the [archive](https://github.com/ls1intum/atlas-ml-archive).
+AtlasML is retired; its source and history are available in the [archive](https://github.com/ls1intum/atlas-ml-archive).
 
 ## 🚀 Quick Start
 
