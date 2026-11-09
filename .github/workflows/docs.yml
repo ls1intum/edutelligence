@@ -14,17 +14,13 @@ jobs:
     uses: ./.github/workflows/athena_docs-build.yml
     secrets: inherit
 
-  build-atlas:
-    uses: ./.github/workflows/atlas_docs-build.yml
-    secrets: inherit
-
   build-iris:
     uses: ./.github/workflows/iris_docs-build.yml
     secrets: inherit
 
   deploy:
     if: github.ref == 'refs/heads/main'
-    needs: [build-athena, build-atlas, build-iris]
+    needs: [build-athena, build-iris]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -35,12 +31,6 @@ jobs:
         with:
           name: athena-docs
           path: site/athena
-
-      - name: Download Atlas docs
-        uses: actions/download-artifact@v4
-        with:
-          name: atlas-docs
-          path: site/atlas
 
       - name: Download Iris docs
         uses: actions/download-artifact@v4
@@ -172,12 +162,6 @@ jobs:
                       <a href="/edutelligence/athena/" class="card">
                           <h2>Athena</h2>
                           <p>AI-powered assessment and feedback system for educational environments</p>
-                          <span class="btn">View Documentation →</span>
-                      </a>
-
-                      <a href="/edutelligence/atlas/" class="card">
-                          <h2>Atlas</h2>
-                          <p>Competency-based learning management system</p>
                           <span class="btn">View Documentation →</span>
                       </a>
 

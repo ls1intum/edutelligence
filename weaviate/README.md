@@ -5,20 +5,19 @@ This directory contains a production-ready Docker Compose setup for a shared Wea
 ## Overview
 
 This setup provides:
-- **Weaviate**: Vector database accessible by Atlas and Iris microservices
+- **Weaviate**: Vector database accessible by Iris microservices
 - **Traefik**: Reverse proxy with automatic HTTPS via Let's Encrypt
 - **API Key Authentication**: Secure access control for microservices
 
-> **Embedding model note**: Consumers (Iris, AtlasML) generate embeddings client-side and store them with `vectorizer: none`. No server-side embedding module is required by default. To enable server-side vectorization for Artemis global search, set `WEAVIATE_ENABLE_MODULES=text2vec-openai,backup-filesystem` in your `.env`.
+> **Embedding model note**: Iris generates embeddings client-side and stores them with `vectorizer: none`. No server-side embedding module is required by default. To enable server-side vectorization for Artemis global search, set `WEAVIATE_ENABLE_MODULES=text2vec-openai,backup-filesystem` in your `.env`.
 
 ## Architecture
 
 ```text
-┌─────────────────┐         ┌─────────────────┐
-│     Atlas       │────────▶│                 │
-│  (self-provided │         │    Traefik      │
-│   vectors)      │         │  Port 80/443    │
-└─────────────────┘         │  (REST + HTTPS) │
+                            ┌─────────────────┐
+                            │    Traefik      │
+                            │  Port 80/443    │
+                            │  (REST + HTTPS) │
                             │  Port 50051     │
 ┌─────────────────┐         │  (gRPC + TLS)   │
 │     Iris        │────────▶│                 │
@@ -96,7 +95,7 @@ ALLOWED_IPS=
 openssl rand -base64 32
 ```
 
-Store this key securely - you'll need it for Atlas and Iris configuration.
+Store this key securely - you'll need it for Iris configuration.
 
 ### 4. Configure DNS
 
@@ -155,7 +154,7 @@ docker-compose logs -f traefik
 
 The Weaviate instance is configured with:
 - **API Key Authentication**: Required for all requests
-- **No Embedding Module by Default**: Consumers (Iris, AtlasML) supply pre-computed vectors using `vectorizer: none`. To enable server-side vectorization (e.g., for Artemis global search), set `WEAVIATE_ENABLE_MODULES=text2vec-openai,backup-filesystem` in `.env`.
+- **No Embedding Module by Default**: Iris supplies pre-computed vectors using `vectorizer: none`. To enable server-side vectorization (e.g., for Artemis global search), set `WEAVIATE_ENABLE_MODULES=text2vec-openai,backup-filesystem` in `.env`.
 - **Persistent Storage**: Data stored in Docker volume `weaviate_data`
 - **HTTPS Only**: All HTTP requests redirected to HTTPS
 

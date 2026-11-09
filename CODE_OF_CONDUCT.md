@@ -1,4 +1,4 @@
-# Atlas Code of Conduct
+# EduTelligence Code of Conduct
 
 ## Our Pledge
 

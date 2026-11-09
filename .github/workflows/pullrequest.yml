@@ -21,10 +21,6 @@ jobs:
     uses: ./.github/workflows/athena_docs-build.yml
     secrets: inherit
 
-  build-atlas:
-    uses: ./.github/workflows/atlas_docs-build.yml
-    secrets: inherit
-
   build-iris:
     uses: ./.github/workflows/iris_docs-build.yml
     secrets: inherit
