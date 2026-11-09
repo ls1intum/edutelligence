@@ -60,7 +60,7 @@ services:
       AUTHENTICATION_APIKEY_ALLOWED_KEYS: '${WEAVIATE_API_KEY}'
       AUTHENTICATION_APIKEY_USERS: '${WEAVIATE_API_USER:-admin}'
       PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
-      # Default: backup-filesystem only (AtlasML and Iris self-provide vectors).
+      # Default: backup-filesystem only (Iris self-provides vectors).
       # Artemis server-side vectorization override: WEAVIATE_ENABLE_MODULES=text2vec-openai,backup-filesystem
       ENABLE_MODULES: '${WEAVIATE_ENABLE_MODULES:-backup-filesystem}'
       ENABLE_API_BASED_MODULES: 'true'

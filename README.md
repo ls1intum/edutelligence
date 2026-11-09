@@ -24,7 +24,6 @@ For older versions (Artemis 9.x and 8.x), see the [full compatibility matrix](ht
 
 - **Iris:** [Pipeline system](https://ls1intum.github.io/edutelligence/iris/docs/developer/pipeline-system) and [RAG pipeline](https://ls1intum.github.io/edutelligence/iris/docs/developer/rag-pipeline)
 - **Athena:** [Module request lifecycle](https://ls1intum.github.io/edutelligence/athena/docs/dev/module/request-lifecycle)
-- **Atlas:** [AtlasML ML pipelines](https://ls1intum.github.io/edutelligence/atlas/dev/code-reference/ml-pipelines)
 
 ## 🚀 Sub-Services Overview
 
@@ -54,24 +53,15 @@ A sophisticated system designed to provide (semi-)automated assessments for vari
 
 **Documentation:** [https://ls1intum.github.io/edutelligence/athena/](https://ls1intum.github.io/edutelligence/athena/)
 
-### 🗺️ [Atlas](./atlas/) - Adaptive Competency-Based Learning
+### AtlasML
 
-A microservice that incorporates competency models into Learning Management Systems using machine learning and generative AI.
-
-**Key Features:**
-
-- **AI-Powered Competency Models**: Automatic generation of sophisticated competency frameworks
-- **Relationship Mapping**: Automated relationships between competencies
-- **Learning Activity Recommendations**: AI-driven suggestions for linking competencies to activities
-- **Seamless LMS Integration**: Works with Artemis and adaptable to other LMSs
-
-**Technology Stack:** Python, Machine Learning, GenAI/LLMs
+AtlasML is being retired; its source and history are available in the [archive](https://github.com/ls1intum/atlas-ml-archive).
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Python 3.13** for Iris and Atlas; **Python 3.11** for Athena
+- **Python 3.13** for Iris; **Python 3.11** for Athena
 - **Poetry** for dependency management
 - **Docker & Docker Compose** for containerization
 - **Git** for version control

@@ -44,7 +44,6 @@ body:
       multiple: true
       options:
         - Athena
-        - Atlas
         - Iris
         - Other/Unsure
     validations:

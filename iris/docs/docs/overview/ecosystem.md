@@ -30,6 +30,6 @@ Logos is an AI gateway that will eventually handle unified model routing, usage 
 ## Related Documentation
 
 - [Athena Documentation](https://ls1intum.github.io/edutelligence/athena/) — automated feedback service
-- [Atlas Documentation](https://ls1intum.github.io/edutelligence/atlas/) — competency-based learning
+- [AtlasML archive](https://github.com/ls1intum/atlas-ml-archive) — retired machine learning service
 - [EduTelligence GitHub](https://github.com/ls1intum/edutelligence) — monorepo for all services
 - [Artemis GitHub](https://github.com/ls1intum/Artemis) — the core learning platform

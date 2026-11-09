@@ -34,21 +34,11 @@ updates:
         applies-to: version-updates
         patterns:
           - "*"
-  - package-ecosystem: "pip"
-    directory: "atlas/AtlasMl"
-    schedule:
-      interval: "weekly"
-    groups:
-      atlas-python-dependencies:
-        applies-to: version-updates
-        patterns:
-          - "*"
-  # The npm side: three docusaurus sites and the Athena playground. Dependabot raises one pull request per directory.
+  # The npm side: two docusaurus sites and the Athena playground. Dependabot raises one pull request per directory.
   - package-ecosystem: "npm"
     directories:
       - "athena/docs"
       - "athena/playground"
-      - "atlas/docs"
       - "iris/docs"
     schedule:
       interval: "weekly"

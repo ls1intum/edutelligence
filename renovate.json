@@ -10,11 +10,6 @@
       "commitMessagePrefix": "`Athena`:"
     },
     {
-      "groupName": "atlas",
-      "matchFileNames": ["atlas/**"],
-      "commitMessagePrefix": "`Atlas`:"
-    },
-    {
       "groupName": "hyperion",
       "matchFileNames": ["hyperion/**"],
       "commitMessagePrefix": "`Hyperion`:"
