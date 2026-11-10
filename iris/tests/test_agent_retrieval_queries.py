@@ -14,9 +14,7 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (  # noqa: E402
 from iris.llm.agent.tools import AgentTool  # noqa: E402
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval  # noqa: E402
 from iris.tools.chat_tool_providers import _material_language  # noqa: E402
-from iris.tools.faq_content_retrieval import (  # noqa: E402
-    EMPTY_QUERY_REPLY as FAQ_EMPTY_QUERY_REPLY,
-)
+from iris.tools.faq_content_retrieval import EMPTY_QUERY_REPLY as FAQ_EMPTY_QUERY_REPLY
 from iris.tools.faq_content_retrieval import (  # noqa: E402
     create_tool_faq_content_retrieval,
 )

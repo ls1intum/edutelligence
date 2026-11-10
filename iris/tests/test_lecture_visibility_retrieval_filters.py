@@ -33,6 +33,7 @@ from iris.retrieval.lecture.lecture_visibility import (
     is_transcription_visible,
     is_unit_released,
 )
+from iris.vector_database.instance_filter import mark_exact
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
 )
@@ -555,7 +556,15 @@ def test_lecture_unit_lookup_pages_past_unreleased_candidates():
     ] == [0, 100]
 
 
-def test_segment_search_accumulates_scope_filters_and_stops_at_candidate_ceiling():
+@pytest.mark.parametrize("base_url_property", ["base_url", "base_url_exact"])
+def test_segment_search_accumulates_scope_filters_and_stops_at_candidate_ceiling(
+    monkeypatch, base_url_property
+):
+    monkeypatch.setattr(
+        "iris.vector_database.instance_filter._exact_collections", set()
+    )
+    if base_url_property == "base_url_exact":
+        mark_exact(LectureUnitSegmentSchema.COLLECTION_NAME.value)
     retrieval = LectureUnitSegmentRetrieval.__new__(LectureUnitSegmentRetrieval)
     retrieval.llm_embedding = Mock()
     retrieval.llm_embedding.embed.return_value = [0.1]
@@ -598,7 +607,7 @@ def test_segment_search_accumulates_scope_filters_and_stops_at_candidate_ceiling
         "course_id",
         "lecture_id",
         "lecture_unit_id",
-        "base_url",
+        base_url_property,
     }
 
 
