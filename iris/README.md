@@ -269,6 +269,15 @@ poetry run coverage run -m pytest # Run the tests
 poetry run coverage html # Generate the coverage report in HTML
 ```
 
+#### Updating dependencies
+
+Regenerate `poetry.lock` with Poetry and `docs/package-lock.json` with npm.
+The docs pin the `postcss-selector-parser` override to an exact version because
+Renovate updates its lock entry through an explicit npm install. npm rejects a
+range override when the temporary direct dependency has a different spec, even
+if that version satisfies the range (`EOVERRIDE`). Keep this override exact when
+updating it; do not remove the security override or bypass npm validation.
+
 #### Linting
 
 To lint the code, you can use pre-commit. Run the following command **in the edutelligence repository root`**:
