@@ -13,6 +13,7 @@ from athena.programming import Exercise, Submission, Feedback
 from athena.logger import logger
 from athena.schemas import AiSelectionDecision
 from module_programming_quality_llm.config import Configuration
+from module_programming_quality_llm.helpers.utils import get_diff
 
 from module_programming_quality_llm.generate_graded_suggestions_by_file import (
     generate_suggestions_by_file as generate_graded_suggestions_by_file,
@@ -57,6 +58,20 @@ async def suggest_feedback(
         exercise.id,
         selection.value if selection is not None else "None",
     )
+    if not get_diff(
+        src_repo=exercise.get_template_repository(),
+        dst_repo=submission.get_repository(),
+        name_only=True,
+    ).strip():
+        return [Feedback(
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="Empty submission",
+            description="Your submission is empty. You have received 0 points.",
+            credits=0.0,
+            is_graded=is_graded,
+        )]
+
     if is_graded:
         return await generate_graded_suggestions_by_file(exercise, submission, module_config.graded_approach,
                                                          module_config.debug)

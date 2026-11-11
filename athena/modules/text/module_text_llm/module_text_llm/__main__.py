@@ -72,6 +72,16 @@ async def suggest_feedback(
         module_config.approach.__class__.__name__,
         selection.value if selection is not None else "None",
     )
+    if not submission.text.strip():
+        return [Feedback(
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="Empty submission",
+            description="Your submission is empty. You have received 0 points.",
+            credits=0.0,
+            is_graded=is_graded,
+        )]
+
     return await generate_suggestions(
         exercise=exercise,
         submission=submission,

@@ -1,3 +1,4 @@
+import json
 from typing import List
 
 import nltk
@@ -8,6 +9,7 @@ from athena.logger import logger
 from athena.modeling import Exercise, Feedback, Submission
 from athena.schemas import AiSelectionDecision
 from module_modeling_llm.config import Configuration
+from module_modeling_llm.apollon_transformer.schema_converter import SchemaConverter
 from module_modeling_llm.core.filter_feedback import filter_feedback
 from module_modeling_llm.core.generate_suggestions import generate_suggestions
 from module_modeling_llm.core.get_structured_grading_instructions import get_structured_grading_instructions
@@ -47,6 +49,18 @@ async def suggest_feedback(
         selection.value if selection is not None else "None",
     )
     
+    model_data = json.loads(submission.model) if submission.model.strip() else {}
+    model_data = SchemaConverter.normalize_to_v3(model_data or {}) or {}
+    if not model_data.get("elements") and not model_data.get("relationships"):
+        return [Feedback(
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="Empty submission",
+            description="Your submission is empty. You have received 0 points.",
+            credits=0.0,
+            is_graded=is_graded,
+        )]
+
     # First, we convert the incoming exercise and submission to our internal models and textual representations
     exercise_model = get_exercise_model(exercise, submission)
 
