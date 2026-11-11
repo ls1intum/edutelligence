@@ -19,4 +19,5 @@ class TextSubmission(Submission):
     @field_validator("text", mode="before")
     @classmethod
     def normalize_empty_text(cls, value):
+        """Treat null text as an empty answer while retaining string validation."""
         return "" if value is None else value

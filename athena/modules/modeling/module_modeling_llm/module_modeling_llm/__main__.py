@@ -3,6 +3,7 @@ from typing import List
 
 import nltk
 import tiktoken
+from fastapi import HTTPException
 
 from athena import app, submission_selector, submissions_consumer, feedback_consumer, feedback_provider
 from athena.logger import logger
@@ -42,6 +43,7 @@ async def suggest_feedback(
     module_config: Configuration,
     selection: AiSelectionDecision | None = None,
 ) -> List[Feedback]:
+    """Generate feedback for valid models and return static feedback for empty models."""
     logger.info(
         "suggest_feedback: Suggestions for submission %d of exercise %d were requested, with selection: %s",
         submission.id,
@@ -49,14 +51,27 @@ async def suggest_feedback(
         selection.value if selection is not None else "None",
     )
     
-    model_data = json.loads(submission.model) if submission.model.strip() else {}
-    model_data = SchemaConverter.normalize_to_v3(model_data or {}) or {}
+    try:
+        model_data = json.loads(submission.model) if submission.model.strip() else {}
+        model_data = SchemaConverter.normalize_to_v3(model_data if model_data is not None else {})
+        if not isinstance(model_data, dict) or (
+            model_data and not {"elements", "relationships"}.issubset(model_data)
+        ):
+            raise ValueError("Unrecognized Apollon model format.")
+        if not all(isinstance(model_data.get(key, {}), dict) for key in ("elements", "relationships")):
+            raise ValueError("Model elements and relationships must be objects.")
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid Apollon model format.") from exc
+
     if not model_data.get("elements") and not model_data.get("relationships"):
         return [Feedback(
             exercise_id=exercise.id,
             submission_id=submission.id,
             title="Empty submission",
-            description="Your submission is empty. You have received 0 points.",
+            description=(
+                "Your submission is empty. You have received 0 points."
+                if is_graded else "Your submission is empty."
+            ),
             credits=0.0,
             is_graded=is_graded,
         )]
