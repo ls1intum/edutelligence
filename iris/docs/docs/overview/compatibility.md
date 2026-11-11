@@ -16,6 +16,7 @@ Run matching versions from the same release cycle. Pairing an Artemis release wi
 
 | Artemis Version | EduTelligence Version | Status    |
 | --------------- | --------------------- | --------- |
+| 10.7.x          | 3.7.x                 | ✅ Stable |
 | 10.6.x          | 3.6.x                 | ✅ Stable |
 | 10.5.x          | 3.5.x                 | ✅ Stable |
 | 10.4.x          | 3.4.x                 | ✅ Stable |
@@ -46,7 +47,7 @@ The newest version is at the top. The [EduTelligence README](https://github.com/
 
 ## Choosing an Image Tag
 
-Released versions are published to the GitHub Container Registry as `ghcr.io/ls1intum/edutelligence/iris:<version>` (for example `ghcr.io/ls1intum/edutelligence/iris:3.6`). Pin production deployments to an explicit version rather than `latest`, so that an upgrade is a deliberate change and a rollback is a single tag change. See [Deployment](../admin/deployment.md).
+Released versions are published to the GitHub Container Registry as `ghcr.io/ls1intum/edutelligence/iris:<version>` (for example `ghcr.io/ls1intum/edutelligence/iris:3.7`). Pin production deployments to an explicit version rather than `latest`, so that an upgrade is a deliberate change and a rollback is a single tag change. See [Deployment](../admin/deployment.md).
 
 ## Requirements
 
