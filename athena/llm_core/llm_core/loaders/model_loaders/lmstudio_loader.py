@@ -41,7 +41,6 @@ for _name in _discover_lmstudio_models():
         "model": _name,
         "base_url": LMSTUDIO_BASE_URL,
         "api_key": LMSTUDIO_API_KEY,
-        "temperature": 0.0,
     }
 
     lmstudio_available_models[key] = ChatOpenAI(**params)

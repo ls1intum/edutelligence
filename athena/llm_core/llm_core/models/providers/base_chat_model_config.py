@@ -31,22 +31,26 @@ class BaseChatModelConfig(ModelConfig, BaseModel, ABC):
             "completion, including visible output tokens and reasoning tokens."
         ),
     )
-    temperature: float = Field(
-        0.0,
+    temperature: float | None = Field(
+        None,
         ge=0,
         le=2,
         description="""\
+Leave unset to use the model's default.
+
 What sampling temperature to use, between 0 and 2. Higher values like 0.8 will make the output more random, 
 while lower values like 0.2 will make it more focused and deterministic.
 
 We generally recommend altering this or `top_p` but not both.\
 """,
     )
-    top_p: float = Field(
-        1.0,
+    top_p: float | None = Field(
+        None,
         ge=0,
         le=1,
         description="""\
+Leave unset to use the model's default.
+
 An alternative to sampling with temperature, called nucleus sampling, where the model considers the results 
 of the tokens with top_p probability mass. So 0.1 means only the tokens comprising the top 10% probability 
 mass are considered.
@@ -54,22 +58,26 @@ mass are considered.
 We generally recommend altering this or `temperature` but not both.\
 """,
     )
-    presence_penalty: float = Field(
-        0.0,
+    presence_penalty: float | None = Field(
+        None,
         ge=-2,
         le=2,
         description="""\
+Leave unset to use the model's default.
+
 Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, 
 increasing the model's likelihood to talk about new topics.
 
 [See more information about frequency and presence penalties.](https://platform.openai.com/docs/api-reference/parameter-details)\
 """,
     )
-    frequency_penalty: float = Field(
-        0.0,
+    frequency_penalty: float | None = Field(
+        None,
         ge=-2,
         le=2,
         description="""\
+Leave unset to use the model's default.
+
 Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, 
 decreasing the model's likelihood to repeat the same line verbatim.
 
@@ -134,7 +142,7 @@ decreasing the model's likelihood to repeat the same line verbatim.
         kwargs = tmpl.__dict__.copy()
         secrets = {s: getattr(tmpl, s) for s in getattr(tmpl, "lc_secrets", {})}
         kwargs.update(secrets)
-        model_kwargs = kwargs.get("model_kwargs") or {}
+        model_kwargs = dict(kwargs.get("model_kwargs") or {})
         kwargs["model_kwargs"] = model_kwargs
 
         for attr, value in self.dict().items():
@@ -149,6 +157,9 @@ decreasing the model's likelihood to repeat the same line verbatim.
             if mapped != attr:
                 kwargs.pop(mapped, None)
                 model_kwargs.pop(mapped, None)
+            # Let the provider choose its default for unset generation settings.
+            if value is None:
+                continue
             target = kwargs if hasattr(tmpl, mapped) else model_kwargs
             target[mapped] = value
 
