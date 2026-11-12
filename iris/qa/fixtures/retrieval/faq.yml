@@ -1,0 +1,9 @@
+# yamllint disable rule:line-length rule:document-start
+qa:
+  retrieval:
+    faqAvailable: true
+    faqs:
+      - id: 8101
+        question: When is the insertion-sort exercise due?
+        answer: Monday, 18 May 2026 at 22:00 Europe/Berlin. A 24-hour grace period applies only to practice submissions.
+        link: /courses/42/faq/8101

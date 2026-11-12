@@ -1,0 +1,24 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+textExercise:
+  id: 9301
+  title: Causal Claims from Observational Data
+  problemStatement: |
+    Evaluate what can be concluded from an observational comparison of 180
+    students. Sixty voluntarily attended at least four optional tutorials and
+    averaged 78 exam points; the other 120 averaged 66. The dataset also shows
+    that attendees entered with an average prior-course grade of 1.7 versus
+    2.5 for non-attendees, and no students were randomly assigned. Discuss
+    selection, possible reverse causality, and what additional design or
+    analysis would be needed for a causal conclusion.
+  startDate: 2026-06-20T08:00:00Z
+  endDate: 2026-07-03T18:00:00Z
+  exampleSolution: "Confidential reference: the twelve-point association is descriptive, with prior achievement and voluntary attendance preventing an unqualified causal interpretation."
+textExerciseSubmission: |
+  Tutorial attendance caused a twelve-point improvement because attendees
+  scored 78 and non-attendees scored 66. The large sample rules out selection
+  bias. Students who expected to do well would have less reason to attend, so
+  reverse causality cannot explain the result. Therefore tutorials are proven
+  to increase every student's score by about twelve points.
+qa:
+  syntheticNow: "2026-06-27T09:30:00Z"

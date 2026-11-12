@@ -1,0 +1,16 @@
+# yamllint disable rule:line-length rule:document-start
+exercise: incremental-workbook
+student: 117
+submissions:
+  - id: 931
+    commit: 17a6bd2
+    date: 2026-07-18T12:30:00Z
+    snapshot: student/parser-failure
+    build: failed
+    note: The initial parser treated qualified references as local cell names, so cross-sheet parser tests failed.
+  - id: 932
+    commit: 7d920ef
+    date: 2026-07-19T09:20:00Z
+    snapshot: student/latest
+    build: passed
+    note: The parser and public tests now pass; three stateful hidden sequences still fail.

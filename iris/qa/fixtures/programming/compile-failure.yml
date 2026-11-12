@@ -1,0 +1,19 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [programming/sorting.yml]
+programmingExerciseSubmission:
+  id: 501
+  date: 2026-05-11T08:15:00Z
+  repository: { $repository: programming/sorting/student/compile-failure }
+  isPractice: false
+  buildFailed: true
+  buildLogEntries:
+    - timestamp: 2026-05-11T08:16:12Z
+      message: "src/Sort.java:[7,42] ';' expected"
+    - timestamp: 2026-05-11T08:16:12Z
+      message: "src/Sort.java:[9,16] incompatible types: int[] cannot be converted to int"
+  latestResult:
+    completionDate: 2026-05-11T08:16:13Z
+    successful: false
+    # This is submission 501's compile result. Explicitly replace the base
+    # fixture's later hidden-test feedback instead of inheriting it.
+    feedbacks: []
