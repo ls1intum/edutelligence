@@ -118,12 +118,12 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v7
       - name: Download all JUnit results
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: junit-results
           path: all-test-results
       - name: Download coverage reports
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           name: coverage-reports
