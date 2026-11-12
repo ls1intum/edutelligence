@@ -1,7 +1,7 @@
 from typing import Optional
 from enum import Enum
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from .submission import Submission
 
@@ -15,3 +15,9 @@ class TextSubmission(Submission):
     """Submission on a text exercise."""
     text: str = Field(examples=["Lorem ipsum dolor sit amet, consectetur adipiscing elit."])
     language: Optional[TextLanguageEnum] = Field(None, examples=[TextLanguageEnum.ENGLISH])
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def normalize_empty_text(cls, value):
+        """Treat null text as an empty answer while retaining string validation."""
+        return "" if value is None else value

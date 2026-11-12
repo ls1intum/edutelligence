@@ -64,6 +64,7 @@ async def suggest_feedback(
     competencies: Optional[List[Competency]] = None,
     selection: Optional[AiSelectionDecision] = None,
 ) -> List[Feedback]:
+    """Generate feedback, returning static feedback for empty submissions."""
     logger.info(
         "suggest_feedback: %s suggestions for submission %d of exercise %d were requested, with approach: %s, selection: %s",
         "Graded" if is_graded else "Non-graded",
@@ -72,6 +73,19 @@ async def suggest_feedback(
         module_config.approach.__class__.__name__,
         selection.value if selection is not None else "None",
     )
+    if not submission.text.strip():
+        return [Feedback(
+            exercise_id=exercise.id,
+            submission_id=submission.id,
+            title="Empty submission",
+            description=(
+                "Your submission is empty. You have received 0 points."
+                if is_graded else "Your submission is empty."
+            ),
+            credits=0.0,
+            is_graded=is_graded,
+        )]
+
     return await generate_suggestions(
         exercise=exercise,
         submission=submission,
