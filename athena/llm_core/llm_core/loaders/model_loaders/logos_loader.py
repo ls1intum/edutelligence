@@ -40,7 +40,6 @@ for _name in _discover_logos_models():
         "model": _name,
         "base_url": LOGOS_BASE_URL,
         "api_key": LOGOS_API_KEY,
-        "temperature": 0.0,
     }
 
     logos_available_models[key] = ChatOpenAI(**params)
