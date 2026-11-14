@@ -19,18 +19,18 @@
     "@fortawesome/react-fontawesome": "3.5.0",
     "@monaco-editor/react": "4.7.0",
     "@radix-ui/react-collapsible": "1.2.1",
-    "@rjsf/core": "6.11.0",
-    "@rjsf/utils": "6.11.0",
-    "@rjsf/validator-ajv8": "6.11.0",
-    "@tailwindcss/postcss": "4.3.3",
+    "@rjsf/core": "6.11.1",
+    "@rjsf/utils": "6.11.1",
+    "@rjsf/validator-ajv8": "6.11.1",
+    "@tailwindcss/postcss": "4.3.5",
     "@tailwindcss/typography": "0.5.20",
-    "@tanstack/react-query": "5.104.3",
-    "@tumaet/apollon": "4.2.9",
+    "@tanstack/react-query": "5.107.1",
+    "@tumaet/apollon": "4.9.0",
     "allotment": "1.20.6",
     "archiver": "7.0.1",
     "formidable": "3.5.4",
     "monaco-editor": "0.57.0",
-    "next": "15.5.28",
+    "next": "15.5.29",
     "react": "18.3.1",
     "react-complex-tree": "2.6.4",
     "react-complex-tree-blueprintjs-renderers": "2.6.4",
@@ -43,7 +43,7 @@
     "react-textarea-autosize": "8.5.9",
     "rehype-raw": "7.0.0",
     "tailwind-merge": "3.7.0",
-    "tailwindcss": "4.3.3",
+    "tailwindcss": "4.3.5",
     "unzipper": "0.12.5",
     "uuid": "13.0.2"
   },
@@ -55,9 +55,9 @@
     "@types/react-dom": "18.3.7",
     "@types/react-modal": "3.16.3",
     "@types/unzipper": "0.10.11",
-    "axios": "1.20.0",
+    "axios": "1.21.1",
     "eslint": "8.57.1",
-    "eslint-config-next": "15.5.28",
+    "eslint-config-next": "15.5.29",
     "inquirer": "9.3.8",
     "jszip": "3.10.2",
     "mysql2": "3.24.6",
@@ -72,7 +72,7 @@
       "dompurify": "3.4.17"
     },
     "@tailwindcss/typography": {
-      "postcss-selector-parser": "6.1.5"
+      "postcss-selector-parser": "6.1.6"
     }
   }
 }
