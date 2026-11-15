@@ -123,6 +123,69 @@ def test_invalid_json_raises():
         pipeline(command="Generate a question")
 
 
+# Checks one mcq object followed by prose (Issue: Text after the JSON is ignored).
+def test_trailing_prose_after_json_is_ignored():
+    pipeline = _make_pipeline(
+        VALID_SINGLE_MCQ + "\n\nHope that helps!"
+    )  # {mcq} + "Hope that helps!"
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
+
+
+# Checks an mcq-set with both questions, in order (Issue: The trace's exact
+# failure).
+def test_two_consecutive_mcq_objects_merge_into_one_set():
+    single = json.loads(VALID_SINGLE_MCQ)
+    other = {**single, "question": "What is 3+3?"}
+    pipeline = _make_pipeline(json.dumps(single) + "\n" + json.dumps(other))
+    parsed = json.loads(pipeline(command="Generate questions"))  # {mcq}\n{mcq}
+    assert [q["question"] for q in parsed["questions"]] == [
+        "What is 2+2?",
+        "What is 3+3?",
+    ]
+
+
+# Checks an mcq-set with 2 questions (Issue: The AttributeError case).
+def test_top_level_array_is_accepted():
+    questions = json.loads(VALID_MCQ_SET)["questions"]
+    pipeline = _make_pipeline(json.dumps(questions))
+    parsed = json.loads(pipeline(command="Generate 2 questions"))  # [{q}, {q}]
+    assert parsed["type"] == "mcq-set"
+    assert len(parsed["questions"]) == 2
+
+
+# Checks that the trailing prose after a valid mcq object is ignored, even if
+# it looks like JSON (Issue: Trailing text, harder case).
+def test_trailing_prose_that_looks_like_json_is_ignored():
+    pipeline = _make_pipeline(VALID_SINGLE_MCQ + "\n\n2 more questions can follow.")
+    parsed = json.loads(
+        pipeline(command="Generate a question")
+    )  # {mcq} + "2 more questions can follow."
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
+
+
+# Checks an mcq-set with 2 questions (Issue: Several objects in a row, comma
+# variant).
+def test_comma_separated_mcq_objects_merge_into_one_set():
+    pipeline = _make_pipeline(VALID_SINGLE_MCQ + ",\n" + VALID_SINGLE_MCQ)
+    parsed = json.loads(pipeline(command="Generate questions"))  # {mcq},\n{mcq}
+    assert parsed["type"] == "mcq-set"
+    assert len(parsed["questions"]) == 2
+
+
+# Checks one mcq object preceded by prose with brackets (Issue: Leading prose
+# is skipped).
+def test_leading_prose_with_brackets_is_skipped():
+    pipeline = _make_pipeline("Here is question [1]:\n" + VALID_SINGLE_MCQ)
+    parsed = json.loads(
+        pipeline(command="Generate a question")
+    )  # "Here is question [1]:\n{mcq}"
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
+
+
 def test_wrong_option_count_raises():
     bad_mcq = json.dumps(
         {
