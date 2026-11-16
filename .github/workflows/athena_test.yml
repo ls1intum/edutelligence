@@ -48,8 +48,8 @@ jobs:
           for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
             if [ -d "$module/.venv" ]; then
               echo "Running tests for $module..."
-              # Install pytest and coverage in the module's environment
-              $module/.venv/bin/pip install pytest pytest-asyncio coverage
+              # Install the locked test and coverage dependencies in the module's environment
+              poetry -C "$module" install --with test --no-interaction --no-ansi
               
               # Extract module name for coverage data file
               module_name=$(echo $module | sed 's|modules/||' | sed 's|/|_|g')
@@ -81,7 +81,6 @@ jobs:
           # Generate combined HTML coverage report
           echo "📊 Generating Combined HTML Coverage Report..."
           echo "============================================="
-          poetry run pip install coverage
           # Create a combined coverage database from individual .coverage files
           poetry run coverage combine .coverage.programming_module_programming_llm .coverage.text_module_text_llm .coverage.modeling_module_modeling_llm
           poetry run coverage html --rcfile=.coveragerc -d test-results/combined_html
