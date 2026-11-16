@@ -28,9 +28,10 @@ class ResponseAssessmentService(Protocol):
 
 
 class LlmJudgeAssessmentService:
-    def __init__(self, inference: ModelInferenceService, model: str):
+    def __init__(self, inference: ModelInferenceService, model: str, attempts: int = 3):
         self.inference = inference
         self.model = model
+        self.attempts = attempts
 
     def assess(self, test_case: TestCase, response: str) -> Assessment:
         criteria = "\n".join(f"- {c.id} ({c.name}): {c.description}" for c in CRITERIA)
@@ -38,34 +39,48 @@ class LlmJudgeAssessmentService:
             {"role": "system", "content": SYSTEM_PROMPT.format(criteria=criteria)},
             {"role": "user", "content": _describe(test_case, response)},
         ]
-        answer = self.inference.complete(self.model, messages, json_schema=_schema())
-        ratings = json.loads(answer)
-        return Assessment(
-            test_case_id=test_case.id,
-            scores=[
-                CriterionScore(
-                    criterion=c.id,
-                    rating=ratings[c.id]["rating"],
-                    reasoning=ratings[c.id].get("reasoning", ""),
-                )
-                for c in CRITERIA
-            ],
-        )
+        # the judge may return invalid or incomplete JSON now and then: ask again
+        error: Exception | None = None
+        for _ in range(self.attempts):
+            answer = self.inference.complete(self.model, messages, json_schema=_schema())
+            try:
+                return _parse(test_case.id, answer)
+            except (ValueError, KeyError, TypeError) as e:  # JSON or validation error
+                error = e
+        raise ValueError(f"no valid assessment after {self.attempts} attempts: {error}")
+
+
+def _parse(test_case_id: int, answer: str) -> Assessment:
+    ratings = json.loads(answer)
+    return Assessment(
+        test_case_id=test_case_id,
+        scores=[
+            CriterionScore(
+                criterion=c.id,
+                rating=ratings[c.id]["rating"],
+                reasoning=ratings[c.id].get("reasoning", ""),
+            )
+            for c in CRITERIA
+        ],
+    )
 
 
 def _schema() -> dict:
+    """JSON schema of the judge's answer (strict structured output)."""
     rating = {
         "type": "object",
         "properties": {
-            "rating": {"enum": [r.value for r in Rating]},
+            "rating": {"type": "string", "enum": [r.value for r in Rating]},
             "reasoning": {"type": "string"},
         },
         "required": ["rating", "reasoning"],
+        "additionalProperties": False,
     }
     return {
         "type": "object",
         "properties": {c.id: rating for c in CRITERIA},
         "required": [c.id for c in CRITERIA],
+        "additionalProperties": False,
     }
 
 

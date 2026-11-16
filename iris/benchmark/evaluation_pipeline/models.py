@@ -23,21 +23,63 @@ class Message(BaseModel):
     text: str
 
 
+class User(BaseModel):
+    """The student (pseudonymised)."""
+
+    id: int
+    language: str = "en"  # Artemis UI language of the student, e.g. "en" or "de"
+
+
+class Course(BaseModel):
+    """The course the conversation belongs to."""
+
+    id: int
+    name: str
+    description: Optional[str] = None
+
+
 class Exercise(BaseModel):
     """The exercise the conversation is about."""
 
+    id: int
     title: str
     problem_statement: Optional[str] = None
     programming_language: Optional[str] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None  # due date
+    max_points: Optional[float] = None
+    # file path -> file content
+    template_repository: dict[str, str] = Field(default_factory=dict)
+    solution_repository: dict[str, str] = Field(default_factory=dict)
+
+
+class Feedback(BaseModel):
+    """One feedback item of a result, e.g. a test case."""
+
+    test_case_name: Optional[str] = None
+    text: Optional[str] = None
+    credits: float = 0
+    passed: Optional[bool] = None  # None = not executed
+
+
+class Result(BaseModel):
+    """The latest automatic assessment of the submission (test results)."""
+
+    completion_date: Optional[datetime] = None
+    successful: bool = False
+    feedbacks: list[Feedback] = Field(default_factory=list)
 
 
 class Submission(BaseModel):
     """The student's code at the time of the message."""
 
+    id: int
+    date: Optional[datetime] = None
     # file path -> file content, like the repository field Pyris receives
     repository: dict[str, str] = Field(default_factory=dict)
     build_failed: bool = False
     build_log: list[str] = Field(default_factory=list)
+    latest_result: Optional[Result] = None
 
 
 class TestCase(BaseModel):
@@ -49,6 +91,8 @@ class TestCase(BaseModel):
     chat_mode: ChatMode
     # taxonomy codes of the last student message: dimension -> characteristic
     characteristics: dict[str, str] = Field(default_factory=dict)
+    user: User
+    course: Course
     conversation: list[Message]
     exercise: Optional[Exercise] = None
     submission: Optional[Submission] = None

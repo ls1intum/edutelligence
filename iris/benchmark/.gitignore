@@ -1,2 +1,5 @@
 # results of local benchmark runs
 runs/
+
+# local secrets (Logos API key)
+.env
