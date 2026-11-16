@@ -119,7 +119,10 @@ def convert_to_ollama_messages(messages: list[PyrisMessage]) -> list[Message]:
 
 
 def convert_to_iris_message(
-    message: Message, num_input_tokens: int, num_output_tokens: int, model: str
+    message: Message,
+    num_input_tokens: int | None,
+    num_output_tokens: int | None,
+    model: str,
 ) -> PyrisMessage:
     """
     Convert a Message to a PyrisMessage.
@@ -127,10 +130,15 @@ def convert_to_iris_message(
     When the response contains tool_calls, returns a PyrisAIMessage with
     synthetic call IDs (Ollama doesn't provide them, but LangChain requires them).
     """
+    reported_counts = tuple(
+        isinstance(count, int) and not isinstance(count, bool) and count >= 0
+        for count in (num_input_tokens, num_output_tokens)
+    )
     tokens = TokenUsageDTO(
-        numInputTokens=num_input_tokens,
-        numOutputTokens=num_output_tokens,
+        numInputTokens=num_input_tokens if reported_counts[0] else 0,
+        numOutputTokens=num_output_tokens if reported_counts[1] else 0,
         model=model,
+        usage_reported=all(reported_counts),
     )
 
     thinking = message.get("thinking")
@@ -332,8 +340,8 @@ class OllamaModel(
         msg = response.get("message", {}) or {}
         message = convert_to_iris_message(
             msg,
-            int(response.get("prompt_eval_count", 0) or 0),
-            int(response.get("eval_count", 0) or 0),
+            response.get("prompt_eval_count"),
+            response.get("eval_count"),
             response.get("model", self.model),
         )
         record_generation(self.model, message.token_usage)

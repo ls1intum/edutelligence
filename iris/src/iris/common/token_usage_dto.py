@@ -39,7 +39,8 @@ class TokenUsageDTO(BaseModel):
     )
     total_cost_usd: float | None = Field(alias="totalCostUsd", default=None)
     cost_source: str | None = Field(alias="costSource", default=None)
-    usage_reported: bool = Field(default=True, exclude=True)
+    # Adapters set this only when the required token counters were reported.
+    usage_reported: bool = Field(default=False, exclude=True)
     pipeline: PipelineEnum = Field(alias="pipelineId", default=PipelineEnum.NOT_SET)
 
     @model_validator(mode="before")

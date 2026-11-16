@@ -50,8 +50,13 @@ def _reported_usd_cost(usage: dict, normalized_usage: dict) -> float | None:
 
 def _estimated_usd_cost(usage: dict) -> float | None:
     details = usage.get("input_token_details") or {}
-    cached = details.get("cache_read", 0)
-    written = details.get("cache_creation", 0)
+    cached = sum(
+        details.get(f"{prefix}cache_read") or 0 for prefix in ("", "priority_", "flex_")
+    )
+    written = sum(
+        details.get(f"{prefix}cache_creation") or 0
+        for prefix in ("", "priority_", "flex_")
+    )
     counts = (
         usage["input_tokens"] - cached - written,
         cached,
@@ -95,7 +100,7 @@ class UsageHandler(BaseCallbackHandler):
             {"numInputTokens": 0, "numOutputTokens": 0, "numTotalTokens": 0, "cost": 0},
         )
         llm_calls = meta.get("llmRequests", [])
-        single_generation = sum(len(group) for group in response.generations) == 1
+        single_request = len(response.generations) == 1
 
         for generations in response.generations:
             for generation in generations:
@@ -111,7 +116,7 @@ class UsageHandler(BaseCallbackHandler):
                 # ChatOpenAI keeps the full nonstreaming usage in llm_output;
                 # its normalized UsageMetadata contains token counts only.
                 provider_usage = response_metadata.get("token_usage")
-                if provider_usage is None and single_generation:
+                if provider_usage is None and single_request:
                     provider_usage = output_metadata.get("token_usage")
                 reported_cost = _reported_usd_cost(
                     provider_usage if isinstance(provider_usage, dict) else {},
@@ -150,6 +155,8 @@ class UsageHandler(BaseCallbackHandler):
                         "costSource": source,
                     }
                 )
+                # Choices in one request repeat its aggregate usage.
+                break
 
         emit_meta("totalUsage", total_usage)
         emit_meta("llmRequests", llm_calls)

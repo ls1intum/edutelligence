@@ -421,7 +421,7 @@ def _usage_field(source: Any, name: str) -> int:
     value = (
         source.get(name) if isinstance(source, dict) else getattr(source, name, None)
     )
-    return value if isinstance(value, int) else 0
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _optional_usage_field(source: Any, name: str) -> Any:
@@ -431,6 +431,25 @@ def _optional_usage_field(source: Any, name: str) -> Any:
     return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
 
 
+def _valid_usage_count(source: Any, name: str, *, optional: bool = False) -> bool:
+    """Keep optional absent/null cache counters distinct from invalid counts."""
+    if source is None:
+        return optional
+    if isinstance(source, dict):
+        present = name in source
+    else:
+        fields = getattr(source, "model_fields_set", None)
+        if fields is None and not hasattr(source, "__dict__"):
+            return False
+        present = name in fields if fields is not None else hasattr(source, name)
+    if not present:
+        return optional
+    value = _optional_usage_field(source, name)
+    if value is None:
+        return optional
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
     """
     Create a TokenUsageDTO from Chat Completions or Responses usage data.
@@ -438,7 +457,7 @@ def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
     Chat Completions reports ``prompt_tokens`` with ``prompt_tokens_details``;
     the Responses API reports ``input_tokens`` with ``input_tokens_details``.
     Both details objects carry ``cached_tokens`` and, on models that bill cache
-    writes, ``cache_write_tokens``. Missing fields count as zero.
+    writes, ``cache_write_tokens``. Missing or null cache counters count as zero.
 
     Args:
         usage: Optional usage object (or dict) from either API
@@ -483,14 +502,16 @@ def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
         ),
         usage_reported=usage is not None
         and all(
-            isinstance(_optional_usage_field(usage, name), int)
-            and not isinstance(_optional_usage_field(usage, name), bool)
-            and _optional_usage_field(usage, name) >= 0
+            _valid_usage_count(usage, name)
             for name in (
                 ("input_tokens", "output_tokens")
                 if is_responses_usage
                 else ("prompt_tokens", "completion_tokens")
             )
+        )
+        and all(
+            _valid_usage_count(details, name, optional=True)
+            for name in ("cached_tokens", "cache_write_tokens")
         ),
     )
 
