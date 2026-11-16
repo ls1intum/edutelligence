@@ -48,8 +48,9 @@ jobs:
           for module in modules/programming/module_programming_llm modules/text/module_text_llm modules/modeling/module_modeling_llm; do
             if [ -d "$module/.venv" ]; then
               echo "Running tests for $module..."
-              # Install the locked test and coverage dependencies in the module's environment
+              # Install locked test dependencies and CI-only coverage tooling
               poetry -C "$module" install --with test --no-interaction --no-ansi
+              $module/.venv/bin/python -m pip install coverage
               
               # Extract module name for coverage data file
               module_name=$(echo $module | sed 's|modules/||' | sed 's|/|_|g')

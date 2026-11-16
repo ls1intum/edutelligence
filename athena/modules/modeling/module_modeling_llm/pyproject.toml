@@ -21,7 +21,6 @@ types-requests = "2.33.0.20261006"
 [tool.poetry.group.test.dependencies]
 pytest = "9.0.3"
 pytest-asyncio = "1.3.0"
-coverage = "7.17.3"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
