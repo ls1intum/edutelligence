@@ -1,5 +1,6 @@
 """Data model of the benchmark: test cases, Iris responses and assessments."""
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Optional
 
@@ -99,3 +100,33 @@ class Assessment(BaseModel):
 
     test_case_id: int
     scores: list[CriterionScore]
+
+
+class RunStatus(StrEnum):
+    RUNNING = "running"
+    FINISHED = "finished"
+    FAILED = "failed"
+
+
+class BenchmarkRun(BaseModel):
+    """One execution of a test dataset against an Iris configuration."""
+
+    id: str
+    dataset_id: int
+    dataset_version: str
+    iris: str  # which Iris Response Service answered, e.g. "stub"
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    status: RunStatus = RunStatus.RUNNING
+    results: list[TestCaseResult] = Field(default_factory=list)
+
+
+class EvaluationRun(BaseModel):
+    """One assessment of the results of a benchmark run by a judge model."""
+
+    benchmark_run_id: str
+    judge_model: str
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    status: RunStatus = RunStatus.RUNNING
+    assessments: list[Assessment] = Field(default_factory=list)
