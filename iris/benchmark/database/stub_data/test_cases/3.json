@@ -10,6 +10,15 @@
     "Requests solution": "No",
     "# of requests": "One"
   },
+  "user": {
+    "id": 103,
+    "language": "en"
+  },
+  "course": {
+    "id": 11,
+    "name": "Introduction to Programming (invented)",
+    "description": "Invented course for developing the benchmark."
+  },
   "conversation": [
     {
       "sender": "student",
