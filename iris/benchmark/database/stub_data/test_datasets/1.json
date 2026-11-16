@@ -1,0 +1,7 @@
+{
+  "id": 1,
+  "name": "Invented examples",
+  "version": "0.1.0",
+  "description": "Three invented test cases for developing the benchmark. No real student data.",
+  "test_case_ids": [1, 2, 3]
+}
