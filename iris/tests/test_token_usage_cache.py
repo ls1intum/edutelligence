@@ -276,6 +276,8 @@ def test_langchain_wrapper_keeps_cache_counts_and_rates():
         costPerMillionCachedInputToken=0.01,
         costPerMillionCacheWriteInputToken=0.125,
         pipelineId=PipelineEnum.IRIS_CHAT_COURSE_MESSAGE,
+        totalCostUsd=0.0004,
+        costSource="PROVIDER",
     )
     handler = _StubRequestHandler()
     handler.next_message = PyrisMessage(
@@ -294,6 +296,8 @@ def test_langchain_wrapper_keeps_cache_counts_and_rates():
     assert llm.tokens.cost_per_million_cached_input_token == 0.01
     assert llm.tokens.cost_per_million_cache_write_input_token == 0.125
     assert llm.tokens.pipeline == PipelineEnum.NOT_SET
+    assert llm.tokens.total_cost_usd == 0.0004
+    assert llm.tokens.cost_source == "PROVIDER"
 
 
 def test_token_usage_serializes_cache_fields_for_artemis():

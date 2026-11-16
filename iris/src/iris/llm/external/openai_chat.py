@@ -424,6 +424,13 @@ def _usage_field(source: Any, name: str) -> int:
     return value if isinstance(value, int) else 0
 
 
+def _optional_usage_field(source: Any, name: str) -> Any:
+    """Read provider extensions from SDK models as well as plain responses."""
+    if source is None:
+        return None
+    return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
+
+
 def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
     """
     Create a TokenUsageDTO from Chat Completions or Responses usage data.
@@ -460,12 +467,31 @@ def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
             if isinstance(usage, dict)
             else getattr(usage, details_name, None)
         )
+    reported_cost = _optional_usage_field(usage, "cost")
+    currency = _optional_usage_field(usage, "cost_currency")
+    if reported_cost is not None and currency != "USD":
+        logger.warning("Ignoring provider cost without an explicit USD currency")
     return TokenUsageDTO(
         model=model,
         numInputTokens=input_tokens,
         numOutputTokens=output_tokens,
         numCachedInputTokens=_usage_field(details, "cached_tokens"),
         numCacheWriteInputTokens=_usage_field(details, "cache_write_tokens"),
+        totalCostUsd=reported_cost if currency == "USD" else None,
+        costSource=(
+            "PROVIDER" if currency == "USD" and reported_cost is not None else None
+        ),
+        usage_reported=usage is not None
+        and all(
+            isinstance(_optional_usage_field(usage, name), int)
+            and not isinstance(_optional_usage_field(usage, name), bool)
+            and _optional_usage_field(usage, name) >= 0
+            for name in (
+                ("input_tokens", "output_tokens")
+                if is_responses_usage
+                else ("prompt_tokens", "completion_tokens")
+            )
+        ),
     )
 
 

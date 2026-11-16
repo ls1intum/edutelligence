@@ -1,3 +1,4 @@
+import math
 from typing import Any, Callable, Dict, Literal, Optional, Sequence, Type, Union
 
 from langchain_core.tools import BaseTool
@@ -42,6 +43,48 @@ def apply_model_costs(token_usage: TokenUsageDTO, llm: ChatModel) -> None:
     token_usage.cost_per_million_output_token = (
         llm.cost_per_million_output_token * output_multiplier
     )
+    # Provider totals include cache discounts and provider-specific charges.
+    # The legacy rates above remain available, but never replace that total.
+    if token_usage.total_cost_usd is not None and token_usage.cost_source == "PROVIDER":
+        return
+    token_usage.total_cost_usd = None
+    token_usage.cost_source = None
+    if not token_usage.usage_reported:
+        return
+    counts = (
+        token_usage.num_input_tokens
+        - token_usage.num_cached_input_tokens
+        - token_usage.num_cache_write_input_tokens,
+        token_usage.num_cached_input_tokens,
+        token_usage.num_cache_write_input_tokens,
+        token_usage.num_output_tokens,
+    )
+    rates = (
+        llm.cost_per_million_input_token_usd,
+        llm.cost_per_million_cached_input_token_usd,
+        llm.cost_per_million_cache_write_input_token_usd,
+        llm.cost_per_million_output_token_usd,
+    )
+    if not any(rate is not None for rate in rates) or any(
+        count < 0 for count in counts
+    ):
+        return
+    multipliers = (
+        input_multiplier,
+        input_multiplier,
+        input_multiplier,
+        output_multiplier,
+    )
+    total = 0.0
+    for count, rate, multiplier in zip(counts, rates, multipliers):
+        if count == 0:
+            continue
+        if rate is None or not math.isfinite(rate) or rate < 0:
+            return
+        total += count * rate * multiplier / 1_000_000
+    if math.isfinite(total) and total >= 0:
+        token_usage.total_cost_usd = total
+        token_usage.cost_source = "CONFIGURATION"
 
 
 class LlmRequestHandler(RequestHandler):

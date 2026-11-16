@@ -1,6 +1,12 @@
-from pydantic import BaseModel, Field
+import math
+from typing import Any
 
+from pydantic import BaseModel, Field, model_validator
+
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+
+logger = get_logger(__name__)
 
 
 class TokenUsageDTO(BaseModel):
@@ -31,7 +37,34 @@ class TokenUsageDTO(BaseModel):
     cost_per_million_cache_write_input_token: float = Field(
         alias="costPerMillionCacheWriteInputToken", default=0
     )
+    total_cost_usd: float | None = Field(alias="totalCostUsd", default=None)
+    cost_source: str | None = Field(alias="costSource", default=None)
+    usage_reported: bool = Field(default=True, exclude=True)
     pipeline: PipelineEnum = Field(alias="pipelineId", default=PipelineEnum.NOT_SET)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_usd_cost(cls, data: Any) -> Any:
+        """Discard bad optional cost data without losing the token record."""
+        if not isinstance(data, dict):
+            return data
+        cost = data.get("totalCostUsd")
+        source = data.get("costSource")
+        if cost is None and source is None:
+            return data
+        try:
+            valid_number = (
+                isinstance(cost, (int, float))
+                and not isinstance(cost, bool)
+                and math.isfinite(cost)
+                and cost >= 0
+            )
+        except OverflowError:
+            valid_number = False
+        if not valid_number or source not in ("PROVIDER", "CONFIGURATION"):
+            logger.warning("Ignoring invalid optional USD cost or cost source")
+            return {**data, "totalCostUsd": None, "costSource": None}
+        return data
 
     def __str__(self):
         return (
