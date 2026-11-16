@@ -276,6 +276,40 @@ def test_absent_cache_counts_keep_zero_default_for_usd_estimate(api, details):
     assert tokens.cost_source == "CONFIGURATION"
 
 
+@pytest.mark.parametrize(
+    "api", ["chat-dict", "responses-dict", "chat-sdk", "responses-sdk"]
+)
+@pytest.mark.parametrize("counter_index", [0, 1])
+@pytest.mark.parametrize("missing", [False, True], ids=["null", "absent"])
+def test_required_usage_counter_without_value_prevents_estimate(
+    api, counter_index, missing
+):
+    usage = _usage_with_cache_details(api, {})
+    counter_names = (
+        ("input_tokens", "output_tokens")
+        if api.startswith("responses")
+        else ("prompt_tokens", "completion_tokens")
+    )
+    counter = counter_names[counter_index]
+    if isinstance(usage, dict):
+        if missing:
+            usage.pop(counter)
+        else:
+            usage[counter] = None
+    elif missing:
+        delattr(usage, counter)
+        usage.model_fields_set.discard(counter)
+    else:
+        setattr(usage, counter, None)
+
+    tokens = create_token_usage(usage, "cost-test")
+    apply_model_costs(tokens, _model())
+
+    assert not tokens.usage_reported
+    assert tokens.total_cost_usd is None
+    assert tokens.cost_source is None
+
+
 @pytest.mark.parametrize("cost", [0, 0.001])
 def test_malformed_cache_count_does_not_replace_reported_provider_cost(cost):
     usage = _usage_with_cache_details("chat-dict", {"cached_tokens": "900"})
