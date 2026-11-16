@@ -81,9 +81,10 @@ jobs:
           # Generate combined HTML coverage report
           echo "📊 Generating Combined HTML Coverage Report..."
           echo "============================================="
+          poetry run pip install coverage
           # Create a combined coverage database from individual .coverage files
-          modules/programming/module_programming_llm/.venv/bin/python -m coverage combine .coverage.programming_module_programming_llm .coverage.text_module_text_llm .coverage.modeling_module_modeling_llm
-          modules/programming/module_programming_llm/.venv/bin/python -m coverage html --rcfile=.coveragerc -d test-results/combined_html
+          poetry run coverage combine .coverage.programming_module_programming_llm .coverage.text_module_text_llm .coverage.modeling_module_modeling_llm
+          poetry run coverage html --rcfile=.coveragerc -d test-results/combined_html
           
           # Display combined coverage report in CI and capture for the job summary
           echo "📊 Combined Coverage Report:"
