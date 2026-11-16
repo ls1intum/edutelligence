@@ -24,7 +24,7 @@ pydantic = "2.14.1"
 prospector = { version = "1.19.1", extras = ["with_mypy"] }
 
 [tool.poetry.group.test.dependencies]
-pytest = "8.3.5"
+pytest = "9.0.3"
 pytest-asyncio = "0.26.0"
 
 [tool.poetry.scripts]
