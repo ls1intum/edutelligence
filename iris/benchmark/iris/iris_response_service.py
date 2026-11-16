@@ -79,7 +79,7 @@ class PyrisIrisResponseService:
         if response.status_code != 202:
             raise RuntimeError(f"Pyris rejected the request ({response.status_code}): {response.text}")
 
-        return _final_answer(self.receiver.wait(run_id, self.timeout))
+        return _final_answer(self.receiver.wait(run_id, self.timeout)).strip()
 
 
 def _final_answer(updates: list[dict[str, Any]]) -> str:

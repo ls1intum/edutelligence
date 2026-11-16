@@ -3,10 +3,17 @@
 Usage, from the iris/ folder:
     poetry run python -m benchmark run --dataset 1
     poetry run python -m benchmark run --dataset 1 --iris pyris   (Pyris must be running)
+    poetry run python -m benchmark run --dataset 1 --iris pyris --logos logos
+
+The Logos API key is read from benchmark/.env (LOGOS_API_KEY=..., not versioned, see
+.env.example). An environment variable of the same name takes precedence, e.g. in CI.
 """
 
 import argparse
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from .database.benchmark_data_service import StubBenchmarkDataService
 from .evaluation_pipeline.benchmark_runner.benchmark_runner import BenchmarkRunner
@@ -15,18 +22,30 @@ from .evaluation_pipeline.evaluator.response_assessment_service import (
     LlmJudgeAssessmentService,
 )
 from .iris.iris_response_service import PyrisIrisResponseService, StubIrisResponseService
-from .logos.model_inference_service import StubModelInferenceService
+from .logos.model_inference_service import (
+    LOGOS_URL,
+    LogosModelInferenceService,
+    StubModelInferenceService,
+)
+
+DEFAULT_JUDGE_MODEL = "openai/gpt-oss-120b"  # local model on Logos, differs from Iris' model
 
 
 def main() -> None:
+    load_dotenv(Path(__file__).parent / ".env", override=False)
     parser = argparse.ArgumentParser(prog="benchmark", description="Iris benchmark")
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="run a test dataset against Iris and assess it")
     run.add_argument("--dataset", type=int, required=True, help="ID of the test dataset")
     run.add_argument("--data", choices=["stub"], default="stub", help="Benchmark Data Service")
     run.add_argument("--iris", choices=["stub", "pyris"], default="stub", help="Iris Response Service")
-    run.add_argument("--logos", choices=["stub"], default="stub", help="Model Inference Service")
-    run.add_argument("--judge-model", default="stub-model", help="model used as judge")
+    run.add_argument("--logos", choices=["stub", "logos"], default="stub", help="Model Inference Service")
+    run.add_argument(
+        "--judge-model",
+        default=None,
+        help=f"model used as judge (default with --logos logos: {DEFAULT_JUDGE_MODEL})",
+    )
+    run.add_argument("--logos-url", default=LOGOS_URL)
 
     pyris = run.add_argument_group("Pyris (only with --iris pyris)")
     pyris.add_argument("--pyris-url", default="http://localhost:8000")
@@ -55,12 +74,20 @@ def main() -> None:
         iris = StubIrisResponseService()
         iris_name = "stub"
 
+    if args.logos == "logos":
+        # the key comes from benchmark/.env or the environment, never from the repository
+        inference = LogosModelInferenceService(os.environ.get("LOGOS_API_KEY", ""), args.logos_url)
+        judge_model = args.judge_model or DEFAULT_JUDGE_MODEL
+    else:
+        inference = StubModelInferenceService()
+        judge_model = args.judge_model or "stub-model"
+
     runner = BenchmarkRunner(
         data=StubBenchmarkDataService(),
         iris=iris,
-        assessor=LlmJudgeAssessmentService(StubModelInferenceService(), args.judge_model),
+        assessor=LlmJudgeAssessmentService(inference, judge_model),
         iris_name=iris_name,
-        judge_model=args.judge_model,
+        judge_model=judge_model,
     )
     try:
         benchmark_run, evaluation_run, folder = runner.run(args.dataset)
