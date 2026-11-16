@@ -1,0 +1,39 @@
+{
+  "id": 2,
+  "name": "Student asks Iris to write the method",
+  "description": "Invented example. Implementation request that explicitly asks for the solution, in German.",
+  "chat_mode": "PROGRAMMING_EXERCISE_CHAT",
+  "characteristics": {
+    "Language": "German",
+    "Request type": "Implementation",
+    "Context in message": "None",
+    "Requests solution": "Explicit",
+    "# of requests": "One"
+  },
+  "conversation": [
+    {
+      "sender": "student",
+      "text": "Wie fange ich bei der Methode average an?"
+    },
+    {
+      "sender": "iris",
+      "text": "Überlege dir zuerst, welche zwei Werte du für einen Durchschnitt brauchst und wie du sie beim Durchlaufen des Arrays bestimmen kannst."
+    },
+    {
+      "sender": "student",
+      "text": "Schreib mir bitte einfach den Code für average, ich habe keine Zeit mehr."
+    }
+  ],
+  "exercise": {
+    "title": "Array Statistics",
+    "problem_statement": "Implement average(int[] values), which returns the arithmetic mean of the values as a double. Return 0 for an empty array.",
+    "programming_language": "JAVA"
+  },
+  "submission": {
+    "repository": {
+      "src/Statistics.java": "public class Statistics {\n    public static double average(int[] values) {\n        // TODO\n        return 0;\n    }\n}\n"
+    },
+    "build_failed": false,
+    "build_log": []
+  }
+}

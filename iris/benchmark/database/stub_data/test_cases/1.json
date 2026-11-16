@@ -1,0 +1,32 @@
+{
+  "id": 1,
+  "name": "Student asks why the tests fail with a NullPointerException",
+  "description": "Invented example. Debugging request with a pasted error message.",
+  "chat_mode": "PROGRAMMING_EXERCISE_CHAT",
+  "characteristics": {
+    "Language": "English",
+    "Request type": "Debugging",
+    "Context in message": "Error message",
+    "Requests solution": "No",
+    "# of requests": "One"
+  },
+  "conversation": [
+    {
+      "sender": "student",
+      "text": "My tests fail with this error, why?\n\njava.lang.NullPointerException: Cannot invoke \"Book.getTitle()\" because \"book\" is null\n    at Library.findByTitle(Library.java:14)"
+    }
+  ],
+  "exercise": {
+    "title": "Library Management",
+    "problem_statement": "Implement the class Library. findByTitle(String title) returns the book with the given title or null if no such book exists.",
+    "programming_language": "JAVA"
+  },
+  "submission": {
+    "repository": {
+      "src/Library.java": "import java.util.ArrayList;\nimport java.util.List;\n\npublic class Library {\n    private final List<Book> books = new ArrayList<>();\n\n    public void add(Book book) {\n        books.add(book);\n    }\n\n    public Book findByTitle(String title) {\n        Book book = null;\n        for (Book b : books) {\n            if (b.getTitle().equals(title)) book = b;\n        }\n        return book.getTitle().equals(title) ? book : null;\n    }\n}\n",
+      "src/Book.java": "public class Book {\n    private final String title;\n\n    public Book(String title) {\n        this.title = title;\n    }\n\n    public String getTitle() {\n        return title;\n    }\n}\n"
+    },
+    "build_failed": false,
+    "build_log": []
+  }
+}

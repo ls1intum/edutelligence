@@ -1,0 +1,19 @@
+{
+  "id": 3,
+  "name": "Student asks about interfaces and abstract classes",
+  "description": "Invented example. Conceptual question in the course chat without additional context.",
+  "chat_mode": "COURSE_CHAT",
+  "characteristics": {
+    "Language": "English",
+    "Request type": "Conceptual",
+    "Context in message": "None",
+    "Requests solution": "No",
+    "# of requests": "One"
+  },
+  "conversation": [
+    {
+      "sender": "student",
+      "text": "What is the difference between an interface and an abstract class in Java? When should I use which?"
+    }
+  ]
+}
