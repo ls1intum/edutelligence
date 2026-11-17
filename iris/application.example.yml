@@ -1,5 +1,9 @@
 api_keys:
   - token: "secret"
+    # Base URLs of the Artemis installations that may use this key. Leave it out to accept
+    # every base URL (local development), and name the installation for a shared deployment.
+    # allowed_base_urls:
+    #   - "https://artemis.example.org"
 
 weaviate:
   host: "localhost"
@@ -12,6 +16,10 @@ weaviate:
   # api_key: "your-weaviate-api-key"
 
 local_llm_enabled: true # Set to false to disable local LLM support entirely
+
+# Serve the interactive API documentation (/docs, /redoc) and the schema (/openapi.json).
+# Set it to true for local development; keep it false on a deployed instance.
+api_docs_enabled: false
 
 langfuse:
   enabled: false # Set to true to enable LangFuse tracing

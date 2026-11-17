@@ -1,12 +1,16 @@
 from threading import Event, Thread
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from sentry_sdk import capture_exception
 
 from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
-from iris.dependencies import TokenValidator
+from iris.dependencies import (
+    AuthorizedKey,
+    require_base_url,
+    require_settings_base_url,
+)
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
@@ -207,11 +211,11 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str
             "description": "Lecture unit has not been ingested",
         }
     },
-    dependencies=[Depends(TokenValidator())],
 )
 @observe(name="POST /webhooks/lectures/metadata")
-def lecture_metadata_webhook(dto: LectureUnitMetadataUpdateDTO):
+def lecture_metadata_webhook(api_key: AuthorizedKey, dto: LectureUnitMetadataUpdateDTO):
     """Update lecture-unit metadata without reprocessing its content."""
+    require_base_url(api_key, dto.base_url)
     db = VectorDatabase()
     collection = init_lecture_unit_schema(db.get_client())
     updated = LectureMetadataUpdatePipeline(collection)(dto)
@@ -233,11 +237,13 @@ def lecture_metadata_webhook(dto: LectureUnitMetadataUpdateDTO):
             "description": "Weaviate remained rate-limited past the request budget",
         },
     },
-    dependencies=[Depends(TokenValidator())],
 )
 @observe(name="POST /webhooks/lectures/visibility")
-def lecture_visibility_webhook(dto: LectureUnitVisibilityUpdateDTO):
+def lecture_visibility_webhook(
+    api_key: AuthorizedKey, dto: LectureUnitVisibilityUpdateDTO
+):
     """Update release and slide visibility without reprocessing content."""
+    require_base_url(api_key, dto.base_url)
     try:
         db = VectorDatabase()
         client = db.get_client()
@@ -269,11 +275,11 @@ def lecture_visibility_webhook(dto: LectureUnitVisibilityUpdateDTO):
 @router.post(
     "/lectures/delete",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
 )
 @observe(name="POST /webhooks/lectures/delete")
-def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
+def lecture_deletion_webhook(api_key: AuthorizedKey, dto: LecturesDeletionExecutionDto):
     """Webhook endpoint to trigger the lecture deletion."""
+    require_settings_base_url(api_key, dto.settings)
     validate_pipeline_variant(dto.settings, LectureUnitDeletionPipeline)
 
     thread = Thread(target=run_lecture_deletion_pipeline_worker, args=(dto,))
@@ -283,11 +289,13 @@ def lecture_deletion_webhook(dto: LecturesDeletionExecutionDto):
 @router.post(
     "/faqs/ingest",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
 )
 @observe(name="POST /webhooks/faqs/ingest")
-def faq_ingestion_webhook(dto: FaqIngestionPipelineExecutionDto):
+def faq_ingestion_webhook(
+    api_key: AuthorizedKey, dto: FaqIngestionPipelineExecutionDto
+):
     """Webhook endpoint to trigger the FAQ ingestion pipeline."""
+    require_settings_base_url(api_key, dto.settings)
     variant = validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
     thread = Thread(target=run_faq_update_pipeline_worker, args=(dto, variant))
@@ -297,11 +305,11 @@ def faq_ingestion_webhook(dto: FaqIngestionPipelineExecutionDto):
 @router.post(
     "/faqs/delete",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
 )
 @observe(name="POST /webhooks/faqs/delete")
-def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
+def faq_deletion_webhook(api_key: AuthorizedKey, dto: FaqDeletionExecutionDto):
     """Webhook endpoint to trigger the FAQ deletion pipeline."""
+    require_settings_base_url(api_key, dto.settings)
     variant = validate_pipeline_variant(dto.settings, FaqIngestionPipeline)
 
     thread = Thread(target=run_faq_delete_pipeline_worker, args=(dto, variant))

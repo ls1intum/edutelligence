@@ -3,11 +3,59 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from iris.common.base_url import normalize_base_url
 
 
 class APIKeyConfig(BaseModel):
+    """A key that an Artemis installation presents to use Iris.
+
+    A key can be limited to the Artemis installations it belongs to. The base URL of the
+    installation travels in every request (as ``artemisBaseUrl``, ``baseUrl``, the
+    ``base_url`` query parameter or the ``X-Artemis-Base-Url`` header), and Iris keeps the
+    data of every installation apart by it. Naming the base URLs in ``allowed_base_urls``
+    makes Iris answer only requests for those installations with this key.
+    """
+
     token: str
+    allowed_base_urls: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Base URLs of the Artemis installations that may use this key, for example "
+            "https://artemis.example.org. Spellings that differ only in the case of scheme and "
+            "host, in a default port or in trailing slashes are the same URL. Empty (the default) "
+            "accepts requests for every base URL."
+        ),
+    )
+
+    @field_validator("allowed_base_urls")
+    @classmethod
+    def validate_allowed_base_urls(cls, value: list[str]) -> list[str]:
+        """Reject an entry that cannot be matched, so a typo does not turn into a key nobody can use."""
+        for entry in value:
+            if normalize_base_url(entry) is None:
+                raise ValueError(
+                    f"allowed_base_urls entry {entry!r} is not an http(s) base URL "
+                    "without user information, query or fragment"
+                )
+        return value
+
+    def limits_base_urls(self) -> bool:
+        """Whether this key is limited to the base URLs in ``allowed_base_urls``."""
+        return bool(self.allowed_base_urls)
+
+    def permits_base_url(self, base_url: str | None) -> bool:
+        """Whether a request for ``base_url`` may be answered with this key.
+
+        :param base_url: the base URL the request names, None if it names none
+        """
+        if not self.limits_base_urls():
+            return True
+        normalized = normalize_base_url(base_url)
+        return normalized is not None and normalized in {
+            normalize_base_url(entry) for entry in self.allowed_base_urls
+        }
 
 
 class WeaviateSettings(BaseModel):
@@ -253,6 +301,11 @@ class Settings(BaseModel):
     weaviate: WeaviateSettings
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
     local_llm_enabled: bool = Field(default=True)
+    api_docs_enabled: bool = Field(
+        default=False,
+        description="Serve the interactive API documentation (/docs, /redoc) and the "
+        "schema (/openapi.json). Off by default; enable it for local development.",
+    )
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
     ingestion_worker: IngestionWorkerSettings = Field(

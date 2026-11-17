@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Callable
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Request, Response, status
 
 from iris.common.logging_config import get_logger
-from iris.dependencies import TokenValidator
+from iris.dependencies import AuthorizedKey, require_base_url
 from iris.ingestion.worker import ingestion_worker
 from iris.web.routers.health.health_model import (
     IrisHealthResponse,
@@ -24,23 +24,23 @@ HealthCheckCallable = Callable[[], tuple[str, ModuleStatus]]
 MODULES: list[HealthCheckCallable] = [check_weaviate_status, check_pipelines_health]
 
 
-@router.get(
-    "/",
-    response_model=IrisHealthResponse,
-    dependencies=[Depends(TokenValidator())],
-)
-def health(request: Request, response: Response) -> IrisHealthResponse:
+@router.get("/", response_model=IrisHealthResponse)
+def health(
+    request: Request, response: Response, api_key: AuthorizedKey
+) -> IrisHealthResponse:
     """
     Run health checks for all registered modules and return an overall status with metadata for each module.
 
     A health check doubles as an upstream announcement for the pull-based ingestion worker: an
     Artemis that includes its own base URL in the X-Artemis-Base-Url header registers itself as a
     queue to claim from, authenticated by the same api key this endpoint already requires. The
-    header is optional, so older Artemis versions are simply never claimed from.
+    header is optional, so older Artemis versions are simply never claimed from. An announced
+    base URL that the key is not allowed to act for is rejected like any other request for it.
     """
     logger.debug("health_check invoked")
     announced_base_url = request.headers.get("X-Artemis-Base-Url")
     if announced_base_url:
+        require_base_url(api_key, announced_base_url)
         ingestion_worker.register_upstream(
             announced_base_url, request.headers.get("Authorization", "")
         )
