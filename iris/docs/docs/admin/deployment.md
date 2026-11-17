@@ -200,10 +200,10 @@ docker compose --env-file docker.env -f iris/docker/pyris-production.yml down
 | `PYRIS_APPLICATION_YML_FILE`           | --                        | **Required.** Absolute path to `application.yml` on the host       |
 | `PYRIS_LLM_CONFIG_YML_FILE`            | --                        | **Required.** Absolute path to `llm_config.yml` on the host        |
 | `PYRIS_PORT`                           | `8000`                    | Host port for Iris (production-internal compose only)              |
-| `PYRIS_BIND_ADDRESS`                   | `0.0.0.0`                 | Host address the Iris port is published on (production-internal)   |
+| `PYRIS_BIND_ADDRESS`                   | unset (every address)     | Host address the Iris port is published on (production-internal)   |
 | `WEAVIATE_PORT`                        | `8001`                    | Host port for Weaviate REST API (bundled Weaviate only)            |
 | `WEAVIATE_GRPC_PORT`                   | `50051`                   | Host port for Weaviate gRPC (bundled Weaviate only)                |
-| `WEAVIATE_BIND_ADDRESS`                | `0.0.0.0`                 | Host address the Weaviate ports are published on (bundled)         |
+| `WEAVIATE_BIND_ADDRESS`                | unset (every address)     | Host address the Weaviate ports are published on (bundled)         |
 | `NGINX_PROXY_SSL_CERTIFICATE_PATH`     | --                        | **Required (Nginx).** Path to SSL certificate (`fullchain.pem`)    |
 | `NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH` | --                        | **Required (Nginx).** Path to SSL private key (`priv_key.pem`)     |
 | `APPLICATION_YML_PATH`                 | `/config/application.yml` | Container-internal config path (set automatically by compose)      |

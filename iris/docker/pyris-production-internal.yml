@@ -16,7 +16,7 @@ services:
       - ${PYRIS_APPLICATION_YML_FILE}:/config/application.yml:ro
       - ${PYRIS_LLM_CONFIG_YML_FILE}:/config/llm_config.yml:ro
     ports:
-      - "${PYRIS_BIND_ADDRESS:-0.0.0.0}:${PYRIS_PORT:-8000}:8000"
+      - "${PYRIS_BIND_ADDRESS:+${PYRIS_BIND_ADDRESS}:}${PYRIS_PORT:-8000}:8000"
     networks:
       - pyris
 
@@ -25,8 +25,8 @@ services:
       file: ./weaviate.yml
       service: weaviate
     ports:
-      - "${WEAVIATE_BIND_ADDRESS:-0.0.0.0}:${WEAVIATE_PORT:-8001}:8001"
-      - "${WEAVIATE_BIND_ADDRESS:-0.0.0.0}:${WEAVIATE_GRPC_PORT:-50051}:50051"
+      - "${WEAVIATE_BIND_ADDRESS:+${WEAVIATE_BIND_ADDRESS}:}${WEAVIATE_PORT:-8001}:8001"
+      - "${WEAVIATE_BIND_ADDRESS:+${WEAVIATE_BIND_ADDRESS}:}${WEAVIATE_GRPC_PORT:-50051}:50051"
     networks:
       - pyris
 

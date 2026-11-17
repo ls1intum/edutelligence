@@ -424,7 +424,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
   - `PYRIS_PORT`: Host port for Pyris application (default is `8000`).
   - `WEAVIATE_PORT`: Host port for Weaviate REST API (default is `8001`).
   - `WEAVIATE_GRPC_PORT`: Host port for Weaviate gRPC interface (default is `50051`).
-  - `PYRIS_BIND_ADDRESS` and `WEAVIATE_BIND_ADDRESS`: Host address on which the Pyris port (production-internal compose) and the Weaviate ports are published (default is `0.0.0.0`, every address of the host).
+  - `PYRIS_BIND_ADDRESS` and `WEAVIATE_BIND_ADDRESS`: Host address on which the Pyris port (production-internal compose) and the Weaviate ports are published (unset by default, which publishes on every address of the host, IPv4 and IPv6).
 
 - **Configuration Files**
 

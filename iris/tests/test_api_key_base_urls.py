@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from urllib.parse import SplitResult
 
 import pytest
 from fastapi import APIRouter, FastAPI
@@ -28,6 +29,7 @@ for _mod in ("onnxruntime", "transformers"):
         sys.modules[_mod] = MagicMock()
         _stubbed.append(_mod)
 
+import iris.common.base_url as base_url_module  # noqa: E402
 import iris.web.routers  # noqa: E402
 from iris import dependencies  # noqa: E402
 from iris.common.base_url import normalize_base_url  # noqa: E402
@@ -124,6 +126,10 @@ def test_spellings_of_one_base_url_have_one_normal_form(value, expected):
         "https://[",
         "https://[not-ipv6]",
         "https://[::1",
+        "http://[::1]]:80",
+        "http://[[::1]]",
+        "http://x[::1]",
+        "http://[::1%25eth0]",
         "http://[::1]]",
         "https://artemis.example.org]",
         "https://artemis.example.org:99999",
@@ -131,6 +137,31 @@ def test_spellings_of_one_base_url_have_one_normal_form(value, expected):
 )
 def test_a_value_that_is_not_a_base_url_has_no_normal_form(value):
     assert normalize_base_url(value) is None
+
+
+def test_a_bracket_that_the_parser_of_some_versions_accepts_is_rejected_here(
+    monkeypatch,
+):
+    """CPython 3.13.0 reads the authority of "http://[::1]]" as "[::1]". The shape is checked in
+    the normalizer, so the result does not depend on the patch version of the interpreter.
+    """
+    lenient = SplitResult("http", "[::1]]", "", "", "")
+    assert lenient.hostname == "::1"
+    monkeypatch.setattr(base_url_module, "urlsplit", lambda _value: lenient)
+    assert normalize_base_url("http://[::1]]") is None
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("http://[::1]", "http://[::1]"),
+        ("http://[::1]:8080/", "http://[::1]:8080"),
+        ("https://[2001:db8::1]:443", "https://[2001:db8::1]"),
+        ("http://[::ffff:1.2.3.4]", "http://[::ffff:1.2.3.4]"),
+    ],
+)
+def test_valid_ipv6_base_urls_stay_accepted(value, expected):
+    assert normalize_base_url(value) == expected
 
 
 def test_a_different_host_path_or_port_is_a_different_base_url():

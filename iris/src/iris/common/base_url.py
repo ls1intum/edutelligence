@@ -1,8 +1,14 @@
 """Normalisation of the base URLs that Artemis installations send to Iris."""
 
+import ipaddress
+import re
 from urllib.parse import urlsplit
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
+
+# An authority with a bracketed host is exactly "[address]" with an optional ":port". The parser of
+# some Python versions reads "[::1]]" as "[::1]", so the shape is checked here instead.
+_BRACKETED_AUTHORITY = re.compile(r"\[([0-9A-Fa-f:.]+)\](?::[0-9]*)?")
 
 
 def normalize_base_url(base_url: str | None) -> str | None:
@@ -30,6 +36,14 @@ def normalize_base_url(base_url: str | None) -> str | None:
         return None
     if parts.scheme.lower() not in _DEFAULT_PORTS or not parts.hostname:
         return None
+    if "[" in parts.netloc or "]" in parts.netloc:
+        bracketed = _BRACKETED_AUTHORITY.fullmatch(parts.netloc)
+        if bracketed is None:
+            return None
+        try:
+            ipaddress.IPv6Address(bracketed.group(1))
+        except ValueError:
+            return None
     if parts.username is not None or parts.password is not None:
         return None
     if parts.query or parts.fragment or "?" in base_url or "#" in base_url:
