@@ -166,6 +166,16 @@ def test_a_configured_entry_that_cannot_be_matched_is_refused_at_load(entry):
         APIKeyConfig(token="t", allowed_base_urls=[entry])
 
 
+def test_the_token_of_a_key_is_not_part_of_its_representation_or_serialization():
+    key = APIKeyConfig(token="the-secret-value", allowed_base_urls=[OWN])
+    assert "the-secret-value" not in repr(key)
+    assert "the-secret-value" not in str(key)
+    assert "the-secret-value" not in key.model_dump_json()
+    assert "token" not in key.model_dump()
+    assert key.model_dump()["allowed_base_urls"] == [OWN]
+    assert key.token == "the-secret-value"
+
+
 def test_the_example_configuration_loads_without_allowed_base_urls():
     assert all(not key.limits_base_urls() for key in settings.api_keys)
 

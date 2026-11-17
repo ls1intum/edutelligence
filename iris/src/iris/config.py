@@ -18,7 +18,9 @@ class APIKeyConfig(BaseModel):
     makes Iris answer only requests for those installations with this key.
     """
 
-    token: str
+    # The token is left out of repr and of every serialization of the key: a route that takes the key as
+    # a parameter must not hand it to a tracer or a log that records the arguments of the call.
+    token: str = Field(repr=False, exclude=True)
     allowed_base_urls: list[str] = Field(
         default_factory=list,
         description=(
