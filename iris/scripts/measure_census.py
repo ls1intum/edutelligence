@@ -194,13 +194,17 @@ def _mean_read_latency_ms(db: VectorDatabase, samples: int) -> float:
     return statistics.mean(timings)
 
 
+# The route function is called in process, so it is given a key that is not limited to base URLs.
+MEASUREMENT_KEY = APIKeyConfig(token="measure-census")  # nosec B106
+
+
 def _time_census(concurrency: int, repeats: int) -> tuple[list[float], dict]:
     settings.lecture_ingestion.census_confirm_concurrency = concurrency
     durations, census = [], None
     for _ in range(repeats):
         started = time.perf_counter()
         census = get_course_ingestion_census(
-            APIKeyConfig(token="measure-census"), COURSE_ID, base_url=BASE_URL
+            MEASUREMENT_KEY, COURSE_ID, base_url=BASE_URL
         )
         durations.append(time.perf_counter() - started)
     return durations, census.model_dump(by_alias=True)
