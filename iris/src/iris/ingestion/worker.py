@@ -36,7 +36,7 @@ import requests as http_requests
 from iris.common.boot_id import BOOT_ID
 from iris.common.callback_token import CallbackToken
 from iris.common.logging_config import get_logger
-from iris.config import settings
+from iris.config import APIKeyConfig, settings
 
 logger = get_logger(__name__)
 
@@ -66,6 +66,9 @@ class _Upstream:
     last_announced_monotonic: float
     claim_failures: int = 0
     heartbeat_failures: int = 0
+    # The key the announcement authenticated with, if the caller knows it. A claimed job may
+    # only name base URLs that this key is allowed to act for, see _start_job.
+    api_key: Optional[APIKeyConfig] = None
 
 
 @dataclass
@@ -85,6 +88,8 @@ class _ActiveRun:
     # revocation from Artemis can signal it, the same way a same-worker
     # re-claim already does via add_job's supersession.
     cancel_event: threading.Event
+    # The key of the upstream the job was claimed from, see _Upstream.api_key.
+    api_key: Optional[APIKeyConfig] = None
 
 
 def _job_credentials(job) -> Optional[tuple[str, CallbackToken]]:
@@ -139,7 +144,12 @@ class IngestionWorker:
 
     # ---------------------------------------------------------- discovery
 
-    def register_upstream(self, base_url: str, auth_token: str) -> None:
+    def register_upstream(
+        self,
+        base_url: str,
+        auth_token: str,
+        api_key: Optional[APIKeyConfig] = None,
+    ) -> None:
         """Record an authenticated announcement from an Artemis installation.
 
         Called from the health endpoint for every request carrying the
@@ -155,6 +165,8 @@ class IngestionWorker:
 
         :param base_url: the announcing installation's own base URL
         :param auth_token: the api key the announcement authenticated with
+        :param api_key: the configuration of that key. When it lists allowed_base_urls, the jobs
+            claimed from this upstream may only name those base URLs.
         """
         url = base_url.rstrip("/")
         if not url or not self._is_allowed_upstream(url):
@@ -167,9 +179,11 @@ class IngestionWorker:
                     url=url,
                     auth_token=auth_token,
                     last_announced_monotonic=time.monotonic(),
+                    api_key=api_key,
                 )
             else:
                 existing.auth_token = auth_token
+                existing.api_key = api_key
                 existing.last_announced_monotonic = time.monotonic()
 
     def _is_allowed_upstream(self, url: str) -> bool:
@@ -332,6 +346,7 @@ class IngestionWorker:
                     upstream_url=upstream.url,
                     lecture_unit_id=_job_unit_id(job),
                     cancel_event=threading.Event(),
+                    api_key=upstream.api_key,
                 )
                 self._active[credentials[0]] = pending
                 reserved.append((job, pending))
@@ -373,6 +388,9 @@ class IngestionWorker:
         started = False
         try:
             dto = IngestionPipelineExecutionDto.model_validate(job)
+            self._require_allowed_base_url(
+                pending.api_key, dto.settings.artemis_base_url if dto.settings else None
+            )
             variant = validate_pipeline_variant(
                 dto.settings, LectureIngestionUpdatePipeline
             )
@@ -414,6 +432,22 @@ class IngestionWorker:
                         if run is pending:
                             del self._active[run_id]
 
+    @staticmethod
+    def _require_allowed_base_url(
+        api_key: Optional[APIKeyConfig], base_url: Optional[str]
+    ) -> None:
+        """Refuse a claimed job that names a base URL the key of its upstream may not act for.
+
+        The job is the answer of an upstream, so what it names is validated like the base URL of
+        any request: it decides which installation's data the job writes and which address the
+        callbacks go to.
+        """
+        if api_key is not None and not api_key.permits_base_url(base_url):
+            raise ValueError(
+                "the claimed job names a base URL that the API key of its upstream "
+                "is not allowed to act for"
+            )
+
     def _report_start_failure(
         self, job: dict, upstream: _Upstream, error: Exception
     ) -> None:
@@ -433,7 +467,14 @@ class IngestionWorker:
                 return
             raw_settings = job["settings"]
             base_url = raw_settings.get("artemisBaseUrl")
-            if not isinstance(base_url, str) or not base_url:
+            if (
+                not isinstance(base_url, str)
+                or not base_url
+                or (
+                    upstream.api_key is not None
+                    and not upstream.api_key.permits_base_url(base_url)
+                )
+            ):
                 base_url = upstream.url
             # pylint: disable=import-outside-toplevel
             from iris.web.status.ingestion_status_callback import (

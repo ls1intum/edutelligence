@@ -42,7 +42,7 @@ def health(
     if announced_base_url:
         require_base_url(api_key, announced_base_url)
         ingestion_worker.register_upstream(
-            announced_base_url, request.headers.get("Authorization", "")
+            announced_base_url, request.headers.get("Authorization", ""), api_key
         )
     results = dict(check() for check in MODULES)
     logger.debug("Health check results: %s", results)

@@ -28,7 +28,7 @@ Iris is not configured with the Artemis instances it serves. Every Artemis alrea
 
 `ingestion_worker.allowed_upstream_hosts` restricts the hosts Iris accepts as upstreams. Only well-formed http(s) URLs are accepted, and the worker does not follow redirects, so an accepted upstream cannot redirect it to a host that the list would have rejected.
 
-The base URL of a health check is also checked against the key that the request presented: if the key has `allowed_base_urls`, a health check that announces another base URL is answered with `403` and registers nothing (see [Artemis Integration](../admin/artemis-integration.md)).
+The base URL of a health check is also checked against the key that the request presented: if the key has `allowed_base_urls`, a health check that announces another base URL is answered with `403` and registers nothing (see [Artemis Integration](../admin/artemis-integration.md)). The upstream keeps that key, and a claimed job whose `artemisBaseUrl` the key is not allowed for is not started: it is reported as failed to the upstream that issued it, never to the address the job names.
 
 ### Claim and lease
 

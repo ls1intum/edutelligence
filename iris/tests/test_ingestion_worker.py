@@ -20,6 +20,7 @@ import requests as http_requests_module
 
 from iris.common.boot_id import BOOT_ID
 from iris.common.callback_token import CallbackToken
+from iris.config import APIKeyConfig
 from iris.ingestion.ingestion_job_handler import IngestionJobHandler
 from iris.ingestion.worker import IngestionWorker, _ActiveRun
 
@@ -567,6 +568,81 @@ class TestBatchStart:
             time.sleep(0.1)
             assert not reported
         assert started == 1
+
+
+class TestClaimedJobsAndAllowedBaseUrls:
+    """A job is the answer of an upstream, so the base URL it names is validated against the key
+    that the upstream announced itself with, like the base URL of any request."""
+
+    UPSTREAM = "http://a:8080"
+
+    def _claim(self, worker, jobs, key):
+        worker.register_upstream(self.UPSTREAM, "key-a", key)
+        upstream = worker._upstreams[self.UPSTREAM]
+        handler = MagicMock()
+        with (
+            _start_environment(handler),
+            patch(
+                "iris.ingestion.worker.http_requests.post",
+                return_value=_response(body={"jobs": jobs}),
+            ),
+        ):
+            started = worker._claim_from(upstream, len(jobs))
+        return handler, started
+
+    def test_the_upstream_keeps_the_key_it_announced_with(self):
+        worker = IngestionWorker()
+        first = APIKeyConfig(token="key-a", allowed_base_urls=[self.UPSTREAM])
+        second = APIKeyConfig(token="key-a")
+        worker.register_upstream(self.UPSTREAM, "key-a", first)
+        assert worker._upstreams[self.UPSTREAM].api_key is first
+        worker.register_upstream(self.UPSTREAM, "key-a", second)
+        assert worker._upstreams[self.UPSTREAM].api_key is second
+        worker.register_upstream("http://b:8080", "key-b")
+        assert worker._upstreams["http://b:8080"].api_key is None
+
+    def test_a_job_for_another_installation_is_not_started_and_is_reported_to_its_upstream(
+        self,
+    ):
+        worker = IngestionWorker()
+        key = APIKeyConfig(token="key-a", allowed_base_urls=[self.UPSTREAM])
+        # _job names https://artemis.example, which this key is not allowed to act for
+        with _failure_callbacks() as reported:
+            handler, started = self._claim(worker, [_job("tok-other")], key)
+            assert _wait_for(lambda: len(reported) == 1)
+        assert started == 0
+        handler.add_job.assert_not_called()
+        assert not worker._active
+        (run_id, base_url, _), message = reported[0]
+        # the failure goes to the upstream that issued the job, not to the address the job names
+        assert (run_id, base_url) == ("tok-other", self.UPSTREAM)
+        assert "not allowed" in message
+
+    def test_a_job_for_an_allowed_installation_starts_whatever_its_spelling(self):
+        worker = IngestionWorker()
+        key = APIKeyConfig(
+            token="key-a", allowed_base_urls=["HTTPS://Artemis.example/"]
+        )
+        handler, started = self._claim(worker, [_job("tok-own")], key)
+        assert started == 1
+        assert handler.add_job.call_args.kwargs["base_url"] == "https://artemis.example"
+
+    def test_a_key_that_lists_several_installations_may_claim_jobs_for_each(self):
+        worker = IngestionWorker()
+        key = APIKeyConfig(
+            token="key-a",
+            allowed_base_urls=[self.UPSTREAM, "https://artemis.example"],
+        )
+        _, started = self._claim(worker, [_job("tok-own")], key)
+        assert started == 1
+
+    def test_a_key_without_a_list_and_an_unknown_key_do_not_change_what_is_claimed(
+        self,
+    ):
+        for key in (APIKeyConfig(token="key-a"), None):
+            worker = IngestionWorker()
+            _, started = self._claim(worker, [_job("tok-any")], key)
+            assert started == 1
 
 
 class TestBatchReservation:

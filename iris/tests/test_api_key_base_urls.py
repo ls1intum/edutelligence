@@ -5,13 +5,15 @@ A key with ``allowed_base_urls`` is answered only for those installations.
 """
 
 import asyncio
+import importlib
 import inspect
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -26,6 +28,7 @@ for _mod in ("onnxruntime", "transformers"):
         sys.modules[_mod] = MagicMock()
         _stubbed.append(_mod)
 
+import iris.web.routers  # noqa: E402
 from iris import dependencies  # noqa: E402
 from iris.common.base_url import normalize_base_url  # noqa: E402
 from iris.common.custom_exceptions import (  # noqa: E402
@@ -52,22 +55,32 @@ OTHER = "https://other.example.org"
 LIMITED_KEY = APIKeyConfig(token="limited", allowed_base_urls=[OWN])
 UNLIMITED_KEY = APIKeyConfig(token="unlimited")
 
-ROUTERS = [
-    pipelines.router,
-    webhooks.router,
-    search.router,
-    ingestion_status.router,
-    ingestion_census.router,
-    faq_census.router,
-    health_endpoint.router,
-]
+
+def _discover_routers() -> list[APIRouter]:
+    """The router of every module below iris.web.routers, so that a new router module is checked too.
+
+    The files are walked instead of the packages, because a directory without __init__.py (such as
+    health) is a namespace package that pkgutil does not descend into.
+    """
+    root = Path(iris.web.routers.__path__[0])
+    routers = []
+    for file in sorted(root.rglob("*.py")):
+        relative = file.relative_to(root).with_suffix("")
+        parts = relative.parts[:-1] if relative.name == "__init__" else relative.parts
+        name = ".".join(("iris.web.routers", *parts))
+        router = getattr(importlib.import_module(name), "router", None)
+        if isinstance(router, APIRouter) and router not in routers:
+            routers.append(router)
+    return routers
+
+
+ROUTERS = _discover_routers()
 
 
 @pytest.mark.parametrize(
     "value, expected",
     [
         ("https://artemis.example.org", "https://artemis.example.org"),
-        ("  https://artemis.example.org  ", "https://artemis.example.org"),
         ("HTTPS://Artemis.Example.ORG", "https://artemis.example.org"),
         ("https://artemis.example.org/", "https://artemis.example.org"),
         ("https://artemis.example.org///", "https://artemis.example.org"),
@@ -89,6 +102,12 @@ def test_spellings_of_one_base_url_have_one_normal_form(value, expected):
         None,
         "",
         "   ",
+        "  https://artemis.example.org  ",
+        "https://artemis.example.org\n",
+        "https://artemis-te\tst.example.org",
+        "https://artemis.example.org\r\n",
+        "https://artemis.example\x00.org",
+        "https://artemis.example.org\x7f",
         "artemis.example.org",
         "//artemis.example.org",
         "ftp://artemis.example.org",
@@ -257,6 +276,15 @@ def test_keys_are_compared_by_digest_in_constant_time():
             == 403
         )
     # one comparison per configured key, whatever the value
+    assert compare.call_count == 2
+
+
+@pytest.mark.usefixtures("two_keys")
+def test_every_key_is_compared_even_after_one_has_matched():
+    with patch.object(
+        dependencies.hmac, "compare_digest", wraps=dependencies.hmac.compare_digest
+    ) as compare:
+        _validate("first-token")
     assert compare.call_count == 2
 
 
@@ -558,8 +586,8 @@ def test_the_pipeline_variants_need_a_key():
         )
 
 
-@pytest.mark.usefixtures("two_keys")
-def test_a_health_check_announces_only_the_installation_of_its_key():
+def test_a_health_check_announces_only_the_installation_of_its_key(two_keys):
+    _, limited = two_keys
     client = _client()
     with (
         patch.object(health_endpoint, "MODULES", []),
@@ -579,7 +607,8 @@ def test_a_health_check_announces_only_the_installation_of_its_key():
     assert rejected.status_code == 403
     assert accepted.status_code == 200
     assert without.status_code == 200
-    register.assert_called_once_with(OWN + "/", "second-token")
+    # the worker is told which key the announcement came with, so that it can check the jobs it claims
+    register.assert_called_once_with(OWN + "/", "second-token", limited)
 
 
 @pytest.mark.usefixtures("two_keys")

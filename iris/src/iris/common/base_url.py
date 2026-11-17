@@ -10,15 +10,19 @@ def normalize_base_url(base_url: str | None) -> str | None:
 
     Scheme and host are compared case-insensitively, a port that is the default of the
     scheme and trailing slashes of the path make no difference. A value that is not a plain
-    http(s) base URL, that is without a host, or that carries user information, a query or
-    a fragment, has no normal form.
+    http(s) base URL, that is without a host, or that carries user information, a query, a
+    fragment, or any whitespace or control character, has no normal form. The URL parser drops
+    some of these characters silently, which would let two different strings pass for one URL.
 
     :param base_url: the base URL as it was sent or configured
     :return: the normal form, or None if the value is not a usable base URL
     """
-    if base_url is None:
+    if base_url is None or any(
+        character.isspace() or ord(character) < 32 or ord(character) == 127
+        for character in base_url
+    ):
         return None
-    parts = urlsplit(base_url.strip())
+    parts = urlsplit(base_url)
     if parts.scheme.lower() not in _DEFAULT_PORTS or not parts.hostname:
         return None
     if parts.username is not None or parts.password is not None:

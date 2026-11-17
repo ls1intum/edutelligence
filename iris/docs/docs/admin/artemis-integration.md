@@ -60,11 +60,12 @@ api_keys:
       - "https://artemis-test.example.org"
 ```
 
-`allowed_base_urls` lists the base URLs of the Artemis installations that may use the key. Every request names the installation it comes from, as `artemisBaseUrl` in the request body, as the `base_url` query parameter, or in the `X-Artemis-Base-Url` header of the health check. This is the `server.url` of the Artemis installation. Iris keeps the data of the installations apart by this URL, and with `allowed_base_urls` it answers a request for another installation with `403`.
+`allowed_base_urls` lists the base URLs of the Artemis installations that may use the key. Every request names the installation it comes from, as `artemisBaseUrl` or `baseUrl` in the request body, as the `base_url` query parameter, or in the `X-Artemis-Base-Url` header of the health check. This is the `server.url` of the Artemis installation. Iris keeps the data of the installations apart by this URL, and with `allowed_base_urls` it answers a request for another installation with `403`.
 
 - Spellings that differ only in the case of the scheme and host, in a default port (`:443` for https, `:80` for http), or in trailing slashes are the same URL. A different host, port, scheme or path is a different URL.
 - A key without `allowed_base_urls` is accepted for every installation. This keeps existing configurations working; set the list wherever more than one Artemis installation, or any other party, can reach Iris.
-- An entry that is not an http(s) base URL stops Iris at start-up, so that a typo does not leave a key that nobody can use.
+- A value with whitespace or control characters, user information, a query or a fragment is not a base URL. An entry like that stops Iris at start-up, so that a typo does not leave a key that nobody can use.
+- The jobs that Iris claims from an installation for lecture ingestion are checked as well: a job that names a base URL that the key of that installation is not allowed for is not started and is reported as failed.
 
 ## Network Architecture
 

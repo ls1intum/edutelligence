@@ -21,7 +21,7 @@ Internet
 
 - **Only the reverse proxy of Artemis is reachable from the internet**, on the ports that Artemis needs. It forwards requests to the Artemis application servers.
 - **Iris, Weaviate and the other supporting services run in a private network.** The Artemis application servers can reach them, and they can reach each other where they need to. Nothing from the internet can. This keeps the number of services that accept requests from outside small.
-- **Iris reaches out to a few addresses only**: the Artemis installations it works for (callbacks and the pull-based lecture ingestion) and your LLM providers. Allow outbound connections to those and nothing else where your network lets you.
+- **Iris reaches out to the addresses that its configuration names**: the Artemis installations it works for (callbacks and the pull-based lecture ingestion), your LLM providers, Weaviate, Langfuse and Sentry where you use them, the sources of the lecture videos that are transcribed, and the model hub from which it loads its classifier. Restrict outbound connections to what your configuration needs, and test lecture ingestion and Iris chats after you tighten them.
 - **Do not publish the ports of Iris or Weaviate on a public address.** If a reverse proxy in front of Iris is needed, for example for TLS between hosts, allow only the Artemis servers to connect to it.
 
 ## One Iris per Environment That Holds Real Data
