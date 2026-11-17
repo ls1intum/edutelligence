@@ -48,15 +48,27 @@ The token value here **must exactly match** the `iris.secret-token` value in Art
 Use a strong, randomly generated token (at least 32 characters). Never reuse tokens across environments (dev, staging, production).
 :::
 
-You can configure multiple API keys if multiple Artemis instances connect to the same Iris deployment:
+You can configure multiple API keys if multiple Artemis instances connect to the same Iris deployment. Give every Artemis installation its own key and name the installation in `allowed_base_urls`:
 
 ```yaml
 api_keys:
-  - token: "token-for-artemis-production"
   - token: "token-for-artemis-staging"
+    allowed_base_urls:
+      - "https://artemis-staging.example.org"
+  - token: "token-for-artemis-test"
+    allowed_base_urls:
+      - "https://artemis-test.example.org"
 ```
 
+`allowed_base_urls` lists the base URLs of the Artemis installations that may use the key. Every request names the installation it comes from, as `artemisBaseUrl` in the request body, as the `base_url` query parameter, or in the `X-Artemis-Base-Url` header of the health check. This is the `server.url` of the Artemis installation. Iris keeps the data of the installations apart by this URL, and with `allowed_base_urls` it answers a request for another installation with `403`.
+
+- Spellings that differ only in the case of the scheme and host, in a default port (`:443` for https, `:80` for http), or in trailing slashes are the same URL. A different host, port, scheme or path is a different URL.
+- A key without `allowed_base_urls` is accepted for every installation. This keeps existing configurations working; set the list wherever more than one Artemis installation, or any other party, can reach Iris.
+- An entry that is not an http(s) base URL stops Iris at start-up, so that a typo does not leave a key that nobody can use.
+
 ## Network Architecture
+
+Place Iris and Weaviate in a private network that only the Artemis servers can reach, and run one Iris per environment that holds real course data. See [Network Layout](./network-layout.md) for the recommended layout.
 
 A typical production setup looks like this:
 
@@ -110,7 +122,7 @@ A healthy response looks like:
 1. **Check network reachability**: From the Artemis host, verify you can reach Iris:
 
    ```bash
-   curl -v http://iris-host:8000/docs
+   curl -v -H "Authorization: your-shared-secret-token" http://iris-host:8000/api/v1/health/
    ```
 
 2. **Check Docker networking**: If both run in Docker, ensure they share a network or that ports are correctly published.
@@ -121,9 +133,13 @@ A healthy response looks like:
 
 ### Authentication failures (401/403)
 
+`401` means the `Authorization` header is missing. `403` means the value is not one of the configured tokens, or the key is not allowed for the base URL that the request names.
+
 1. **Token mismatch**: The most common issue. Verify the token in `application.yml` (`api_keys[].token`) matches `iris.secret-token` in Artemis exactly. Watch for trailing whitespace or newlines.
 
 2. **Missing Authorization header**: Ensure Artemis is sending the token in the `Authorization` header.
+
+3. **Base URL not allowed**: If the key has `allowed_base_urls`, the Iris log names the rejected base URL. It has to match the `server.url` of the Artemis installation (see above for what counts as the same URL).
 
 ### Iris cannot call back to Artemis
 

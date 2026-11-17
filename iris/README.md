@@ -252,7 +252,7 @@ most the configured number of selected-anchor reads, with query counts and time 
 7. **Access API Documentation**
 
    Open your browser and navigate to [http://localhost:8000/docs](http://localhost:8000/docs) to access the interactive
-   API documentation.
+   API documentation. It is served when `api_docs_enabled: true` is set in `application.local.yml`.
 
 #### Testing
 
@@ -344,7 +344,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 
 2. **Access the Application**
    - Application URL: [http://localhost:8000](http://localhost:8000)
-   - API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+   - API Docs: [http://localhost:8000/docs](http://localhost:8000/docs) (needs `api_docs_enabled: true`)
 
 ##### **Production Environment**
 

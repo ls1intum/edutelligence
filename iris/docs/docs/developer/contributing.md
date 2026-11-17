@@ -183,7 +183,7 @@ See [Tools](./tools.md#creating-a-new-tool) for the pattern and instructions.
 
 - Enable verbose logging by setting `LOG_LEVEL=DEBUG`.
 - Enable LangFuse tracing in `application.local.yml` to see full trace trees.
-- Check the FastAPI docs at `/docs` for endpoint schemas.
+- Check the FastAPI docs at `/docs` for endpoint schemas (set `api_docs_enabled: true` in the application configuration).
 - Use the health endpoint (`/api/v1/health`) to verify the server is running.
 
 ## Reporting Issues

@@ -75,9 +75,22 @@ List of API tokens that Artemis uses to authenticate with Iris:
 ```yaml
 api_keys:
   - token: "your-secret-token"
+    allowed_base_urls:
+      - "https://artemis.example.org"
 ```
 
-The token is validated by the `TokenValidator` FastAPI dependency on every pipeline request.
+The token is validated by the `TokenValidator` FastAPI dependency on every request. The comparison takes the same time for every value.
+
+| Field               | Type   | Default | Description                                                                                                                                                                                                              |
+| ------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `token`             | string |         | The value that Artemis sends in the `Authorization` header (`iris.secret-token` in Artemis)                                                                                                                              |
+| `allowed_base_urls` | list   | `[]`    | Base URLs of the Artemis installations that may use the key. Empty accepts every base URL. A request that names another base URL is answered with `403`. An entry that is not an http(s) base URL stops Iris at start-up |
+
+Routes that receive the base URL of an Artemis installation (`artemisBaseUrl`, `baseUrl`, the `base_url` query parameter or the `X-Artemis-Base-Url` header) call `require_base_url` or `require_settings_base_url` from `iris.dependencies` with the key that `AuthorizedKey` provides. A new route has to do the same and be listed in `tests/test_api_key_base_urls.py`, which fails otherwise. Spellings are compared in the form that `iris.common.base_url.normalize_base_url` gives.
+
+#### `api_docs_enabled`
+
+Serves the interactive API documentation (`/docs`, `/redoc`) and the schema (`/openapi.json`). Default `false`. Set it to `true` in the local configuration during development.
 
 #### `weaviate`
 

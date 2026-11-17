@@ -63,7 +63,7 @@ docker compose -f iris/docker/pyris-dev.yml up --build
 This mounts `application.local.yml` and `llm_config.local.yml` from the `iris/` directory and exposes:
 
 - **Iris API**: `http://localhost:8000`
-- **API Docs (Swagger)**: `http://localhost:8000/docs`
+- **API Docs (Swagger)**: `http://localhost:8000/docs` (served when `api_docs_enabled: true` is set in `application.local.yml`)
 - **Weaviate REST**: `http://localhost:8001`
 - **Weaviate gRPC**: `localhost:50051`
 
@@ -80,7 +80,7 @@ cp iris/application.example.yml iris/application.yml
 cp iris/llm_config.example.yml iris/llm_config.yml
 ```
 
-Edit `application.yml` with your API keys and Weaviate connection details. Edit `llm_config.yml` with your LLM model definitions. See [LLM Configuration](./llm-configuration.md) for model setup details and [Weaviate Setup](./weaviate-setup.md) for database options.
+Edit `application.yml` with your API keys (one per Artemis installation, each with its `allowed_base_urls`) and Weaviate connection details. Run a separate Iris for every environment that holds real data and keep it in a private network, see [Network Layout](./network-layout.md). Edit `llm_config.yml` with your LLM model definitions. See [LLM Configuration](./llm-configuration.md) for model setup details and [Weaviate Setup](./weaviate-setup.md) for database options.
 
 Create a protected `docker.env` file with the variables shared by every production profile. Use absolute host paths:
 
@@ -98,7 +98,7 @@ The commands below load this file with `--env-file docker.env`. Add the profile-
 
 ### Option 1: With Nginx (SSL Termination)
 
-Use this when Iris is directly exposed to the internet.
+Use this when Iris has to be reached over TLS, for example by Artemis servers in another network. Allow only the Artemis servers to connect to it (firewall or allow-list), and keep Weaviate off public addresses. See [Network Layout](./network-layout.md).
 
 1. **Prepare SSL certificates** -- place `fullchain.pem` and `priv_key.pem` at known paths on the host.
 
