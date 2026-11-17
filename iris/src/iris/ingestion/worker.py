@@ -246,10 +246,15 @@ class IngestionWorker:
         path: str,
         payload: dict,
         timeout: float = _REQUEST_TIMEOUT_SECONDS,
+        auth_token: Optional[str] = None,
     ) -> http_requests.Response:
         return http_requests.post(
             f"{upstream.url}/api/iris/internal/ingestion/worker/{path}",
-            headers={"Authorization": upstream.auth_token},
+            headers={
+                "Authorization": (
+                    upstream.auth_token if auth_token is None else auth_token
+                )
+            },
             json=payload,
             timeout=timeout,
             # Artemis never redirects this endpoint; disabled so a validated upstream cannot be
@@ -320,9 +325,17 @@ class IngestionWorker:
         start is reported as failed and does not stop the rest of the batch. Returns the
         number of jobs that started.
         """
+        # The token the claim is sent with and the key that its jobs are checked against are one
+        # pair: an announcement that replaces them while the claim is in flight applies to the
+        # next claim only.
+        with self._lock:
+            claim_token, claim_key = upstream.auth_token, upstream.api_key
         try:
             response = self._post(
-                upstream, "claim", {"bootId": BOOT_ID, "maxJobs": slots}
+                upstream,
+                "claim",
+                {"bootId": BOOT_ID, "maxJobs": slots},
+                auth_token=claim_token,
             )
             response.raise_for_status()
         except http_requests.exceptions.RequestException as e:
@@ -346,7 +359,7 @@ class IngestionWorker:
                     upstream_url=upstream.url,
                     lecture_unit_id=_job_unit_id(job),
                     cancel_event=threading.Event(),
-                    api_key=upstream.api_key,
+                    api_key=claim_key,
                 )
                 self._active[credentials[0]] = pending
                 reserved.append((job, pending))
@@ -361,7 +374,7 @@ class IngestionWorker:
                 logger.warning(
                     "Could not start claimed job from %s: %s", upstream.url, e
                 )
-                self._report_start_failure(job, upstream, e)
+                self._report_start_failure(job, upstream, e, claim_key)
         return started
 
     def _start_job(self, job: dict, pending: _ActiveRun) -> bool:
@@ -449,7 +462,11 @@ class IngestionWorker:
             )
 
     def _report_start_failure(
-        self, job: dict, upstream: _Upstream, error: Exception
+        self,
+        job: dict,
+        upstream: _Upstream,
+        error: Exception,
+        api_key: Optional[APIKeyConfig] = None,
     ) -> None:
         """Tell Artemis a claimed job could not start, without ever raising.
 
@@ -470,10 +487,7 @@ class IngestionWorker:
             if (
                 not isinstance(base_url, str)
                 or not base_url
-                or (
-                    upstream.api_key is not None
-                    and not upstream.api_key.permits_base_url(base_url)
-                )
+                or (api_key is not None and not api_key.permits_base_url(base_url))
             ):
                 base_url = upstream.url
             # pylint: disable=import-outside-toplevel

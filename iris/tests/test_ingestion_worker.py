@@ -618,6 +618,51 @@ class TestClaimedJobsAndAllowedBaseUrls:
         assert (run_id, base_url) == ("tok-other", self.UPSTREAM)
         assert "not allowed" in message
 
+    def test_a_job_whose_base_url_cannot_be_parsed_is_reported_to_its_upstream(self):
+        worker = IngestionWorker()
+        key = APIKeyConfig(token="key-a", allowed_base_urls=[self.UPSTREAM])
+        job = _job("tok-broken")
+        job["settings"]["artemisBaseUrl"] = "https://[not-ipv6]"
+        with _failure_callbacks() as reported:
+            handler, started = self._claim(worker, [job], key)
+            assert _wait_for(lambda: len(reported) == 1)
+        assert started == 0
+        handler.add_job.assert_not_called()
+        (_, base_url, _), _ = reported[0]
+        assert base_url == self.UPSTREAM
+
+    def test_the_key_of_a_claim_is_the_one_it_was_sent_with(self):
+        # An announcement that replaces the token and key while a claim is in flight applies to the
+        # next claim: the jobs returned for the old key are not checked against the new one.
+        worker = IngestionWorker()
+        limited = APIKeyConfig(token="key-old", allowed_base_urls=[self.UPSTREAM])
+        worker.register_upstream(self.UPSTREAM, "key-old", limited)
+        upstream = worker._upstreams[self.UPSTREAM]
+        handler = MagicMock()
+        sent_tokens = []
+
+        def post(url, **kwargs):
+            assert url.endswith("/claim")
+            sent_tokens.append(kwargs["headers"]["Authorization"])
+            # the announcement arrives while the claim is on its way
+            worker.register_upstream(
+                self.UPSTREAM, "key-new", APIKeyConfig(token="key-new")
+            )
+            return _response(body={"jobs": [_job("tok-late")]})
+
+        with (
+            _failure_callbacks() as reported,
+            _start_environment(handler),
+            patch("iris.ingestion.worker.http_requests.post", side_effect=post),
+        ):
+            started = worker._claim_from(upstream, 1)
+            assert _wait_for(lambda: len(reported) == 1)
+        assert sent_tokens == ["key-old"]
+        assert started == 0
+        handler.add_job.assert_not_called()
+        # the next claim uses what the announcement brought
+        assert worker._upstreams[self.UPSTREAM].api_key.token == "key-new"
+
     def test_a_job_for_an_allowed_installation_starts_whatever_its_spelling(self):
         worker = IngestionWorker()
         key = APIKeyConfig(

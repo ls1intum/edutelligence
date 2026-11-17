@@ -281,13 +281,15 @@ Additional environment variables can be injected via the `env_vars` section of `
 
 When running with Docker, configuration files are mounted into the container. The Docker Compose environment variables control paths and ports:
 
-| Variable                     | Default  | Purpose                            |
-| ---------------------------- | -------- | ---------------------------------- |
-| `PYRIS_DOCKER_TAG`           | `latest` | Docker image tag                   |
-| `PYRIS_APPLICATION_YML_FILE` | —        | Path to application config on host |
-| `PYRIS_LLM_CONFIG_YML_FILE`  | —        | Path to LLM config on host         |
-| `PYRIS_PORT`                 | `8000`   | Host port for the Iris application |
-| `WEAVIATE_PORT`              | `8001`   | Host port for Weaviate REST API    |
-| `WEAVIATE_GRPC_PORT`         | `50051`  | Host port for Weaviate gRPC        |
+| Variable                     | Default   | Purpose                                                     |
+| ---------------------------- | --------- | ----------------------------------------------------------- |
+| `PYRIS_DOCKER_TAG`           | `latest`  | Docker image tag                                            |
+| `PYRIS_APPLICATION_YML_FILE` | —         | Path to application config on host                          |
+| `PYRIS_LLM_CONFIG_YML_FILE`  | —         | Path to LLM config on host                                  |
+| `PYRIS_PORT`                 | `8000`    | Host port for the Iris application                          |
+| `PYRIS_BIND_ADDRESS`         | `0.0.0.0` | Host address of the Iris port (production-internal compose) |
+| `WEAVIATE_PORT`              | `8001`    | Host port for Weaviate REST API                             |
+| `WEAVIATE_GRPC_PORT`         | `50051`   | Host port for Weaviate gRPC                                 |
+| `WEAVIATE_BIND_ADDRESS`      | `0.0.0.0` | Host address of the Weaviate ports                          |
 
 See [Local Setup](./local-setup.md) for Docker setup instructions.

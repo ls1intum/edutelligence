@@ -121,6 +121,11 @@ def test_spellings_of_one_base_url_have_one_normal_form(value, expected):
         "https://artemis.example.org%2f@evil.example",
         "https://evil.example#@artemis.example.org",
         "https://artemis.example.org:notaport",
+        "https://[",
+        "https://[not-ipv6]",
+        "https://[::1",
+        "http://[::1]]",
+        "https://artemis.example.org]",
         "https://artemis.example.org:99999",
     ],
 )
@@ -164,6 +169,8 @@ def test_a_limited_key_accepts_the_spellings_of_its_base_url(base_url):
         "https://artemis.example.org/other",
         "https://artemis.example.org?x=1",
         "https://user@artemis.example.org",
+        "https://[",
+        "https://[not-ipv6]",
     ],
 )
 def test_a_limited_key_rejects_every_other_base_url(base_url):
@@ -206,6 +213,9 @@ def test_require_base_url_rejects_with_permission_denied():
         dependencies.require_base_url(LIMITED_KEY, OTHER)
     with pytest.raises(PermissionDeniedException):
         dependencies.require_base_url(LIMITED_KEY, None)
+    # a value that cannot be parsed is refused like any other, it does not fail the request
+    with pytest.raises(PermissionDeniedException):
+        dependencies.require_base_url(LIMITED_KEY, "https://[")
 
 
 def test_require_settings_base_url_reads_the_base_url_of_the_settings():

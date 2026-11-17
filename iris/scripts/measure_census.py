@@ -28,7 +28,7 @@ import time
 
 from weaviate.classes.query import Filter
 
-from iris.config import settings
+from iris.config import APIKeyConfig, settings
 from iris.vector_database.database import VectorDatabase
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -199,7 +199,9 @@ def _time_census(concurrency: int, repeats: int) -> tuple[list[float], dict]:
     durations, census = [], None
     for _ in range(repeats):
         started = time.perf_counter()
-        census = get_course_ingestion_census(COURSE_ID, base_url=BASE_URL)
+        census = get_course_ingestion_census(
+            APIKeyConfig(token="measure-census"), COURSE_ID, base_url=BASE_URL
+        )
         durations.append(time.perf_counter() - started)
     return durations, census.model_dump(by_alias=True)
 

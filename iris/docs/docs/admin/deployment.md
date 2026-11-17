@@ -98,7 +98,7 @@ The commands below load this file with `--env-file docker.env`. Add the profile-
 
 ### Option 1: With Nginx (SSL Termination)
 
-Use this when Iris has to be reached over TLS, for example by Artemis servers in another network. Allow only the Artemis servers to connect to it (firewall or allow-list), and keep Weaviate off public addresses. See [Network Layout](./network-layout.md).
+Use this when Iris has to be reached over TLS, for example by Artemis servers in another network. Allow only the Artemis servers to connect to it (firewall or allow-list), and keep Weaviate off public addresses: the bundled Weaviate publishes its ports on every address of the host unless you set `WEAVIATE_BIND_ADDRESS` in `docker.env` to the private address of the host (or `127.0.0.1` if only containers and processes on the host use it). See [Network Layout](./network-layout.md).
 
 1. **Prepare SSL certificates** -- place `fullchain.pem` and `priv_key.pem` at known paths on the host.
 
@@ -131,7 +131,7 @@ PYRIS_PORT=8000
 docker compose --env-file docker.env -f iris/docker/pyris-production-internal.yml up -d
 ```
 
-Iris is exposed directly on `PYRIS_PORT` (default `8000`).
+Iris is exposed directly on `PYRIS_PORT` (default `8000`), on every address of the host. Set `PYRIS_BIND_ADDRESS` (and `WEAVIATE_BIND_ADDRESS` for the bundled Weaviate) in `docker.env` to the private address of the host, or to `127.0.0.1` when the reverse proxy runs on the same host, so that the ports are published there only.
 
 ### Option 3: External Weaviate (No Bundled Weaviate)
 
@@ -200,8 +200,10 @@ docker compose --env-file docker.env -f iris/docker/pyris-production.yml down
 | `PYRIS_APPLICATION_YML_FILE`           | --                        | **Required.** Absolute path to `application.yml` on the host       |
 | `PYRIS_LLM_CONFIG_YML_FILE`            | --                        | **Required.** Absolute path to `llm_config.yml` on the host        |
 | `PYRIS_PORT`                           | `8000`                    | Host port for Iris (production-internal compose only)              |
+| `PYRIS_BIND_ADDRESS`                   | `0.0.0.0`                 | Host address the Iris port is published on (production-internal)   |
 | `WEAVIATE_PORT`                        | `8001`                    | Host port for Weaviate REST API (bundled Weaviate only)            |
 | `WEAVIATE_GRPC_PORT`                   | `50051`                   | Host port for Weaviate gRPC (bundled Weaviate only)                |
+| `WEAVIATE_BIND_ADDRESS`                | `0.0.0.0`                 | Host address the Weaviate ports are published on (bundled)         |
 | `NGINX_PROXY_SSL_CERTIFICATE_PATH`     | --                        | **Required (Nginx).** Path to SSL certificate (`fullchain.pem`)    |
 | `NGINX_PROXY_SSL_CERTIFICATE_KEY_PATH` | --                        | **Required (Nginx).** Path to SSL private key (`priv_key.pem`)     |
 | `APPLICATION_YML_PATH`                 | `/config/application.yml` | Container-internal config path (set automatically by compose)      |
