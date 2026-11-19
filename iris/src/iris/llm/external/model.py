@@ -41,6 +41,12 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
     # free. Set 0 explicitly for providers that don't bill them (local models).
     cost_per_million_cached_input_token: Optional[float] = None
     cost_per_million_cache_write_input_token: Optional[float] = None
+    # Explicit USD rates are separate from the older, currency-unspecified
+    # rates above. Missing rates never establish a known USD cost.
+    cost_per_million_input_token_usd: Optional[float] = None
+    cost_per_million_output_token_usd: Optional[float] = None
+    cost_per_million_cached_input_token_usd: Optional[float] = None
+    cost_per_million_cache_write_input_token_usd: Optional[float] = None
     # Long-context price tier: above this many input tokens the provider bills
     # the whole request at multiplied rates (GPT-6: 2x input and cache rates,
     # 1.5x output). None means the model has no such tier.

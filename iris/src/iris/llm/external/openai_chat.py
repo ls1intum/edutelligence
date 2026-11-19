@@ -421,7 +421,33 @@ def _usage_field(source: Any, name: str) -> int:
     value = (
         source.get(name) if isinstance(source, dict) else getattr(source, name, None)
     )
-    return value if isinstance(value, int) else 0
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _optional_usage_field(source: Any, name: str) -> Any:
+    """Read provider extensions from SDK models as well as plain responses."""
+    if source is None:
+        return None
+    return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
+
+
+def _valid_usage_count(source: Any, name: str, *, optional: bool = False) -> bool:
+    """Keep optional absent/null cache counters distinct from invalid counts."""
+    if source is None:
+        return optional
+    if isinstance(source, dict):
+        present = name in source
+    else:
+        fields = getattr(source, "model_fields_set", None)
+        if fields is None and not hasattr(source, "__dict__"):
+            return False
+        present = name in fields if fields is not None else hasattr(source, name)
+    if not present:
+        return optional
+    value = _optional_usage_field(source, name)
+    if value is None:
+        return optional
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
@@ -431,7 +457,7 @@ def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
     Chat Completions reports ``prompt_tokens`` with ``prompt_tokens_details``;
     the Responses API reports ``input_tokens`` with ``input_tokens_details``.
     Both details objects carry ``cached_tokens`` and, on models that bill cache
-    writes, ``cache_write_tokens``. Missing fields count as zero.
+    writes, ``cache_write_tokens``. Missing or null cache counters count as zero.
 
     Args:
         usage: Optional usage object (or dict) from either API
@@ -460,12 +486,30 @@ def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
             if isinstance(usage, dict)
             else getattr(usage, details_name, None)
         )
+    reported_cost = _optional_usage_field(usage, "cost")
+    currency = _optional_usage_field(usage, "cost_currency")
+    if reported_cost is not None and currency != "USD":
+        logger.warning("Ignoring provider cost without an explicit USD currency")
     return TokenUsageDTO(
         model=model,
         numInputTokens=input_tokens,
         numOutputTokens=output_tokens,
         numCachedInputTokens=_usage_field(details, "cached_tokens"),
         numCacheWriteInputTokens=_usage_field(details, "cache_write_tokens"),
+        totalCostUsd=reported_cost if currency == "USD" else None,
+        usage_reported=usage is not None
+        and all(
+            _valid_usage_count(usage, name)
+            for name in (
+                ("input_tokens", "output_tokens")
+                if is_responses_usage
+                else ("prompt_tokens", "completion_tokens")
+            )
+        )
+        and all(
+            _valid_usage_count(details, name, optional=True)
+            for name in ("cached_tokens", "cache_write_tokens")
+        ),
     )
 
 
