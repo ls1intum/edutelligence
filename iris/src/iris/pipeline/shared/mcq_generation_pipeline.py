@@ -3,7 +3,7 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
-from typing import List, Optional
+from typing import Any, Callable, List, Optional
 
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import StrOutputParser
@@ -284,19 +284,7 @@ class McqGenerationPipeline(SubPipeline):
         )
 
         response = self._invoke(prompt)
-
-        # Parse response
-        cleaned = response.strip()
-        if cleaned.startswith("```") and "\n" in cleaned:
-            first_newline = cleaned.index("\n")
-            last_fence = cleaned.rfind("```")
-            if last_fence > first_newline:
-                start = first_newline + 1
-                cleaned = cleaned[start:last_fence].strip()
-
-        subtopics = json.loads(cleaned)
-        if not isinstance(subtopics, list):
-            raise ValueError("Expected a JSON array of subtopics")
+        subtopics = self._decode_json_values(response, accept=_is_subtopic_list)[0]
         return [str(s) for s in subtopics[:count]]
 
     def _generate_multiple_sequential(
@@ -364,51 +352,175 @@ class McqGenerationPipeline(SubPipeline):
         return "\n".join(lines)
 
     @staticmethod
+    def _decode_json_values(
+        response: str, accept: Callable[[Any], bool] = lambda _value: True
+    ) -> list:
+        """Decode the consecutive top-level JSON values the model returned.
+
+        Scans for the first ``{`` or ``[`` whose value decodes and passes
+        ``accept``, so markdown fences and leading prose are skipped, even
+        prose with brackets such as "Here is question [1]:". Then collects the
+        objects or arrays that directly follow, separated by whitespace or
+        commas. The first text that is not one ends the scan, so trailing
+        prose is ignored even when it starts like a JSON scalar ("2 more
+        questions"). Raises a JSON error (or ValueError) when no acceptable
+        value is found, so the caller can log the raw response.
+        """
+        decoder = json.JSONDecoder()
+        first_error: Optional[json.JSONDecodeError] = None
+        start = _first_json_index(response)
+        while start is not None:
+            try:
+                value, end = decoder.raw_decode(response, start)
+            except json.JSONDecodeError as error:
+                # The first parse error is the most useful one to report.
+                first_error = first_error or error
+                resume = max(error.pos, start + 1)
+            else:
+                if accept(value):
+                    return [value, *_following_values(decoder, response, end, accept)]
+                resume = end
+            start = _first_json_index(response, resume)
+
+        if first_error is not None:
+            raise first_error
+        # Plain text gets json's precise decode error; anything else is unusable.
+        json.loads(response.strip())
+        raise ValueError("Response contained no usable JSON object or array")
+
+    @staticmethod
+    def _flatten_questions(values: list) -> list:
+        """Turn decoded JSON values into a flat list of question dicts.
+
+        Accepts single ``mcq`` objects, ``mcq-set`` objects and bare arrays, in
+        any combination, so several of them in a row become one quiz.
+        """
+        questions: list = []
+        for value in values:
+            if isinstance(value, list):
+                items = value
+            elif isinstance(value, dict) and value.get("type") == "mcq-set":
+                items = value.get("questions") or []
+                if not isinstance(items, list):
+                    raise ValueError(f"MCQ 'questions' must be an array, got {items!r}")
+            elif isinstance(value, dict):
+                items = [value]
+            else:
+                raise ValueError(f"Unexpected MCQ JSON value: {value!r}")
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError(f"MCQ question must be an object, got {item!r}")
+                questions.append(item)
+        return questions
+
+    @staticmethod
     def _extract_and_validate_json(response: str) -> str:
-        """Extract and validate MCQ JSON from the LLM response."""
-        # Strip markdown fences if present
-        cleaned = response.strip()
-        if cleaned.startswith("```") and "\n" in cleaned:
-            first_newline = cleaned.index("\n")
-            last_fence = cleaned.rfind("```")
-            if last_fence > first_newline:
-                start = first_newline + 1
-                cleaned = cleaned[start:last_fence].strip()
+        """Extract and validate MCQ JSON from the LLM response.
 
-        parsed = json.loads(cleaned)
+        The model does not always return exactly one JSON object: it may emit
+        several questions in a row, a top-level array, or JSON followed by a
+        sentence. We collect every consecutive JSON value, ignore trailing
+        prose and flatten them into questions. Every caller asks for exactly
+        one question, so only the first is kept and returned as an ``mcq``;
+        any others are dropped with a warning.
+        """
+        try:
+            questions = McqGenerationPipeline._flatten_questions(
+                McqGenerationPipeline._decode_json_values(
+                    response, accept=_is_mcq_value
+                )
+            )
+        except ValueError:
+            logger.warning("Could not parse MCQ JSON from response: %r", response)
+            raise
 
-        # Repair: auto-fill missing "correct" fields before validation
-        _repair_mcq(parsed)
+        if not questions:
+            logger.warning("Response contained no MCQ question: %r", response)
+            raise ValueError("Response contained no MCQ question")
 
-        # Validate structure
-        mcq_type = parsed.get("type")
-        if mcq_type == "mcq":
-            _validate_single_mcq(parsed)
-        elif mcq_type == "mcq-set":
-            questions = parsed.get("questions", [])
-            if not questions:
-                raise ValueError("mcq-set must contain at least one question")
-            for q in questions:
-                _validate_single_mcq(q)
-        else:
-            raise ValueError(f"Unknown MCQ type: {mcq_type}")
+        if len(questions) > 1:
+            logger.warning(
+                "Model returned %d MCQ questions where 1 was requested; "
+                "keeping the first",
+                len(questions),
+            )
+        question = questions[0]
 
-        return json.dumps(parsed)
+        try:
+            _repair_single_mcq(question)
+            _validate_single_mcq(question)
+        except ValueError:
+            logger.warning("MCQ JSON failed validation; response: %r", response)
+            raise
+
+        return json.dumps({**question, "type": "mcq"})
 
 
-def _repair_mcq(mcq: dict) -> None:
-    """Auto-repair common LLM omissions so the JSON passes Artemis validation."""
-    if mcq.get("type") == "mcq-set":
-        for q in mcq.get("questions", []):
-            _repair_single_mcq(q)
-    else:
-        _repair_single_mcq(mcq)
+def _first_json_index(text: str, start: int = 0) -> Optional[int]:
+    """Index of the first ``{`` or ``[`` at or after ``start``, or ``None``."""
+    indices = [i for i in (text.find("{", start), text.find("[", start)) if i != -1]
+    return min(indices) if indices else None
+
+
+def _following_values(
+    decoder: json.JSONDecoder, text: str, index: int, accept: Callable[[Any], bool]
+) -> list:
+    """The acceptable objects or arrays right after ``index``.
+
+    Values may be separated by whitespace or commas (``{...},\\n{...}``). Only
+    an object or array continues the scan, so a sentence after the JSON (even
+    "2 more questions" or "\\"Good luck!\\"") is ignored, not decoded.
+    """
+    values: list = []
+    while True:
+        while index < len(text) and (text[index].isspace() or text[index] == ","):
+            index += 1
+        if index >= len(text) or text[index] not in "{[":
+            return values
+        try:
+            value, index = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            return values
+        if not accept(value):
+            return values
+        values.append(value)
+
+
+def _is_mcq_value(value: Any) -> bool:
+    """Whether a decoded value holds MCQ questions.
+
+    Accepts an object with a ``question`` or ``questions`` key, or a non-empty
+    list of such objects.
+    """
+    if isinstance(value, list):
+        return bool(value) and all(_is_mcq_object(item) for item in value)
+    return _is_mcq_object(value)
+
+
+def _is_mcq_object(value: Any) -> bool:
+    """Whether a value is an object with a ``question`` or ``questions`` key."""
+    return isinstance(value, dict) and ("question" in value or "questions" in value)
+
+
+def _is_subtopic_list(value: Any) -> bool:
+    """Whether a decoded value is a non-empty list of subtopic strings."""
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, str) for item in value)
+    )
 
 
 def _repair_single_mcq(mcq: dict) -> None:
-    """Fill missing 'correct' fields with False on options that lack them."""
-    for opt in mcq.get("options", []):
-        if "correct" not in opt:
+    """Fill missing 'correct' fields with False on options that lack them.
+
+    Malformed options are left alone for ``_validate_single_mcq`` to report.
+    """
+    options = mcq.get("options", [])
+    if not isinstance(options, list):
+        return
+    for opt in options:
+        if isinstance(opt, dict) and "correct" not in opt:
             opt["correct"] = False
 
 
@@ -426,9 +538,13 @@ def _validate_single_mcq(mcq: dict) -> None:
     if "explanation" not in mcq or not mcq["explanation"]:
         raise ValueError("MCQ missing 'explanation' field")
     options = mcq.get("options", [])
+    if not isinstance(options, list):
+        raise ValueError(f"MCQ 'options' must be an array, got {options!r}")
     if len(options) != 4:
         raise ValueError(f"MCQ must have exactly 4 options, got {len(options)}")
     for i, opt in enumerate(options):
+        if not isinstance(opt, dict):
+            raise ValueError(f"Option {i} must be an object, got {opt!r}")
         if "text" not in opt or not opt["text"]:
             raise ValueError(f"Option {i} missing 'text' field")
         if "correct" not in opt or not isinstance(opt["correct"], bool):
