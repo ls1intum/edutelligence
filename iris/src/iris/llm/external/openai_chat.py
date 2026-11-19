@@ -497,9 +497,6 @@ def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
         numCachedInputTokens=_usage_field(details, "cached_tokens"),
         numCacheWriteInputTokens=_usage_field(details, "cache_write_tokens"),
         totalCostUsd=reported_cost if currency == "USD" else None,
-        costSource=(
-            "PROVIDER" if currency == "USD" and reported_cost is not None else None
-        ),
         usage_reported=usage is not None
         and all(
             _valid_usage_count(usage, name)

@@ -236,25 +236,21 @@ most the configured number of selected-anchor reads, with query counts and time 
        - `cost_per_million_input_token`: The cost per million input tokens for the model.
        - `cost_per_million_output_token`: The cost per million output tokens for the model.
 
-     Iris forwards a provider's `usage.cost` to Artemis as `totalCostUsd` with
-     `costSource: PROVIDER` only when `usage.cost_currency` is explicitly `USD`.
-     This includes the final usage frame of Chat Completions and Responses API
-     streams. Zero is a valid cost; missing, negative or malformed costs remain
-     unpriced. Provider costs take precedence over configured estimates.
+     Iris forwards `usage.cost` as `totalCostUsd` only when
+     `usage.cost_currency` is explicitly `USD`. This includes the final usage
+     frame from Chat Completions and Responses API streams. A valid provider
+     amount, including zero, takes precedence over a configured estimate.
 
-     For providers that do not report USD costs, configure the optional
+     If the provider supplies no usable USD amount, Iris can estimate it from
      `cost_per_million_input_token_usd`, `cost_per_million_output_token_usd`,
      `cost_per_million_cached_input_token_usd` and
-     `cost_per_million_cache_write_input_token_usd` fields. A USD estimate is
-     sent with `costSource: CONFIGURATION` only if every token class used by
-     the request has an explicit USD rate. Cache reads and writes are subtracted
-     from the normal input count and use their own rates. The existing
-     long-context multipliers also apply to these USD rates. No USD defaults
-     are supplied, and the older rate fields are never assumed to be USD.
+     `cost_per_million_cache_write_input_token_usd`. Every used token class
+     needs its own rate. Cache reads and writes are subtracted from the normal
+     input count, and the existing long-context multipliers apply to these USD
+     rates. Missing prices stay unpriced.
 
-     Upgrade Pyris together with the Artemis USD-cost feature. Older token
-     records that have no USD amount and source remain unpriced in USD reports;
-     their existing configured rates are still sent for compatibility.
+     Upgrade Pyris together with Artemis. Pyris still sends the older rate
+     fields for compatibility with previous Artemis releases.
 
      > **Note:** Most existing pipelines in Pyris currently require the full GPT-4.1 model family to be configured.
      > Some features require special models. Watch the logs for any warnings regarding missing models.

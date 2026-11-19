@@ -1,7 +1,7 @@
 import math
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
@@ -38,34 +38,28 @@ class TokenUsageDTO(BaseModel):
         alias="costPerMillionCacheWriteInputToken", default=0
     )
     total_cost_usd: float | None = Field(alias="totalCostUsd", default=None)
-    cost_source: str | None = Field(alias="costSource", default=None)
     # Adapters set this only when the required token counters were reported.
     usage_reported: bool = Field(default=False, exclude=True)
     pipeline: PipelineEnum = Field(alias="pipelineId", default=PipelineEnum.NOT_SET)
 
-    @model_validator(mode="before")
+    @field_validator("total_cost_usd", mode="before")
     @classmethod
-    def validate_usd_cost(cls, data: Any) -> Any:
+    def validate_usd_cost(cls, cost: Any) -> float | None:
         """Discard bad optional cost data without losing the token record."""
-        if not isinstance(data, dict):
-            return data
-        cost = data.get("totalCostUsd")
-        source = data.get("costSource")
-        if cost is None and source is None:
-            return data
+        if cost is None:
+            return None
         try:
-            valid_number = (
+            if (
                 isinstance(cost, (int, float))
                 and not isinstance(cost, bool)
                 and math.isfinite(cost)
                 and cost >= 0
-            )
+            ):
+                return float(cost)
         except OverflowError:
-            valid_number = False
-        if not valid_number or source not in ("PROVIDER", "CONFIGURATION"):
-            logger.warning("Ignoring invalid optional USD cost or cost source")
-            return {**data, "totalCostUsd": None, "costSource": None}
-        return data
+            pass
+        logger.warning("Ignoring invalid optional USD cost")
+        return None
 
     def __str__(self):
         return (

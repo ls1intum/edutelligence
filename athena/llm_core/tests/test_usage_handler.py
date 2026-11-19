@@ -75,7 +75,6 @@ def test_actual_nonstreaming_langchain_callback_retains_provider_cost(accounting
 
     assert result.content == "answer"
     assert metadata["llmRequests"][0]["totalCostUsd"] == cost
-    assert metadata["llmRequests"][0]["costSource"] == "PROVIDER"
 
 
 @pytest.mark.parametrize(
@@ -109,7 +108,6 @@ def test_invalid_provider_cost_keeps_tokens_without_usd_amount(
 
     assert metadata["llmRequests"][0]["numInputTokens"] == 10
     assert metadata["llmRequests"][0]["totalCostUsd"] is None
-    assert metadata["llmRequests"][0]["costSource"] is None
 
 
 def test_streaming_adapter_cost_loss_uses_explicit_usd_estimate(
@@ -163,7 +161,6 @@ def test_streaming_adapter_cost_loss_uses_explicit_usd_estimate(
         list(model.stream("hello"))
 
     assert metadata["llmRequests"][0]["totalCostUsd"] == pytest.approx(0.000036)
-    assert metadata["llmRequests"][0]["costSource"] == "CONFIGURATION"
 
 
 def test_configured_usd_cache_estimate_needs_each_used_rate(accounting, monkeypatch):
@@ -189,7 +186,6 @@ def test_configured_usd_cache_estimate_needs_each_used_rate(accounting, monkeypa
     )
     handler.on_llm_end(response)
     assert metadata["llmRequests"][1]["totalCostUsd"] == pytest.approx(0.0000288)
-    assert metadata["llmRequests"][1]["costSource"] == "CONFIGURATION"
 
 
 @pytest.mark.parametrize("tier", ["default", "priority", "flex"])
@@ -238,10 +234,8 @@ def test_actual_langchain_tiered_cache_counts_use_each_configured_price(
     call = metadata["llmRequests"][0]
     if missing_rate and cached is not None:
         assert call["totalCostUsd"] is None
-        assert call["costSource"] is None
     else:
         assert call["totalCostUsd"] == pytest.approx(expected_cost)
-        assert call["costSource"] == "CONFIGURATION"
 
 
 def test_cache_estimate_sums_counts_across_service_tiers(accounting, monkeypatch):
@@ -320,7 +314,6 @@ def test_actual_multiple_choices_record_request_usage_once(
     }
     call = metadata["llmRequests"][0]
     assert call["totalCostUsd"] == pytest.approx(0.000036 if cost is None else cost)
-    assert call["costSource"] == ("CONFIGURATION" if cost is None else "PROVIDER")
 
 
 def test_request_group_uses_first_choice_with_usage(accounting):
@@ -384,7 +377,6 @@ def test_mismatched_native_counts_do_not_establish_a_provider_total(accounting):
     )
 
     assert metadata["llmRequests"][0]["totalCostUsd"] is None
-    assert metadata["llmRequests"][0]["costSource"] is None
 
 
 def test_legacy_estimate_bills_input_at_input_rate(accounting, monkeypatch):

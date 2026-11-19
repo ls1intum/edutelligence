@@ -118,15 +118,12 @@ class UsageHandler(BaseCallbackHandler):
                 provider_usage = response_metadata.get("token_usage")
                 if provider_usage is None and single_request:
                     provider_usage = output_metadata.get("token_usage")
-                reported_cost = _reported_usd_cost(
+                cost_usd = _reported_usd_cost(
                     provider_usage if isinstance(provider_usage, dict) else {},
                     generation_usage,
                 )
-                cost_usd = reported_cost
-                source = "PROVIDER" if reported_cost is not None else None
                 if cost_usd is None:
                     cost_usd = _estimated_usd_cost(generation_usage)
-                    source = "CONFIGURATION" if cost_usd is not None else None
 
                 total_usage["numInputTokens"] += generation_usage["input_tokens"]
                 total_usage["numOutputTokens"] += generation_usage["output_tokens"]
@@ -152,7 +149,6 @@ class UsageHandler(BaseCallbackHandler):
                         "numOutputTokens": generation_usage["output_tokens"],
                         "numTotalTokens": generation_usage["total_tokens"],
                         "totalCostUsd": cost_usd,
-                        "costSource": source,
                     }
                 )
                 # Choices in one request repeat its aggregate usage.

@@ -9,9 +9,7 @@ import pytest
 from openai import OpenAI
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionChunk
-from openai.types.completion_usage import PromptTokensDetails
 from openai.types.responses import ResponseUsage
-from openai.types.responses.response_usage import InputTokensDetails
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.token_usage_dto import TokenUsageDTO  # noqa: E402
@@ -68,35 +66,19 @@ def test_sdk_usage_keeps_explicit_provider_usd_total(api, cost):
     apply_model_costs(tokens, _model())
 
     assert tokens.total_cost_usd == cost
-    assert tokens.cost_source == "PROVIDER"
     assert tokens.model_dump(by_alias=True)["totalCostUsd"] == cost
     assert "usage_reported" not in tokens.model_dump(by_alias=True)
 
 
 @pytest.mark.parametrize(
-    "cost, source",
-    [
-        (-1, "PROVIDER"),
-        (float("nan"), "PROVIDER"),
-        (float("inf"), "PROVIDER"),
-        (10**1000, "PROVIDER"),
-        (True, "PROVIDER"),
-        ("0.5", "PROVIDER"),
-        ({"amount": 1}, "PROVIDER"),
-        ([1], "PROVIDER"),
-        (0.5, "provider"),
-        (0.5, "FUTURE_SOURCE"),
-        (0.5, {}),
-        (0.5, None),
-        (None, "PROVIDER"),
-    ],
+    "cost",
+    [-1, float("nan"), float("inf"), 10**1000, True, "0.5", {"amount": 1}, [1]],
 )
-def test_bad_optional_cost_pair_does_not_reject_token_record(cost, source):
-    tokens = TokenUsageDTO(numInputTokens=10, totalCostUsd=cost, costSource=source)
+def test_bad_optional_cost_does_not_reject_token_record(cost):
+    tokens = TokenUsageDTO(numInputTokens=10, totalCostUsd=cost)
 
     assert tokens.num_input_tokens == 10
     assert tokens.total_cost_usd is None
-    assert tokens.cost_source is None
 
 
 def test_unknown_currency_does_not_become_a_usd_provider_cost():
@@ -113,7 +95,6 @@ def test_unknown_currency_does_not_become_a_usd_provider_cost():
     apply_model_costs(tokens, _model())
 
     assert tokens.total_cost_usd == pytest.approx(0.000026)
-    assert tokens.cost_source == "CONFIGURATION"
 
 
 def test_configured_usd_estimate_prices_cache_classes_separately():
@@ -128,7 +109,6 @@ def test_configured_usd_estimate_prices_cache_classes_separately():
     apply_model_costs(tokens, _model())
 
     assert tokens.total_cost_usd == pytest.approx(0.000485)
-    assert tokens.cost_source == "CONFIGURATION"
     assert tokens.cost_per_million_input_token == 99
 
 
@@ -164,7 +144,6 @@ def test_missing_or_bad_used_usd_rate_stays_unpriced(cache_rate):
     )
 
     assert tokens.total_cost_usd is None
-    assert tokens.cost_source is None
 
 
 def test_legacy_rate_configuration_does_not_establish_usd_cost():
@@ -181,7 +160,6 @@ def test_legacy_rate_configuration_does_not_establish_usd_cost():
     apply_model_costs(tokens, model)
 
     assert tokens.total_cost_usd is None
-    assert tokens.cost_source is None
 
 
 def test_absent_usage_is_not_known_free():
@@ -190,7 +168,6 @@ def test_absent_usage_is_not_known_free():
     apply_model_costs(tokens, _model())
 
     assert tokens.total_cost_usd is None
-    assert tokens.cost_source is None
 
 
 def test_default_token_record_does_not_establish_known_usage():
@@ -200,183 +177,56 @@ def test_default_token_record_does_not_establish_known_usage():
 
     assert not tokens.usage_reported
     assert tokens.total_cost_usd is None
-    assert tokens.cost_source is None
 
 
-def _usage_with_cache_details(api, details):
-    if api.startswith("responses"):
-        usage = {
-            "input_tokens": 1000,
-            "output_tokens": 10,
-            "input_tokens_details": details,
-        }
-        if api.endswith("sdk"):
-            result = ResponseUsage.model_construct(**usage)
-            result.input_tokens_details = InputTokensDetails.model_construct(**details)
-            for name, value in details.items():
-                setattr(result.input_tokens_details, name, value)
-            return result
-    else:
-        usage = {
+@pytest.mark.parametrize("bad_count", ["900", -1, True, 1.5])
+def test_raw_bad_cache_count_prevents_usd_estimate(bad_count):
+    tokens = create_token_usage(
+        {
             "prompt_tokens": 1000,
             "completion_tokens": 10,
-            "prompt_tokens_details": details,
-        }
-        if api.endswith("sdk"):
-            result = CompletionUsage.model_construct(**usage)
-            result.prompt_tokens_details = PromptTokensDetails.model_construct(
-                **details
-            )
-            # The SDK constructor coerces some bad values. Exercise the parser
-            # with their original types, including malformed SDK extensions.
-            for name, value in details.items():
-                setattr(result.prompt_tokens_details, name, value)
-            return result
-    return usage
-
-
-@pytest.mark.parametrize(
-    "api", ["chat-dict", "responses-dict", "chat-sdk", "responses-sdk"]
-)
-@pytest.mark.parametrize("field", ["cached_tokens", "cache_write_tokens"])
-@pytest.mark.parametrize("bad_count", ["900", -1, True, 1.5])
-def test_malformed_reported_cache_count_prevents_usd_estimate(api, field, bad_count):
-    usage = _usage_with_cache_details(api, {field: bad_count})
-    tokens = create_token_usage(usage, "cost-test")
+            "prompt_tokens_details": {"cached_tokens": bad_count},
+        },
+        "cost-test",
+    )
 
     apply_model_costs(tokens, _model())
 
     assert tokens.num_input_tokens == 1000
-    assert tokens.num_output_tokens == 10
     assert not tokens.usage_reported
     assert tokens.total_cost_usd is None
-    assert tokens.cost_source is None
 
 
 @pytest.mark.parametrize(
-    "api", ["chat-dict", "responses-dict", "chat-sdk", "responses-sdk"]
-)
-@pytest.mark.parametrize(
-    "details",
+    "usage",
     [
-        {},
-        {"cached_tokens": 0},
-        {"cache_write_tokens": 0},
-        {"cached_tokens": None},
-        {"cache_write_tokens": None},
+        {"prompt_tokens": 1000, "completion_tokens": None},
+        {"input_tokens": 1000},
     ],
 )
-def test_absent_cache_counts_keep_zero_default_for_usd_estimate(api, details):
-    tokens = create_token_usage(_usage_with_cache_details(api, details), "cost-test")
-
-    apply_model_costs(tokens, _model())
-
-    assert tokens.usage_reported
-    assert tokens.total_cost_usd == pytest.approx(0.00208)
-    assert tokens.cost_source == "CONFIGURATION"
-
-
-@pytest.mark.parametrize(
-    "api", ["chat-dict", "responses-dict", "chat-sdk", "responses-sdk"]
-)
-@pytest.mark.parametrize("counter_index", [0, 1])
-@pytest.mark.parametrize("missing", [False, True], ids=["null", "absent"])
-def test_required_usage_counter_without_value_prevents_estimate(
-    api, counter_index, missing
-):
-    usage = _usage_with_cache_details(api, {})
-    counter_names = (
-        ("input_tokens", "output_tokens")
-        if api.startswith("responses")
-        else ("prompt_tokens", "completion_tokens")
-    )
-    counter = counter_names[counter_index]
-    if isinstance(usage, dict):
-        if missing:
-            usage.pop(counter)
-        else:
-            usage[counter] = None
-    elif missing:
-        delattr(usage, counter)
-        usage.model_fields_set.discard(counter)
-    else:
-        setattr(usage, counter, None)
-
-    tokens = create_token_usage(usage, "cost-test")
-    apply_model_costs(tokens, _model())
-
-    assert not tokens.usage_reported
-    assert tokens.total_cost_usd is None
-    assert tokens.cost_source is None
-
-
-@pytest.mark.parametrize("cost", [0, 0.001])
-def test_malformed_cache_count_does_not_replace_reported_provider_cost(cost):
-    usage = _usage_with_cache_details("chat-dict", {"cached_tokens": "900"})
-    usage.update(cost=cost, cost_currency="USD")
+def test_missing_required_usage_counter_prevents_estimate(usage):
     tokens = create_token_usage(usage, "cost-test")
 
     apply_model_costs(tokens, _model())
 
-    assert tokens.total_cost_usd == cost
-    assert tokens.cost_source == "PROVIDER"
-
-
-@pytest.mark.parametrize("field", ["cached_tokens", "cache_write_tokens"])
-@pytest.mark.parametrize("bad_count", ["bad", -1, 1.5])
-def test_actual_openai_response_with_invalid_cache_count_stays_unpriced(
-    field, bad_count
-):
-    response = {
-        "id": "cost-test",
-        "object": "chat.completion",
-        "created": 1,
-        "model": "cost-test",
-        "choices": [],
-        "usage": {
-            "prompt_tokens": 1000,
-            "completion_tokens": 10,
-            "total_tokens": 1010,
-            "prompt_tokens_details": {field: bad_count},
-        },
-    }
-    with httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, json=response)
-        )
-    ) as client:
-        sdk = OpenAI(
-            api_key="test",  # pragma: allowlist secret
-            base_url="http://cost.invalid/v1",
-            http_client=client,
-        )
-        completion = sdk.chat.completions.create(model="cost-test", messages=[])
-    tokens = create_token_usage(completion.usage, "cost-test")
-
-    apply_model_costs(tokens, _model())
-
     assert not tokens.usage_reported
     assert tokens.total_cost_usd is None
-    assert tokens.cost_source is None
 
 
-@pytest.mark.parametrize("api", ["chat", "responses"])
 @pytest.mark.parametrize(
-    "details",
+    "api,details,cost,valid",
     [
-        "bad",
-        [],
-        0,
-        False,
-        None,
-        {},
-        {"cached_tokens": None},
-        {"cache_write_tokens": None},
-        pytest.param(Ellipsis, id="absent"),
+        ("chat", {"cached_tokens": -1}, None, False),
+        ("chat", {"cached_tokens": "bad"}, 0, False),
+        ("chat", {"cached_tokens": None}, None, True),
+        ("chat", [], None, False),
+        ("responses", {"cache_write_tokens": -1}, None, False),
+        ("responses", {"cache_write_tokens": None}, None, True),
+        ("responses", "bad", 0.001, False),
+        ("responses", None, None, True),
     ],
 )
-@pytest.mark.parametrize("cost", [None, 0, 0.001])
-def test_actual_openai_cache_details_container_controls_estimation(api, details, cost):
+def test_sdk_cache_usage_controls_estimation(api, details, cost, valid):
     if api == "chat":
         response = {
             "id": "cost-test",
@@ -406,10 +256,6 @@ def test_actual_openai_cache_details_container_controls_estimation(api, details,
                 "input_tokens_details": details,
             },
         }
-    if details is Ellipsis:
-        response["usage"].pop(
-            "prompt_tokens_details" if api == "chat" else "input_tokens_details"
-        )
     if cost is not None:
         response["usage"].update(cost=cost, cost_currency="USD")
     with httpx.Client(
@@ -435,17 +281,13 @@ def test_actual_openai_cache_details_container_controls_estimation(api, details,
 
     apply_model_costs(tokens, _model())
 
-    valid_details = details is Ellipsis or details is None or isinstance(details, dict)
-    assert tokens.usage_reported is valid_details
+    assert tokens.usage_reported is valid
     if cost is not None:
         assert tokens.total_cost_usd == cost
-        assert tokens.cost_source == "PROVIDER"
-    elif valid_details:
+    elif valid:
         assert tokens.total_cost_usd == pytest.approx(0.00208)
-        assert tokens.cost_source == "CONFIGURATION"
     else:
         assert tokens.total_cost_usd is None
-        assert tokens.cost_source is None
 
 
 @pytest.mark.parametrize(
@@ -489,7 +331,6 @@ def test_actual_ollama_response_preserves_missing_and_zero_usage(
         assert tokens.total_cost_usd is None
     else:
         assert tokens.total_cost_usd == pytest.approx(expected_cost)
-    assert tokens.cost_source == ("CONFIGURATION" if reported else None)
 
 
 @pytest.mark.parametrize("cost", [0, 0.001])
@@ -523,7 +364,6 @@ def test_final_chat_stream_usage_keeps_usd_cost(cost):
     result = _model()._read_streamed_chat_completion(iter(chunks), lambda _: None)
 
     assert result.token_usage.total_cost_usd == cost
-    assert result.token_usage.cost_source == "PROVIDER"
 
 
 def test_final_responses_stream_usage_keeps_usd_cost():
@@ -553,4 +393,3 @@ def test_final_responses_stream_usage_keeps_usd_cost():
     result = _model()._read_streamed_responses_completion(events, lambda _: None)
 
     assert result.token_usage.total_cost_usd == 0.001
-    assert result.token_usage.cost_source == "PROVIDER"

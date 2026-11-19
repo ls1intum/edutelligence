@@ -45,10 +45,8 @@ def apply_model_costs(token_usage: TokenUsageDTO, llm: ChatModel) -> None:
     )
     # Provider totals include cache discounts and provider-specific charges.
     # The legacy rates above remain available, but never replace that total.
-    if token_usage.total_cost_usd is not None and token_usage.cost_source == "PROVIDER":
+    if token_usage.total_cost_usd is not None:
         return
-    token_usage.total_cost_usd = None
-    token_usage.cost_source = None
     if not token_usage.usage_reported:
         return
     counts = (
@@ -84,7 +82,6 @@ def apply_model_costs(token_usage: TokenUsageDTO, llm: ChatModel) -> None:
         total += count * rate * multiplier / 1_000_000
     if math.isfinite(total) and total >= 0:
         token_usage.total_cost_usd = total
-        token_usage.cost_source = "CONFIGURATION"
 
 
 class LlmRequestHandler(RequestHandler):
