@@ -212,9 +212,7 @@ def test_subtopic_extraction_skips_non_string_list_in_prose():
 
 def test_leading_prose_with_brackets_is_skipped():
     pipeline = _make_pipeline("Here is question [1]:\n" + VALID_SINGLE_MCQ)
-    parsed = json.loads(
-        pipeline(command="Generate a question")
-    )  # "Here is question [1]:\n{mcq}"
+    parsed = json.loads(pipeline(command="Generate a question"))
     assert parsed["type"] == "mcq"
     assert parsed["question"] == "What is 2+2?"
 
