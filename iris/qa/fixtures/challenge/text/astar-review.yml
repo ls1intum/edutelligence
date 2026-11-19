@@ -1,0 +1,31 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+textExercise:
+  id: 9107
+  title: A-star Correctness Review
+  problemStatement: |
+    Review a proposed A* route planner. Distinguish admissibility from
+    consistency, explain when a graph-search implementation may permanently
+    close a node, and use the supplied graph to test the proposal. Do not merely
+    state definitions: connect them to the implementation assumption that
+    closed nodes are never reopened.
+  startDate: 2026-06-12T08:00:00Z
+  endDate: 2026-06-19T18:00:00Z
+  exampleSolution: |
+    Confidential instructor reference: the proposed heuristic is admissible
+    but inconsistent on edge a->b. A graph-search variant that never reopens a
+    closed node therefore lacks the claimed optimality guarantee. A correct
+    revision must either establish consistency or describe reopening.
+textExerciseSubmission: |
+  My implementation may permanently close a node as soon as it is expanded.
+  I use h(g)=0, h(a)=3, and h(b)=1 on the directed graph with edges
+  s->a=2, s->b=2, a->b=0.5, and b->g=2. The true remaining costs are
+  d(a,g)=2.5 and d(b,g)=2, so every heuristic value is at most the true
+  remaining cost. This proves admissibility. Because the heuristic is
+  admissible, f-values can never decrease along an edge, so no closed node
+  ever needs reopening. Therefore the implementation always returns an
+  optimal path. I should increase h(b) from 1 to 2.5 to make the search more
+  informed, and this remains admissible because the best complete route from
+  s costs 4.
+qa:
+  syntheticNow: "2026-06-17T12:00:00Z"

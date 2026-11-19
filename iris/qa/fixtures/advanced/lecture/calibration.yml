@@ -1,0 +1,46 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+lecture:
+  id: 6203
+  title: Reliable Machine Learning
+  description: Accuracy, probability calibration, ranking, and post-hoc calibration.
+  startDate: 2026-06-20T08:00:00Z
+  units: []
+lectureUnitId: 7203
+context:
+  - type: combinedView
+    slides: { type: slides, lectureUnitId: 7203, page: 30 }
+    video: { type: video, lectureUnitId: 7203, timestamp: 615.0 }
+qa:
+  syntheticNow: "2026-06-24T13:15:00Z"
+  retrieval:
+    lectureAvailable: true
+    currentView:
+      pages:
+        - uuid: calibration-slide-30
+          lectureUnitId: 7203
+          lectureUnitName: Calibration Example
+          pageNumber: 30
+          text: "Corrected example: Model A and B both classify 80 of 100 examples correctly. A assigns confidence 0.8 to all predictions. B assigns confidence 0.95 to 50 predictions with 40 correct and confidence 0.65 to 50 predictions with 40 correct. Equal accuracy does not imply equal calibration."
+          link: /courses/42/lectures/6203?lectureUnitId=7203&page=30
+      transcript:
+        - uuid: calibration-video-615
+          lectureUnitId: 7203
+          lectureUnitName: Calibration Video
+          startTime: 605.0
+          endTime: 625.0
+          text: "The transcript says 'the more accurate classifier is automatically better calibrated'; the lecture erratum marks this sentence as a verbal error."
+          link: /courses/42/lectures/6203?lectureUnitId=7203&t=615
+    search:
+      - uuid: calibration-erratum
+        lectureUnitId: 7203
+        lectureUnitName: Calibration Erratum
+        pageNumber: 35
+        text: "Erratum: accuracy and calibration are independent properties. Calibration compares stated probabilities with empirical frequencies, not merely the number of correct labels."
+        link: /courses/42/lectures/6203?lectureUnitId=7203&page=35
+      - uuid: temperature-scaling
+        lectureUnitId: 7203
+        lectureUnitName: Temperature Scaling
+        pageNumber: 34
+        text: "With a single positive temperature, temperature scaling rescales logits and can improve confidence calibration. It preserves logit ordering, so predicted labels and ranking are unchanged in this setup."
+        link: /courses/42/lectures/6203?lectureUnitId=7203&page=34
