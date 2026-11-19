@@ -284,9 +284,7 @@ class McqGenerationPipeline(SubPipeline):
         )
 
         response = self._invoke(prompt)
-        subtopics = self._decode_json_values(
-            response, accept=lambda value: isinstance(value, list)
-        )[0]
+        subtopics = self._decode_json_values(response, accept=_is_subtopic_list)[0]
         return [str(s) for s in subtopics[:count]]
 
     def _generate_multiple_sequential(
@@ -371,34 +369,20 @@ class McqGenerationPipeline(SubPipeline):
         decoder = json.JSONDecoder()
         first_error: Optional[json.JSONDecodeError] = None
         start = _first_json_index(response)
-        # The loop tries to decode a value at each candidate { or [.
         while start is not None:
             try:
-                # raw_decode is the key tool. Unlike json.loads, it parses one
-                # value starting at pos and returns (value, end_index). It
-                # doesn't care what comes after.
                 value, end = decoder.raw_decode(response, start)
             except json.JSONDecodeError as error:
-                # Case 3: The parse fails, so skip past the broken part.
-                # Keeps the first parse error seen. If nothing works, that's
-                # the most useful error to report.
+                # The first parse error is the most useful one to report.
                 first_error = first_error or error
                 resume = max(error.pos, start + 1)
             else:
-                # Case 1: The value parses and is accepted, so return it.
                 if accept(value):
                     return [value, *_following_values(decoder, response, end, accept)]
-                # Case 2: The value parses but isn't accepted, so jump past it.
-                # For example, the text Here is question [1]: contains [1].
-                # That's valid JSON, but _is_mcq_value([1]) returns False. The
-                # loop resumes after ] and keeps looking.
                 resume = end
-            # Returns the position of the first { or [, or None. Only objects
-            # and arrays are candidates, so scalars like the 2 in "2 more
-            # questions" are never treated as the start of the JSON.
             start = _first_json_index(response, resume)
 
-        if first_error is not None:  # Nothing found
+        if first_error is not None:
             raise first_error
         # Plain text gets json's precise decode error; anything else is unusable.
         json.loads(response.strip())
@@ -416,7 +400,9 @@ class McqGenerationPipeline(SubPipeline):
             if isinstance(value, list):
                 items = value
             elif isinstance(value, dict) and value.get("type") == "mcq-set":
-                items = value.get("questions", [])
+                items = value.get("questions") or []
+                if not isinstance(items, list):
+                    raise ValueError(f"MCQ 'questions' must be an array, got {items!r}")
             elif isinstance(value, dict):
                 items = [value]
             else:
@@ -434,8 +420,9 @@ class McqGenerationPipeline(SubPipeline):
         The model does not always return exactly one JSON object: it may emit
         several questions in a row, a top-level array, or JSON followed by a
         sentence. We collect every consecutive JSON value, ignore trailing
-        prose, flatten them into questions and emit a single ``mcq`` (one
-        question) or an ``mcq-set`` (several).
+        prose and flatten them into questions. Every caller asks for exactly
+        one question, so only the first is kept and returned as an ``mcq``;
+        any others are dropped with a warning.
         """
         try:
             questions = McqGenerationPipeline._flatten_questions(
@@ -451,25 +438,25 @@ class McqGenerationPipeline(SubPipeline):
             logger.warning("Response contained no MCQ question: %r", response)
             raise ValueError("Response contained no MCQ question")
 
+        if len(questions) > 1:
+            logger.warning(
+                "Model returned %d MCQ questions where 1 was requested; "
+                "keeping the first",
+                len(questions),
+            )
+        question = questions[0]
+
         try:
-            # Repairs and validates each question in place. The repair step
-            # fills in missing "correct" fields with False, so the validation
-            # step can check that exactly one option is marked correct.
-            for question in questions:
-                _repair_single_mcq(question)
-                _validate_single_mcq(question)
+            _repair_single_mcq(question)
+            _validate_single_mcq(question)
         except ValueError:
             logger.warning("MCQ JSON failed validation; response: %r", response)
             raise
 
-        if len(questions) == 1:
-            return json.dumps({**questions[0], "type": "mcq"})
-        return json.dumps({"type": "mcq-set", "questions": questions})
+        return json.dumps({**question, "type": "mcq"})
 
 
-def _first_json_index(
-    text: str, start: int = 0
-) -> Optional[int]:  # gained a start argument so the scan can resume.
+def _first_json_index(text: str, start: int = 0) -> Optional[int]:
     """Index of the first ``{`` or ``[`` at or after ``start``, or ``None``."""
     indices = [i for i in (text.find("{", start), text.find("[", start)) if i != -1]
     return min(indices) if indices else None
@@ -477,7 +464,7 @@ def _first_json_index(
 
 def _following_values(
     decoder: json.JSONDecoder, text: str, index: int, accept: Callable[[Any], bool]
-) -> list:  # It is the helper for the "collect what follows" step.
+) -> list:
     """The acceptable objects or arrays right after ``index``.
 
     Values may be separated by whitespace or commas (``{...},\\n{...}``). Only
@@ -499,25 +486,41 @@ def _following_values(
         values.append(value)
 
 
-def _is_mcq_value(
-    value: Any,
-) -> (
-    bool
-):  # is the accept check for the MCQ path: an object, or a non-empty list of objects.
-    """Whether a decoded value can hold MCQ questions: an object or a list of them."""
-    if isinstance(value, dict):
-        return True
+def _is_mcq_value(value: Any) -> bool:
+    """Whether a decoded value holds MCQ questions.
+
+    Accepts an object with a ``question`` or ``questions`` key, or a non-empty
+    list of such objects.
+    """
+    if isinstance(value, list):
+        return bool(value) and all(_is_mcq_object(item) for item in value)
+    return _is_mcq_object(value)
+
+
+def _is_mcq_object(value: Any) -> bool:
+    """Whether a value is an object with a ``question`` or ``questions`` key."""
+    return isinstance(value, dict) and ("question" in value or "questions" in value)
+
+
+def _is_subtopic_list(value: Any) -> bool:
+    """Whether a decoded value is a non-empty list of subtopic strings."""
     return (
         isinstance(value, list)
         and bool(value)
-        and all(isinstance(item, dict) for item in value)
+        and all(isinstance(item, str) for item in value)
     )
 
 
 def _repair_single_mcq(mcq: dict) -> None:
-    """Fill missing 'correct' fields with False on options that lack them."""
-    for opt in mcq.get("options", []):
-        if "correct" not in opt:
+    """Fill missing 'correct' fields with False on options that lack them.
+
+    Malformed options are left alone for ``_validate_single_mcq`` to report.
+    """
+    options = mcq.get("options", [])
+    if not isinstance(options, list):
+        return
+    for opt in options:
+        if isinstance(opt, dict) and "correct" not in opt:
             opt["correct"] = False
 
 
@@ -535,9 +538,13 @@ def _validate_single_mcq(mcq: dict) -> None:
     if "explanation" not in mcq or not mcq["explanation"]:
         raise ValueError("MCQ missing 'explanation' field")
     options = mcq.get("options", [])
+    if not isinstance(options, list):
+        raise ValueError(f"MCQ 'options' must be an array, got {options!r}")
     if len(options) != 4:
         raise ValueError(f"MCQ must have exactly 4 options, got {len(options)}")
     for i, opt in enumerate(options):
+        if not isinstance(opt, dict):
+            raise ValueError(f"Option {i} must be an object, got {opt!r}")
         if "text" not in opt or not opt["text"]:
             raise ValueError(f"Option {i} missing 'text' field")
         if "correct" not in opt or not isinstance(opt["correct"], bool):
