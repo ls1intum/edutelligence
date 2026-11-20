@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from iris.config import APIKeyConfig
 from iris.retrieval.faq_retrieval_utils import should_allow_faq_tool
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
 from iris.vector_database import database
@@ -64,7 +65,9 @@ def test_an_unavailable_weaviate_is_degraded_and_iris_stays_healthy(monkeypatch)
     )
 
     response = health_endpoint.health(
-        request=SimpleNamespace(headers={}), response=SimpleNamespace()
+        request=SimpleNamespace(headers={}),
+        response=SimpleNamespace(),
+        api_key=APIKeyConfig(token="test"),
     )
 
     weaviate_status = response.modules["Weaviate Vector Database"]

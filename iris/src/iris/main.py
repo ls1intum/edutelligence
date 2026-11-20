@@ -51,6 +51,13 @@ async def lifespan(_: FastAPI):
         ingestion_worker,
     )
 
+    for index, api_key in enumerate(settings.api_keys):
+        if not api_key.limits_base_urls():
+            logger.info(
+                "api_keys[%d] is not limited to base URLs: it is accepted for every Artemis "
+                "installation. Set allowed_base_urls to name the installations that may use it.",
+                index,
+            )
     ingestion_worker.start()
     if settings.watchdog_enabled:
         watchdog.start()
@@ -62,7 +69,13 @@ async def lifespan(_: FastAPI):
     shutdown_langfuse()
 
 
-app = FastAPI(default_response_class=JSONResponse, lifespan=lifespan)
+app = FastAPI(
+    default_response_class=JSONResponse,
+    lifespan=lifespan,
+    docs_url="/docs" if settings.api_docs_enabled else None,
+    redoc_url="/redoc" if settings.api_docs_enabled else None,
+    openapi_url="/openapi.json" if settings.api_docs_enabled else None,
+)
 
 
 def custom_openapi():

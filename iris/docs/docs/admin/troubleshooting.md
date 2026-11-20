@@ -145,6 +145,10 @@ See also: [LLM Configuration](./llm-configuration.md)
 
 ### `401 Unauthorized` on API Requests
 
+The request has no `Authorization` header. Artemis sends it with every request; check that `iris.secret-token` is set.
+
+### `403 Forbidden` on API Requests
+
 The `Authorization` header value does not match any token in `application.yml`:
 
 ```yaml
@@ -158,12 +162,12 @@ Common causes:
 - Trailing whitespace or newline characters in the token
 - Copying the token with surrounding quotes (the YAML value should not include literal quote characters)
 
-### `403 Forbidden`
+The key can also be limited to base URLs with `allowed_base_urls`, and the request names a base URL that is not in the list. The Iris log names the rejected base URL; it has to match the `server.url` of the Artemis installation. See [Artemis Integration](./artemis-integration.md).
 
-Iris returns 403 when authentication succeeds but the request is invalid. Check Iris logs for details:
+Check the Iris logs for details:
 
 ```bash
-docker compose -f <compose-file> logs pyris-app | grep "403\|forbidden\|Forbidden"
+docker compose -f <compose-file> logs pyris-app | grep "403\|Rejected a request"
 ```
 
 ## LLM Configuration Errors

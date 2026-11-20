@@ -112,7 +112,7 @@ The `local` flag is determined from the request's settings and passed through th
 
 ## Feature Discovery
 
-Artemis discovers available pipeline variants through the `GET /api/v1/pipelines/{feature}/variants` endpoint. The `{feature}` path parameter is a member of the `Features` enum (`CHAT`, `COMPETENCY_GENERATION`, `INCONSISTENCY_CHECK`, `TUTOR_SUGGESTION`, `REWRITING`, `LECTURE_INGESTION`, `FAQ_INGESTION`, `AUTONOMOUS_TUTOR`). All student chats share the single `CHAT` feature, which `PIPELINE_BY_FEATURE` maps to `ChatPipeline`. Each pipeline's variants are filtered by model availability and returned as `FeatureDTO` objects:
+Artemis discovers available pipeline variants through the `GET /api/v1/pipelines/{feature}/variants` endpoint, which needs the same `Authorization` header as every other route. The `{feature}` path parameter is a member of the `Features` enum (`CHAT`, `COMPETENCY_GENERATION`, `INCONSISTENCY_CHECK`, `TUTOR_SUGGESTION`, `REWRITING`, `LECTURE_INGESTION`, `FAQ_INGESTION`, `AUTONOMOUS_TUTOR`). All student chats share the single `CHAT` feature, which `PIPELINE_BY_FEATURE` maps to `ChatPipeline`. Each pipeline's variants are filtered by model availability and returned as `FeatureDTO` objects:
 
 ```python
 @dataclass

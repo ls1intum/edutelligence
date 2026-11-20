@@ -2,11 +2,11 @@ import json
 from enum import Enum
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Response, status
 from fastapi.params import Query
 from weaviate.collections.classes.filters import Filter
 
-from iris.dependencies import TokenValidator
+from iris.dependencies import AuthorizedKey, require_base_url
 from iris.vector_database.instance_filter import artemis_instance_filter
 
 from ...vector_database.database import VectorDatabase
@@ -24,9 +24,9 @@ class IngestionState(str, Enum):
 
 @router.get(
     "/courses/{course_id}/lectures/{lecture_id}/lectureUnits/{lecture_unit_id}/ingestion-state",
-    dependencies=[Depends(TokenValidator())],
 )
 def get_lecture_unit_ingestion_state(
+    api_key: AuthorizedKey,
     course_id: int,
     lecture_id: int,
     lecture_unit_id: int,
@@ -40,8 +40,9 @@ def get_lecture_unit_ingestion_state(
     :param base_url:
     :return:
     """
-    db = VectorDatabase()
     decoded_base_url = unquote(base_url)
+    require_base_url(api_key, decoded_base_url)
+    db = VectorDatabase()
     result = db.lecture_units.query.fetch_objects(
         filters=(
             artemis_instance_filter(LectureUnitSchema, decoded_base_url)
