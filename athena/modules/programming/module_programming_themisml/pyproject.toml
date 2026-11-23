@@ -15,9 +15,9 @@ code-bert-score = "0.4.1"
 torch = { version = "2.14.1", source = "pytorch-cpu" }
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.33.0.20261006"
-pydantic = "2.14.1"
-prospector = { version = "1.19.1", extras = ["with_mypy"] }
+types-requests = "2.33.0.20261030"
+pydantic = "2.14.3"
+prospector = { version = "1.20.0", extras = ["with_mypy"] }
 
 [[tool.poetry.source]]
 name = "pytorch-cpu"
