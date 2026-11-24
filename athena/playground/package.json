@@ -27,7 +27,7 @@
     "@tanstack/react-query": "5.108.4",
     "@tumaet/apollon": "4.2.23",
     "allotment": "1.20.6",
-    "archiver": "7.0.1",
+    "archiver": "8.0.0",
     "formidable": "3.5.4",
     "monaco-editor": "0.58.0",
     "next": "15.5.29",
@@ -48,7 +48,7 @@
     "uuid": "13.0.2"
   },
   "devDependencies": {
-    "@types/archiver": "7.0.0",
+    "@types/archiver": "8.0.0",
     "@types/formidable": "3.5.1",
     "@types/node": "24.19.2",
     "@types/react": "18.3.31",
@@ -65,6 +65,11 @@
   },
   "overrides": {
     "postcss": "^8.5.23",
+    "archiver": {
+      "readdir-glob": {
+        "minimatch": "11.0.9"
+      }
+    },
     "@tumaet/apollon": {
       "uuid": "^11.1.1"
     },
