@@ -21,7 +21,7 @@ jobs:
       - name: Install poetry
         run: pipx install poetry
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "poetry"
@@ -126,19 +126,19 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v7
       - name: Download all JUnit results
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: junit-results
           path: all-test-results
       - name: Download coverage reports
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           name: coverage-reports
           path: coverage-reports
       - name: Test Report Summary
         id: test-report
-        uses: mikepenz/action-junit-report@v5
+        uses: mikepenz/action-junit-report@v6
         with:
           report_paths: "all-test-results/**/*_mock.xml"
           check_name: "Athena Test Report"
