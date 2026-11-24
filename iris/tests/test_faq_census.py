@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from weaviate.classes.config import Tokenization
 
+from iris.config import APIKeyConfig
 from iris.domain.data.faq_dto import FaqDTO
 from iris.domain.ingestion.deletion_pipeline_execution_dto import (
     FaqDeletionExecutionDto,
@@ -17,6 +18,7 @@ from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from iris.vector_database.faq_schema import FaqSchema
 from iris.web.routers import faq_census
 
+UNLIMITED_KEY = APIKeyConfig(token="test")
 OWN = "https://artemis.example"
 OTHER = "https://other.example"
 
@@ -115,7 +117,7 @@ class TestCensusEndpoint:
         with patch.object(faq_census, "VectorDatabase") as database:
             database.return_value.faqs = collection
             database.return_value.client.collections.exists.return_value = True
-            census = faq_census.get_faq_census(base_url=OWN)
+            census = faq_census.get_faq_census(api_key=UNLIMITED_KEY, base_url=OWN)
 
         assert [
             (e.faq_id, e.owned_row_count, e.legacy_row_count) for e in census.faqs
@@ -140,14 +142,16 @@ class TestCensusEndpoint:
         with patch.object(faq_census, "VectorDatabase") as database:
             database.return_value.faqs = collection
             database.return_value.client.collections.exists.return_value = True
-            census = faq_census.get_faq_census(base_url=encoded_path)
+            census = faq_census.get_faq_census(
+                api_key=UNLIMITED_KEY, base_url=encoded_path
+            )
 
         assert census.faqs[0].owned_row_count == 1
 
     def test_a_missing_collection_reports_an_empty_census(self):
         with patch.object(faq_census, "VectorDatabase") as database:
             database.return_value.client.collections.exists.return_value = False
-            census = faq_census.get_faq_census(base_url=OWN)
+            census = faq_census.get_faq_census(api_key=UNLIMITED_KEY, base_url=OWN)
 
         assert not census.faqs
         database.return_value.faqs.iterator.assert_not_called()
@@ -164,7 +168,7 @@ class TestCensusEndpoint:
             database.return_value.faqs = collection
             database.return_value.client.collections.exists.return_value = True
             with pytest.raises(RuntimeError):
-                faq_census.get_faq_census(base_url=OWN)
+                faq_census.get_faq_census(api_key=UNLIMITED_KEY, base_url=OWN)
 
 
 def _pipeline(collection):

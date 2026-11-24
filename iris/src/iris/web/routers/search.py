@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from iris.common.logging_config import get_logger
-from iris.dependencies import TokenValidator
+from iris.dependencies import AuthorizedKey, require_base_url
 from iris.domain.search.global_search_dto import (
     LectureSearchRequestDTO,
     LectureSearchResultDTO,
@@ -16,10 +16,10 @@ router = APIRouter(prefix="/api/v1/search", tags=["search"])
 logger = get_logger(__name__)
 
 
-@router.post(
-    "/lectures", dependencies=[Depends(TokenValidator())], response_model_by_alias=True
-)
-def lecture_search(dto: LectureSearchRequestDTO) -> list[LectureSearchResultDTO]:
+@router.post("/lectures", response_model_by_alias=True)
+def lecture_search(
+    api_key: AuthorizedKey, dto: LectureSearchRequestDTO
+) -> list[LectureSearchResultDTO]:
     """Search for lectures based on a query.
 
     The retrieval is traced in Langfuse and logged at INFO ([LectureSearch] ...):
@@ -28,6 +28,7 @@ def lecture_search(dto: LectureSearchRequestDTO) -> list[LectureSearchResultDTO]
     on the inner ``_traced_lecture_search`` so the route signature stays clean for
     FastAPI's request-body parsing.
     """
+    require_base_url(api_key, dto.artemis_base_url)
     logger.info(
         "[LectureSearch] request query=%r limit=%s course_ids=%s",
         dto.query,

@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 import pytest
 
+from iris.config import APIKeyConfig
 from iris.domain.data.faq_dto import FaqDTO
 from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from iris.vector_database.faq_schema import FaqSchema, init_faq_schema
@@ -25,6 +26,7 @@ pytestmark = pytest.mark.skipif(
     not WEAVIATE_URL, reason="needs a disposable Weaviate in IRIS_TEST_WEAVIATE_URL"
 )
 
+UNLIMITED_KEY = APIKeyConfig(token="test")
 OWN = "https://artemis.example"
 OTHER = "https://other.example"
 
@@ -60,7 +62,9 @@ def _census(collection, base_url=OWN):
         database.return_value.client.collections.exists.return_value = True
         return {
             (entry.course_id, entry.faq_id): entry
-            for entry in faq_census.get_faq_census(base_url=base_url).faqs
+            for entry in faq_census.get_faq_census(
+                api_key=UNLIMITED_KEY, base_url=base_url
+            ).faqs
         }
 
 
@@ -68,7 +72,7 @@ def test_empty_weaviate_refill_and_census(client):
     # The collection does not exist, as after replacing Weaviate with an empty one
     with patch.object(faq_census, "VectorDatabase") as database:
         database.return_value.client = client
-        assert not faq_census.get_faq_census(base_url=OWN).faqs
+        assert not faq_census.get_faq_census(api_key=UNLIMITED_KEY, base_url=OWN).faqs
     collection = init_faq_schema(client)
     pipeline = _pipeline(collection)
     assert _census(collection) == {}

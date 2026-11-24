@@ -6,7 +6,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sentry_sdk import capture_exception
 
 from iris.common.logging_config import get_logger, get_request_id, set_request_id
-from iris.dependencies import TokenValidator
+from iris.dependencies import (
+    AuthorizedKey,
+    TokenValidator,
+    require_settings_base_url,
+)
 from iris.domain import (
     ChatPipelineExecutionDTO,
     CompetencyExtractionPipelineExecutionDTO,
@@ -108,15 +112,13 @@ def run_chat_pipeline_worker(
         callback.fail("Fatal error.", exception=e)
 
 
-@router.post(
-    "/chat/run",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
+@router.post("/chat/run", status_code=status.HTTP_202_ACCEPTED)
 def run_chat_pipeline(
+    api_key: AuthorizedKey,
     event: str | None = Query(None, description="Event query parameter"),
     dto: ChatPipelineExecutionDTO = Body(description="Chat Pipeline Execution DTO"),
 ):
+    require_settings_base_url(api_key, dto.settings)
     variant = validate_pipeline_variant(dto.settings, ChatPipeline)
     request_id = get_request_id()
     thread = Thread(
@@ -156,12 +158,11 @@ def run_competency_extraction_pipeline_worker(
         callback.fail("Fatal error.", exception=e)
 
 
-@router.post(
-    "/competency-extraction/run",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
-def run_competency_extraction_pipeline(dto: CompetencyExtractionPipelineExecutionDTO):
+@router.post("/competency-extraction/run", status_code=status.HTTP_202_ACCEPTED)
+def run_competency_extraction_pipeline(
+    api_key: AuthorizedKey, dto: CompetencyExtractionPipelineExecutionDTO
+):
+    require_settings_base_url(api_key, dto.execution.settings)
     variant = validate_pipeline_variant(
         dto.execution.settings, CompetencyExtractionPipeline
     )
@@ -201,12 +202,9 @@ def run_rewriting_pipeline_worker(
         callback.fail("Fatal error.", exception=e)
 
 
-@router.post(
-    "/rewriting/run",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
-def run_rewriting_pipeline(dto: RewritingPipelineExecutionDTO):
+@router.post("/rewriting/run", status_code=status.HTTP_202_ACCEPTED)
+def run_rewriting_pipeline(api_key: AuthorizedKey, dto: RewritingPipelineExecutionDTO):
+    require_settings_base_url(api_key, dto.execution.settings)
     variant = validate_pipeline_variant(
         dto.execution.settings, RewritingPipeline
     ).lower()
@@ -249,12 +247,11 @@ def run_inconsistency_check_pipeline_worker(
         callback.fail("Fatal error.", exception=e)
 
 
-@router.post(
-    "/inconsistency-check/run",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
-def run_inconsistency_check_pipeline(dto: InconsistencyCheckPipelineExecutionDTO):
+@router.post("/inconsistency-check/run", status_code=status.HTTP_202_ACCEPTED)
+def run_inconsistency_check_pipeline(
+    api_key: AuthorizedKey, dto: InconsistencyCheckPipelineExecutionDTO
+):
+    require_settings_base_url(api_key, dto.execution.settings)
     variant = validate_pipeline_variant(
         dto.execution.settings, InconsistencyCheckPipeline
     )
@@ -295,14 +292,12 @@ def run_communication_tutor_suggestions_pipeline_worker(
         callback.fail("Fatal error.", exception=e)
 
 
-@router.post(
-    "/tutor-suggestion/run",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
+@router.post("/tutor-suggestion/run", status_code=status.HTTP_202_ACCEPTED)
 def run_communication_tutor_suggestions_pipeline(
+    api_key: AuthorizedKey,
     dto: CommunicationTutorSuggestionPipelineExecutionDTO,
 ):
+    require_settings_base_url(api_key, dto.settings)
     variant = validate_pipeline_variant(dto.settings, TutorSuggestionPipeline)
     request_id = get_request_id()
     thread = Thread(
@@ -341,12 +336,11 @@ def run_autonomous_tutor_pipeline_worker(
         callback.fail("Fatal error.", exception=e)
 
 
-@router.post(
-    "/autonomous-tutor/run",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
-def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDTO):
+@router.post("/autonomous-tutor/run", status_code=status.HTTP_202_ACCEPTED)
+def run_autonomous_tutor_pipeline(
+    api_key: AuthorizedKey, dto: AutonomousTutorPipelineExecutionDTO
+):
+    require_settings_base_url(api_key, dto.settings)
     variant = validate_pipeline_variant(dto.settings, AutonomousTutorPipeline)
     request_id = get_request_id()
     thread = Thread(
@@ -380,12 +374,11 @@ def run_struggle_intervention_pipeline_worker(
         callback.fail("Fatal error.", exception=e)
 
 
-@router.post(
-    "/struggle-intervention/run",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
-def run_struggle_intervention_pipeline(dto: StruggleInterventionPipelineExecutionDTO):
+@router.post("/struggle-intervention/run", status_code=status.HTTP_202_ACCEPTED)
+def run_struggle_intervention_pipeline(
+    api_key: AuthorizedKey, dto: StruggleInterventionPipelineExecutionDTO
+):
+    require_settings_base_url(api_key, dto.settings)
     variant = validate_pipeline_variant(dto.settings, StruggleInterventionPipeline)
     request_id = get_request_id()
     thread = Thread(
@@ -501,12 +494,8 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
         callback.fail("Fatal error.", exception=e)
 
 
-@router.post(
-    "/global-search/run",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
-def run_global_search_pipeline(dto: GlobalSearchRequestDTO):
+@router.post("/global-search/run", status_code=status.HTTP_202_ACCEPTED)
+def run_global_search_pipeline(api_key: AuthorizedKey, dto: GlobalSearchRequestDTO):
     """
     Answer a student's question using retrieved course content.
 
@@ -514,12 +503,13 @@ def run_global_search_pipeline(dto: GlobalSearchRequestDTO):
       - TRIGGER_AI (LLM path, ~5-8s): thinking callback first, then result
       - SKIP_AI (sources only, ~200ms): result callback only (no loading state needed)
     """
+    require_settings_base_url(api_key, dto.settings)
     _global_search_executor.submit(
         run_global_search_pipeline_worker, dto, get_request_id()
     )
 
 
-@router.get("/{feature}/variants")
+@router.get("/{feature}/variants", dependencies=[Depends(TokenValidator())])
 def get_pipeline(feature: str) -> list[FeatureDTO]:
     """
     Get the pipeline variants for the given feature.

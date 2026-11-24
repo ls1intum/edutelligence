@@ -14,7 +14,7 @@ missing. The endpoint reads identity properties only.
 import json
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from fastapi.params import Query
 from weaviate.classes.aggregate import GroupByAggregate
 from weaviate.collections.classes.filters import Filter
@@ -22,7 +22,7 @@ from weaviate.collections.classes.filters import Filter
 from iris.common.ingestion_version import INGESTION_PIPELINE_VERSION
 from iris.common.logging_config import get_logger
 from iris.config import settings
-from iris.dependencies import TokenValidator
+from iris.dependencies import AuthorizedKey, require_base_url
 from iris.domain.ingestion.ingestion_census_dto import (
     IngestionCensusDTO,
     IngestionCensusUnitDTO,
@@ -115,15 +115,16 @@ def _int_values(rows, property_name: str) -> list[int]:
 @router.get(
     "/courses/{course_id}/ingestion-census",
     response_model=IngestionCensusDTO,
-    dependencies=[Depends(TokenValidator())],
 )
 def get_course_ingestion_census(
+    api_key: AuthorizedKey,
     course_id: int,
     base_url: str = Query(...),
 ) -> IngestionCensusDTO:
     """Report the aggregated index state of every lecture unit in the course."""
-    db = VectorDatabase()
     decoded_base_url = unquote(base_url)
+    require_base_url(api_key, decoded_base_url)
+    db = VectorDatabase()
     concurrency = settings.lecture_ingestion.census_confirm_concurrency
     units: dict[int, IngestionCensusUnitDTO] = {}
 

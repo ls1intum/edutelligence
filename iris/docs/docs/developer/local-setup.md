@@ -166,7 +166,7 @@ LLM_CONFIG_PATH=./llm_config.local.yml \
 poetry run uvicorn iris.main:app --reload
 ```
 
-The server starts at [http://localhost:8000](http://localhost:8000). The interactive API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs).
+The server starts at [http://localhost:8000](http://localhost:8000). The interactive API documentation is available at [http://localhost:8000/docs](http://localhost:8000/docs) when `api_docs_enabled: true` is set in `application.local.yml`.
 
 ## 8. Docker Development Setup (Alternative)
 

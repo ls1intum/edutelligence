@@ -268,7 +268,7 @@ most the configured number of selected-anchor reads, with query counts and time 
 7. **Access API Documentation**
 
    Open your browser and navigate to [http://localhost:8000/docs](http://localhost:8000/docs) to access the interactive
-   API documentation.
+   API documentation. It is served when `api_docs_enabled: true` is set in `application.local.yml`.
 
 #### Testing
 
@@ -360,7 +360,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 
 2. **Access the Application**
    - Application URL: [http://localhost:8000](http://localhost:8000)
-   - API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+   - API Docs: [http://localhost:8000/docs](http://localhost:8000/docs) (needs `api_docs_enabled: true`)
 
 ##### **Production Environment**
 
@@ -440,6 +440,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
   - `PYRIS_PORT`: Host port for Pyris application (default is `8000`).
   - `WEAVIATE_PORT`: Host port for Weaviate REST API (default is `8001`).
   - `WEAVIATE_GRPC_PORT`: Host port for Weaviate gRPC interface (default is `50051`).
+  - `PYRIS_BIND_ADDRESS` and `WEAVIATE_BIND_ADDRESS`: Host address on which the Pyris port (production-internal compose) and the Weaviate ports are published (unset by default, which publishes on every address of the host, IPv4 and IPv6).
 
 - **Configuration Files**
 

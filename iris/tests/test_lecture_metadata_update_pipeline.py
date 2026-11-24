@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 from fastapi import HTTPException
 
+from iris.config import APIKeyConfig
 from iris.domain.ingestion.lecture_metadata_update_dto import (
     LectureUnitMetadataUpdateDTO,
 )
@@ -16,6 +17,8 @@ from iris.pipeline.lecture_metadata_update_pipeline import (
 )
 from iris.vector_database.lecture_unit_schema import LectureUnitSchema
 from iris.web.routers.webhooks import lecture_metadata_webhook
+
+UNLIMITED_KEY = APIKeyConfig(token="test")
 
 
 def metadata_dto() -> LectureUnitMetadataUpdateDTO:
@@ -104,7 +107,7 @@ def test_metadata_endpoint_returns_not_found_when_ingestion_has_not_created_unit
         pipeline.return_value.return_value = 0
 
         with pytest.raises(HTTPException) as exc_info:
-            lecture_metadata_webhook(metadata_dto())
+            lecture_metadata_webhook(UNLIMITED_KEY, metadata_dto())
 
     assert exc_info.value.status_code == 404
     database.assert_called_once_with()
