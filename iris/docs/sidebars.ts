@@ -84,6 +84,7 @@ const sidebars: SidebarsConfig = {
       id: "admin/artemis-integration",
       label: "Artemis Integration",
     },
+    { type: "doc", id: "admin/network-layout", label: "Network Layout" },
     { type: "doc", id: "admin/llm-configuration", label: "LLM Configuration" },
     { type: "doc", id: "admin/weaviate-setup", label: "Weaviate Setup" },
     { type: "doc", id: "admin/monitoring", label: "Monitoring" },

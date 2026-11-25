@@ -35,7 +35,7 @@ jobs:
     steps:
       - name: Get latest successful build for branch
         id: check_build
-        uses: octokit/request-action@v2.x
+        uses: octokit/request-action@v3.x
         with:
           route: GET /repos/${{ github.repository }}/actions/workflows/iris_build-and-push-docker.yml/runs?event=pull_request&status=success&head_sha=${{ github.event.pull_request.head.sha }}
         env:

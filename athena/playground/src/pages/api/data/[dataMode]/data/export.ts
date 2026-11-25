@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import archiver from "archiver";
+import { ZipArchive } from "archiver";
 import fs from "fs";
 import path from "path";
 import { getDataModeParts } from "@/helpers/get_data";
@@ -21,7 +21,7 @@ export async function exportHandler(res: NextApiResponse, directoryPath: string,
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
   
-  const archive = archiver("zip", { zlib: { level: 9 } });
+  const archive = new ZipArchive({ zlib: { level: 9 } });
   archive.on("error", (err) => res.status(500).send({ error: err.message }));
   archive.pipe(res);
   

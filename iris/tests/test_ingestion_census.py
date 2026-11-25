@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
-from iris.config import settings
+from iris.config import APIKeyConfig, settings
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
 from iris.vector_database.batch_verify import (
@@ -22,6 +22,8 @@ from iris.vector_database.lecture_unit_segment_schema import (
     LectureUnitSegmentSchema,
 )
 from iris.web.routers.ingestion_census import get_course_ingestion_census
+
+UNLIMITED_KEY = APIKeyConfig(token="test")
 
 
 def _aggregating_collection(groups: list) -> SimpleNamespace:
@@ -168,7 +170,9 @@ def test_census_merges_all_collections_and_reports_orphans():
     )
 
     with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
-        census = get_course_ingestion_census(1, base_url="https://artemis.example")
+        census = get_course_ingestion_census(
+            UNLIMITED_KEY, 1, base_url="https://artemis.example"
+        )
 
     assert census.course_id == 1
     assert [entry.lecture_unit_id for entry in census.units] == [3, 9]
@@ -240,7 +244,9 @@ def test_census_excludes_ghost_transcription_and_segment_rows():
     )
 
     with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
-        census = get_course_ingestion_census(1, base_url="https://artemis.example")
+        census = get_course_ingestion_census(
+            UNLIMITED_KEY, 1, base_url="https://artemis.example"
+        )
 
     entry = census.units[0]
     assert entry.transcription_count == 1
@@ -276,7 +282,9 @@ def test_census_reports_interior_page_gap_and_null_display():
     )
 
     with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
-        census = get_course_ingestion_census(1, base_url="https://artemis.example")
+        census = get_course_ingestion_census(
+            UNLIMITED_KEY, 1, base_url="https://artemis.example"
+        )
 
     entry = census.units[0]
     assert entry.missing_page_count == 1  # page 3 is missing (interior hole in 1..5)
@@ -303,7 +311,9 @@ def test_census_excludes_object_store_ghost_generations():
     )
 
     with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
-        census = get_course_ingestion_census(1, base_url="https://artemis.example")
+        census = get_course_ingestion_census(
+            UNLIMITED_KEY, 1, base_url="https://artemis.example"
+        )
 
     entry = census.units[0]
     assert entry.generation_count == 1  # the ghost generation is excluded
@@ -341,7 +351,9 @@ def test_census_reports_the_lecture_id_of_orphans_without_a_unit_row():
     )
 
     with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
-        census = get_course_ingestion_census(1, base_url="https://artemis.example")
+        census = get_course_ingestion_census(
+            UNLIMITED_KEY, 1, base_url="https://artemis.example"
+        )
 
     assert {entry.lecture_unit_id: entry.lecture_id for entry in census.units} == {
         9: 7,
@@ -367,7 +379,9 @@ def test_census_keeps_the_unit_row_lecture_id_over_content_rows():
     )
 
     with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
-        census = get_course_ingestion_census(1, base_url="https://artemis.example")
+        census = get_course_ingestion_census(
+            UNLIMITED_KEY, 1, base_url="https://artemis.example"
+        )
 
     assert census.units[0].lecture_id == 2
 
@@ -381,7 +395,9 @@ def test_census_requests_the_lecture_id_from_every_content_scan():
     )
 
     with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
-        get_course_ingestion_census(1, base_url="https://artemis.example")
+        get_course_ingestion_census(
+            UNLIMITED_KEY, 1, base_url="https://artemis.example"
+        )
 
     requested = db.lectures.query.fetch_objects.call_args.kwargs["return_properties"]
     assert LectureUnitPageChunkSchema.LECTURE_ID.value in requested
@@ -398,7 +414,9 @@ def test_census_unit_discovery_is_not_capped_at_weaviates_default_of_100_groups(
     )
 
     with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
-        get_course_ingestion_census(1, base_url="https://artemis.example")
+        get_course_ingestion_census(
+            UNLIMITED_KEY, 1, base_url="https://artemis.example"
+        )
 
     for collection in (db.lectures, db.transcriptions, db.lecture_segments):
         group_by = collection.aggregate.over_all.call_args.kwargs["group_by"]
@@ -443,7 +461,9 @@ def test_census_passes_the_configured_confirm_concurrency_to_every_confirmation(
             wraps=confirmed_generations,
         ) as generations_spy,
     ):
-        get_course_ingestion_census(1, base_url="https://artemis.example")
+        get_course_ingestion_census(
+            UNLIMITED_KEY, 1, base_url="https://artemis.example"
+        )
 
     # unit row, chunks, transcriptions, segments / chunks, transcriptions
     assert rows_spy.call_count == 4
@@ -461,7 +481,9 @@ def test_census_wire_format_uses_camel_case():
     )
 
     with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
-        census = get_course_ingestion_census(1, base_url="https://artemis.example")
+        census = get_course_ingestion_census(
+            UNLIMITED_KEY, 1, base_url="https://artemis.example"
+        )
 
     dumped = census.model_dump(by_alias=True)
     assert dumped == {

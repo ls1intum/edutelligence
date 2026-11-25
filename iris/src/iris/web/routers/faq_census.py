@@ -9,12 +9,12 @@ store) are not reported. A read error
 fails the request instead of returning a partial list.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from fastapi.params import Query
 
 from iris.common.logging_config import get_logger
 from iris.config import settings
-from iris.dependencies import TokenValidator
+from iris.dependencies import AuthorizedKey, require_base_url
 from iris.domain.ingestion.faq_census_dto import FaqCensusDTO, FaqCensusEntryDTO
 
 from ...vector_database.batch_verify import confirmed_rows
@@ -33,18 +33,15 @@ _PROPERTIES = [
 ]
 
 
-@router.get(
-    "/faq-census",
-    response_model=FaqCensusDTO,
-    dependencies=[Depends(TokenValidator())],
-)
-def get_faq_census(base_url: str = Query(...)) -> FaqCensusDTO:
+@router.get("/faq-census", response_model=FaqCensusDTO)
+def get_faq_census(api_key: AuthorizedKey, base_url: str = Query(...)) -> FaqCensusDTO:
     """Report every FAQ row of the asking instance, grouped by course and FAQ.
 
     FastAPI has already decoded the query value, so ``base_url`` is compared as it is: decoding it
     again would change a base URL that
     contains a percent sequence and no longer match the rows written for it.
     """
+    require_base_url(api_key, base_url)
     database = VectorDatabase()
     if not database.client.collections.exists(FaqSchema.COLLECTION_NAME.value):
         # Lost while Pyris kept running: nothing is stored, and the pushes Artemis sends next

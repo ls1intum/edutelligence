@@ -41,8 +41,8 @@ services:
       - --scheme
       - http
     ports:
-      - "${WEAVIATE_PORT:-8001}:8001"
-      - "${WEAVIATE_GRPC_PORT:-50051}:50051"
+      - "${WEAVIATE_BIND_ADDRESS:+${WEAVIATE_BIND_ADDRESS}:}${WEAVIATE_PORT:-8001}:8001"
+      - "${WEAVIATE_BIND_ADDRESS:+${WEAVIATE_BIND_ADDRESS}:}${WEAVIATE_GRPC_PORT:-50051}:50051"
     volumes:
       - ${WEAVIATE_VOLUME_MOUNT:-./.docker-data/weaviate-data}:/var/lib/weaviate
     restart: on-failure:3

@@ -236,6 +236,22 @@ most the configured number of selected-anchor reads, with query counts and time 
        - `cost_per_million_input_token`: The cost per million input tokens for the model.
        - `cost_per_million_output_token`: The cost per million output tokens for the model.
 
+     Iris forwards `usage.cost` as `totalCostUsd` only when
+     `usage.cost_currency` is explicitly `USD`. This includes the final usage
+     frame from Chat Completions and Responses API streams. A valid provider
+     amount, including zero, takes precedence over a configured estimate.
+
+     If the provider supplies no usable USD amount, Iris can estimate it from
+     `cost_per_million_input_token_usd`, `cost_per_million_output_token_usd`,
+     `cost_per_million_cached_input_token_usd` and
+     `cost_per_million_cache_write_input_token_usd`. Every used token class
+     needs its own rate. Cache reads and writes are subtracted from the normal
+     input count, and the existing long-context multipliers apply to these USD
+     rates. Missing prices stay unpriced.
+
+     Upgrade Pyris together with Artemis. Pyris still sends the older rate
+     fields for compatibility with previous Artemis releases.
+
      > **Note:** Most existing pipelines in Pyris currently require the full GPT-4.1 model family to be configured.
      > Some features require special models. Watch the logs for any warnings regarding missing models.
 
@@ -252,7 +268,7 @@ most the configured number of selected-anchor reads, with query counts and time 
 7. **Access API Documentation**
 
    Open your browser and navigate to [http://localhost:8000/docs](http://localhost:8000/docs) to access the interactive
-   API documentation.
+   API documentation. It is served when `api_docs_enabled: true` is set in `application.local.yml`.
 
 #### Testing
 
@@ -344,7 +360,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
 
 2. **Access the Application**
    - Application URL: [http://localhost:8000](http://localhost:8000)
-   - API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+   - API Docs: [http://localhost:8000/docs](http://localhost:8000/docs) (needs `api_docs_enabled: true`)
 
 ##### **Production Environment**
 
@@ -424,6 +440,7 @@ Deploying Pyris using Docker ensures a consistent environment and simplifies the
   - `PYRIS_PORT`: Host port for Pyris application (default is `8000`).
   - `WEAVIATE_PORT`: Host port for Weaviate REST API (default is `8001`).
   - `WEAVIATE_GRPC_PORT`: Host port for Weaviate gRPC interface (default is `50051`).
+  - `PYRIS_BIND_ADDRESS` and `WEAVIATE_BIND_ADDRESS`: Host address on which the Pyris port (production-internal compose) and the Weaviate ports are published (unset by default, which publishes on every address of the host, IPv4 and IPv6).
 
 - **Configuration Files**
 

@@ -15,6 +15,7 @@ from weaviate.classes.config import Property
 from weaviate.collections.classes.config import DataType
 from weaviate.exceptions import UnexpectedStatusCodeError, WeaviateInvalidInputError
 
+from iris.config import APIKeyConfig
 from iris.domain.ingestion.lecture_visibility_update_dto import (
     LectureUnitVisibilityUpdateDTO,
 )
@@ -45,6 +46,8 @@ from iris.vector_database.write_retry import (
     WeaviateWriteRetry,
 )
 from iris.web.routers.webhooks import lecture_visibility_webhook
+
+UNLIMITED_KEY = APIKeyConfig(token="test")
 
 _ROW_UUID = "33333333-3333-3333-3333-333333333333"
 
@@ -811,7 +814,7 @@ def test_visibility_endpoint_returns_not_found_when_ingestion_has_not_created_un
         pipeline.return_value.return_value = SimpleNamespace(lecture_units_updated=0)
 
         with pytest.raises(HTTPException) as exc_info:
-            lecture_visibility_webhook(visibility_dto())
+            lecture_visibility_webhook(UNLIMITED_KEY, visibility_dto())
 
     assert exc_info.value.status_code == 404
     database.assert_called_once_with()
@@ -830,7 +833,7 @@ def test_visibility_endpoint_returns_service_unavailable_after_rate_limit_budget
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            lecture_visibility_webhook(visibility_dto())
+            lecture_visibility_webhook(UNLIMITED_KEY, visibility_dto())
 
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail == {
