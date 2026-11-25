@@ -1,9 +1,8 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import Field, PrivateAttr, model_validator
+from pydantic import Field, model_validator
 
 from iris.common.pyris_message import PyrisMessage
-from iris.domain.chat.learner_agency_dto import LearnerAgencyTurn
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.lecture_context_dto import (
     CombinedViewContextDTO,
@@ -24,9 +23,6 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
     """
 
     chat_mode: IrisChatMode = Field(alias="chatMode")
-    _learner_agency_turn: LearnerAgencyTurn = PrivateAttr(
-        default_factory=LearnerAgencyTurn
-    )
     user: UserDTO
     course: CourseDTO
 
@@ -48,6 +44,10 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
         alias="programmingExerciseSubmission", default=None
     )
     text_exercise_submission: str = Field(alias="textExerciseSubmission", default="")
+    # Set by Artemis from the stored button choices; without it Pyris classifies the message.
+    solution_step: Optional[
+        Literal["TRY_MYSELF", "SHOW_SOLUTION", "EXPLAIN_SOLUTION"]
+    ] = Field(alias="solutionStep", default=None)
 
     @model_validator(mode="after")
     def extract_lecture_unit_id_from_combined_view_context(self):

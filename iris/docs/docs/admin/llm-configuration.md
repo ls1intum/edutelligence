@@ -407,66 +407,30 @@ If the `Pipelines` module shows `DOWN`, there is likely a model configuration is
 
 ## Complete-solution choices
 
-The workflow applies to programming and text exercise chats only. Course and lecture
-chats do not call the classifier or enter the choice/solution/reflection workflow.
-Choices from historical course or lecture offers are rejected by Artemis.
-
-To enable the choice workflow for all Iris exercise chat users, set `learner_agency.classifier_model`
-in `application.yml` to an existing model **id** from `llm_config.yml`:
+In programming and text exercise chats, Iris can detect that a student asks for the
+complete solution and let them choose: try it themselves with help, or see the solution.
+Set `learner_agency.classifier_model` in `application.yml` to a model **id** from
+`llm_config.yml` to turn this on; it is off while the id is unset.
 
 ```yaml
 learner_agency:
-  classifier_model: logos-jev-27b-vl
-  # Use this for local AI only when JEV runs on your institution's own Logos workers.
-  classifier_model_local: logos-jev-27b-vl
-  classifier_threshold: 0.5
+  classifier_model: <model id>
+  # For students who chose local AI; when unset, their messages are not classified.
+  classifier_model_local: <local model id>
 ```
 
-The `logos-jev-27b-vl` entry in `llm_config.example.yml` selects
-`autotrust/JEV-27B-VL` with `type: logos_decision`. Set its Logos base URL
-(ending in `/v1`) and server-side API key in your local model configuration.
-It calls Logos' native [`POST /v1/systemone`](https://github.com/LogosOSS/Logos/blob/main/docs/decision-models.md)
-with one `noul` question and reads the returned yes-probability. It does not use
-JEV's ordinary chat endpoint, which serves the base model rather than its decision head.
-The timeout is configurable (`request_timeout_seconds`, default 15); a failed call is not retried. No model is selected automatically when this setting is
-unset; existing tutoring remains available. A failed classifier request or an invalid
-classification also keeps the ordinary tutoring behavior. For users who selected local AI,
-configure `classifier_model_local` with a local model id; when it is unset, classification
-is skipped for those users rather than sending their conversation to a cloud provider. Paid development requests must
-use the agreed cost gate and a fixed budget.
+Before each student message, the classifier sees the last few messages and answers
+`YES` or `NO` for the latest one only; earlier messages only resolve references such as
+"show it to me anyway". If the call fails, Iris tutors as usual.
 
-The classifier receives the full stored student/assistant dialogue before the agent's
-history windowing or compaction, with only the latest student message marked as the target.
-A native JEV probability strictly above `learner_agency.classifier_threshold` produces
-an offer. The default threshold is 0.5; a tie keeps ordinary tutoring. The threshold
-has not been calibrated on real student chats. Earlier solution requests provide
-context and cannot alone trigger another offer. The prompt is configurable as
-`learner_agency.classifier_prompt`. Legacy chat-model configurations continue to request
-and validate exactly `YES` or `NO`; `classifier_max_tokens` applies only to that legacy path.
+On `YES`, Iris writes the offer itself and the client shows two buttons. Artemis
+validates a click against the open offer and tells Iris which step follows:
 
-A positive result produces a fixed offer with two buttons: try independently with help,
-or show the complete solution. The offer and the selected action are persisted as chat
-content. The selected button stays highlighted; the action does not appear as a separate
-student message, including after reloading the chat. Artemis validates and consumes each
-choice under the session lock; stale,
-duplicate and wrong-context choices are rejected. Button actions bypass classification.
-The complete-solution permission applies to one answer, including bypassing the usual
-solution-removal guide. For that answer, Artemis supplies the instructor's reference
-solution when available: solution code from the programming exercise's solution repository,
-or the text exercise's example solution. Template and test repositories are excluded.
-Iris uses the reference as its primary basis, adapting it to the student's code and request
-and explaining necessary changes. If no readable reference is available, Iris creates its
-own proposed solution rather than claiming to reproduce the instructor's answer.
-Ordinary tutoring, hint choices and subsequent turns do not receive the reference.
-The classifier receives the conversation, without this reference material.
+- **Try it myself:** Iris encourages the choice and gives one concrete hint.
+- **Show the solution:** Artemis attaches the instructor's solution repository or the text
+  exercise's example solution, and Iris bases its solution on it. Without one, Iris writes
+  its own and says so. The answer ends by asking the student to explain the key idea in
+  their own words.
+- **The next message** is treated as that explanation, and Iris gives feedback on it.
 
-After the final answer to an explicit complete-solution choice, Iris appends the configured
-reflection invitation in application code. This does not depend on a marker generated by
-the model. Normal tutoring, hint choices and failed runs do not produce it. The student can
-continue through ordinary chat. Configure the texts using `offer_de`, `offer_en`,
-`reflection_de` and `reflection_en` under `learner_agency`.
-
-Update Artemis and Iris together before enabling the classifier: Artemis must understand
-the `solutionOffer` callback field and the structured `solutionChoice` message request.
-This workflow does not assign study arms or implement research consent, study exports or
-tutor-group phases.
+Update Artemis and Iris together before enabling the classifier.

@@ -17,12 +17,10 @@ from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDT
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.chat.learner_agency import (
+    LearnerAgencyTurn,
     context_offer,
-    finalize_solution,
-    get_turn,
-    localized,
     plan_turn,
-    reference_solution_for_turn,
+    reference_solution,
 )
 from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.session_title_generation_pipeline import (
@@ -222,6 +220,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
     chat_mode: IrisChatMode
     event: Optional[str]
+    # Replaced per run in __call__; the default is the ordinary tutoring turn and is never mutated.
+    learner_agency: LearnerAgencyTurn = LearnerAgencyTurn()
     session_title_pipeline: SessionTitleGenerationPipeline
     citation_pipeline: CitationPipeline
     suggestion_pipeline: Optional[InteractionSuggestionPipeline]
@@ -278,10 +278,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     def should_stream_agent_response(
         self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
     ) -> bool:
-        return (
-            self.chat_mode is not IrisChatMode.EXERCISE
-            and get_turn(state.dto).mode != "solution"
-        )
+        del state
+        return self.chat_mode is not IrisChatMode.EXERCISE
 
     def should_stream_agent_delta(
         self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
@@ -339,14 +337,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             result = state.result
 
             # If Programming Exercise, refine response using guide prompt
+            # A chosen solution must not pass the guide, which would remove it again.
             if (
                 _effective_chat_mode(state, self.chat_mode) == IrisChatMode.EXERCISE
-                and get_turn(state.dto).mode != "solution"
+                and not self.learner_agency.solution_unlocked
             ):
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
-
-            result = finalize_solution(result, state.dto, settings.learner_agency)
 
             # Resolve the answer language once, before citations and quiz JSON are
             # added, so that citations, title and suggestions use the same language.
@@ -385,6 +382,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     activities=activities,
                     activity_seq=activity_seq,
                     suggested_context=state.pending_context_switch,
+                    solution_offer=(
+                        context_offer(state.dto)
+                        if self.learner_agency.mode == "offer"
+                        else None
+                    ),
                 )
             logger.info(
                 "Chat first result delivered | mode=%s elapsed_ms=%.0f",
@@ -441,7 +443,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # Before the turn context is built: the current view hands out source ids too.
         state.citation_sources = CitationSourceRegistry(require_delivery=True)
         dto = state.dto
-        for usage in get_turn(dto).tokens:
+        for usage in self.learner_agency.tokens:
             usage.pipeline = self.get_token_pipeline(state)
             self._track_tokens(state, usage)
         course_id = dto.course.id
@@ -519,7 +521,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # of the cached prefix. Per-message values go to build_turn_context_message.
         template_context: dict[str, Any] = {
             "chat_mode": self.chat_mode,
-            "solution_requested": get_turn(dto).mode == "solution",
+            "solution_unlocked": self.learner_agency.solution_unlocked,
             "support_level": _support_level(dto),
             "user_language": dto.user.lang_key,
             "custom_instructions": format_custom_instructions(
@@ -568,9 +570,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         return self.turn_context_template.render(
             {
                 "chat_mode": self.chat_mode,
-                "learner_agency_hint": get_turn(dto).mode == "hint",
-                "solution_requested": get_turn(dto).mode == "solution",
-                "reference_solution": reference_solution_for_turn(dto),
+                "learner_agency_mode": self.learner_agency.mode,
+                "reference_solution": (
+                    reference_solution(dto)
+                    if self.learner_agency.mode == "solution"
+                    else None
+                ),
                 "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
                 "current_view_blocks": self._build_current_view(state),
                 "current_view_is_combined": any(
@@ -1081,26 +1086,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             callback: Status callback for progress updates.
             event: Optional event identifier (e.g. "jol").
         """
-        self.tokens = []
         try:
             logger.info("Running chat pipeline...")
 
             self.event = event
-            turn = plan_turn(dto, settings.learner_agency, event=event)
-            dto._learner_agency_turn = turn
-            if turn.mode == "offer":
-                self.tokens = turn.tokens
-                for usage in turn.tokens:
-                    usage.pipeline = _TOKEN_PIPELINE_BY_CHAT_MODE.get(
-                        self.chat_mode, PipelineEnum.NOT_SET
-                    )
-                callback.send_result(
-                    localized(settings.learner_agency, "offer", dto),
-                    tokens=turn.tokens,
-                    solution_offer=context_offer(dto),
-                )
-                callback.finish(tokens=turn.tokens)
-                return
+            self.learner_agency = plan_turn(
+                dto, settings.learner_agency, chat_mode=self.chat_mode, event=event
+            )
 
             # Delegate to parent class for standardized execution
             local = dto.settings is not None and dto.settings.is_local()

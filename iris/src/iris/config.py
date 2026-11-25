@@ -6,7 +6,6 @@ import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from iris.common.base_url import normalize_base_url
-from iris.learner_agency_settings import LearnerAgencySettings
 
 
 class APIKeyConfig(BaseModel):
@@ -294,6 +293,15 @@ class LectureIngestionSettings(BaseModel):
                 "language_detection_max_chars must be >= language_detection_min_chars"
             )
         return self
+
+
+class LearnerAgencySettings(BaseModel):
+    """Model ids from llm_config.yml for detecting requests for a complete solution; unset disables the workflow."""
+
+    classifier_model: str | None = None
+    # Used for students who chose local AI; when unset, their messages are not classified.
+    classifier_model_local: str | None = None
+    classifier_max_tokens: int = Field(default=1024, ge=1)
 
 
 class Settings(BaseModel):
