@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import Field
 
@@ -14,6 +14,10 @@ class ChatStatusUpdateDTO(StatusUpdateDTO):
 
     result: Optional[str] = None
     solution_offer: Optional[SolutionOffer] = Field(alias="solutionOffer", default=None)
+    # The choice Pyris read from a typed reply to the offer; Artemis stores it like a click.
+    solution_choice: Optional[
+        Literal["TRY_MYSELF", "SHOW_SOLUTION", "SUMMARIZE", "SKIP_SUMMARY"]
+    ] = Field(alias="solutionChoice", default=None)
     final: Optional[bool] = Field(alias="final", default=None)
     partial_result: Optional[str] = Field(alias="partialResult", default=None)
     partial_seq: Optional[int] = Field(alias="partialSeq", default=None)

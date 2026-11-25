@@ -16,6 +16,7 @@ from ...llm.external.openai_embeddings import (
 from ...llm.external.passthrough_reranker import PassthroughReranker
 from ...llm.external.whisper import AzureWhisperModel, OpenAIWhisperModel
 from .cohere_client import CohereAzureClient
+from .logos_decision import LogosDecisionModel
 from .vllm_rerank import VllmRerankModel
 
 AnyLlm = Union[
@@ -31,4 +32,5 @@ AnyLlm = Union[
     CohereAzureClient,
     VllmRerankModel,
     PassthroughReranker,
+    LogosDecisionModel,
 ]

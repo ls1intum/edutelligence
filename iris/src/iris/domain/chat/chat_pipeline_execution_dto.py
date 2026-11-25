@@ -44,9 +44,16 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
         alias="programmingExerciseSubmission", default=None
     )
     text_exercise_submission: str = Field(alias="textExerciseSubmission", default="")
-    # Set by Artemis from the stored button choices; without it Pyris classifies the message.
+    # Set by Artemis from the stored choices; without it Pyris classifies the message.
     solution_step: Optional[
-        Literal["TRY_MYSELF", "SHOW_SOLUTION", "EXPLAIN_SOLUTION"]
+        Literal[
+            "TRY_MYSELF",
+            "SHOW_SOLUTION",
+            "OFFER_REPLY",
+            "SUMMARIZE",
+            "SUMMARY_REPLY",
+            "EXPLAIN_SOLUTION",
+        ]
     ] = Field(alias="solutionStep", default=None)
 
     @model_validator(mode="after")

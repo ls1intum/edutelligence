@@ -253,6 +253,15 @@
 # type: openai_chat, base_url: <logos-url>, supports_reasoning_effort: true,
 # reasoning_effort: medium, reasoning_effort_values: [low, medium, high].
 
+# ── Logos decision model (yes/no probability, no generated text) ──────────────
+# For learner_agency.classifier_model in application.yml.
+- id: logos-jev-27b-vl
+  type: logos_decision
+  model: autotrust/JEV-27B-VL
+  base_url: https://your-logos-instance/v1
+  api_key: ""
+  request_timeout_seconds: 15
+
 # ── Logos/vLLM models (local, OpenAI-compatible) ────────────────────────────
 # Qwen3.8 is a reasoning model: keep thinking on. Logos disables it unless a
 # request asks for it; `extra_body` enables it explicitly. The chat template

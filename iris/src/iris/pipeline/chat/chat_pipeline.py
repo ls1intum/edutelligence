@@ -337,7 +337,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             result = state.result
 
             # If Programming Exercise, refine response using guide prompt
-            # A chosen solution must not pass the guide, which would remove it again.
+            # Once the student asked for the solution, the guide would turn the answer back into a refusal.
             if (
                 _effective_chat_mode(state, self.chat_mode) == IrisChatMode.EXERCISE
                 and not self.learner_agency.solution_unlocked
@@ -382,11 +382,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     activities=activities,
                     activity_seq=activity_seq,
                     suggested_context=state.pending_context_switch,
-                    solution_offer=(
-                        context_offer(state.dto)
-                        if self.learner_agency.mode == "offer"
-                        else None
-                    ),
+                    solution_offer=context_offer(state.dto, self.learner_agency.mode),
+                    solution_choice=self.learner_agency.typed_choice,
                 )
             logger.info(
                 "Chat first result delivered | mode=%s elapsed_ms=%.0f",

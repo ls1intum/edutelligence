@@ -21,18 +21,22 @@ No instructor reference solution is available. Write your own complete solution 
 the task and say plainly that it is your proposal, not the official solution. If essential
 task details are missing, say what is missing instead of inventing them.
 {% endif %}
-End your answer by asking the student to explain the solution in their own words. Pick
-the one idea this solution depends on most (for example why a loop starts where it
-does, or why a case is handled separately) and ask about exactly that, in one or two
-sentences. Make clear that a short answer is enough and that you will give feedback.
+Do not end with a question or an offer: Artemis adds the next step below your answer.
+{% elif learner_agency_mode == "summarize" %}
+# The student wants to summarize the solution
+You delivered the complete solution, and the student agreed to summarize it in their own
+words as practice. In one to three short sentences, tell them what their summary should
+cover: what the solution does and the one idea it depends on most, for example why a loop
+starts where it does or why a case is handled separately. Ask them to write it here and
+say that you will give feedback. Do not explain or summarize the solution yourself.
 {% elif learner_agency_mode == "explain" %}
 # The student's explanation of the solution
-Your previous answer delivered the complete solution and asked the student to explain
-it in their own words. If the latest message is that explanation, give feedback on their
+Your previous answer asked the student to explain the key idea of the solution in their
+own words. If the latest message is that explanation, give feedback on their
 understanding: say concretely what they got right, and correct a misconception or name
 the one gap if there is one. Do not simply repeat the solution. If a gap remains, end
-with one short follow-up question; otherwise acknowledge that they understood it.
-If the student did something else instead of explaining, respond to that.
+with one short follow-up question; otherwise acknowledge that they understood it. If the
+student did something else instead of explaining, respond to that.
 {% endif %}
 
 {% if current_view_blocks and current_view_blocks|length > 0 %}
@@ -89,16 +93,16 @@ End with an invitation to ask, so the student can easily continue or ignore the 
 
 {% if learner_agency_mode == "offer" %}
 # The student asks for the complete solution
-The latest message asks for the complete solution. Do not give it, and no near-complete
-version either. Below your answer the student gets two buttons: try it themselves with
-your help, or see the complete solution. Write two or three short sentences in the
-student's language: acknowledge what they asked for, give one concrete reason, tied to
-this task and their work so far, why trying it themselves with your help is worth it, and
-make that sound doable and inviting rather than like a refusal. Then point them to the
-two buttons below. Do not give a hint yet and do not ask them to type their choice.
+The student asks for the complete solution. In two or three short sentences in the
+student's language, say that just getting the solution is usually not the best way to
+learn it, giving one concrete reason tied to this task and their work so far, but that
+you can show it to them. Then let them decide how they would rather go about it: see the
+complete solution, or work through it themselves with your help. Do not write the
+solution or a hint in this answer.
 {% elif learner_agency_mode == "hint" %}
 # The student chose to try it themselves
-The student chose to work on the request that led to the solution offer with your help.
+You offered the complete solution, and the student chose to work on the request that
+led to the offer themselves, with your help.
 Welcome that choice in one short, encouraging sentence, then give one concrete next
 hint for that request, without a complete solution. Do not repeat the offer.
 {% endif %}

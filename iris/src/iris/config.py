@@ -296,12 +296,14 @@ class LectureIngestionSettings(BaseModel):
 
 
 class LearnerAgencySettings(BaseModel):
-    """Model ids from llm_config.yml for detecting requests for a complete solution; unset disables the workflow."""
+    """Ids of logos_decision models from llm_config.yml that detect requests for a complete solution.
+
+    Unset disables the workflow.
+    """
 
     classifier_model: str | None = None
     # Used for students who chose local AI; when unset, their messages are not classified.
     classifier_model_local: str | None = None
-    classifier_max_tokens: int = Field(default=1024, ge=1)
 
 
 class Settings(BaseModel):
