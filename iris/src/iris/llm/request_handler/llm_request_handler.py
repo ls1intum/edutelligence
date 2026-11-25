@@ -10,8 +10,10 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm.completion_arguments import CompletionArguments
 from iris.llm.errors import IncompleteModelResponse
 from iris.llm.external.model import (
+    BooleanDecisionResult,
     ChatModel,
     CompletionModel,
+    DecisionModel,
     EmbeddingModel,
     LanguageModel,
 )
@@ -127,6 +129,14 @@ class LlmRequestHandler(RequestHandler):
     def embed(self, text: str) -> list[float]:
         llm = self._select_model(EmbeddingModel)
         return llm.embed(text)
+
+    def supports_decisions(self) -> bool:
+        """Whether this model exposes typed decisions rather than generated text."""
+        return isinstance(self._select_model(LanguageModel), DecisionModel)
+
+    def decide(self, state: str, instructions: str) -> BooleanDecisionResult:
+        """Ask one native yes/no question using the configured decision client."""
+        return self._select_model(DecisionModel).decide(state, instructions)
 
     def split_text_semantically(
         self,

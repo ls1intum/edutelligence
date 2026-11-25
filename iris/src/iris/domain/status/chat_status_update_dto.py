@@ -2,6 +2,7 @@ from typing import List, Optional
 
 from pydantic import Field
 
+from iris.domain.chat.learner_agency_dto import SolutionOffer
 from iris.domain.data.compaction_dto import CompactionDTO
 from iris.domain.status.activity_dto import ActivityDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
@@ -12,6 +13,7 @@ class ChatStatusUpdateDTO(StatusUpdateDTO):
     """Status update that Pyris sends to Artemis while a chat run is in progress."""
 
     result: Optional[str] = None
+    solution_offer: Optional[SolutionOffer] = Field(alias="solutionOffer", default=None)
     final: Optional[bool] = Field(alias="final", default=None)
     partial_result: Optional[str] = Field(alias="partialResult", default=None)
     partial_seq: Optional[int] = Field(alias="partialSeq", default=None)

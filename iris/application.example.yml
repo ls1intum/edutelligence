@@ -241,3 +241,13 @@ llm_configuration:
       chat:
         local: qwen3.8-27b
         cloud: oai-gpt-5-nano-low
+
+# Set classifier_model to an id from llm_config.yml to enable the choice workflow
+# for all exercise chat users. Course and lecture chats do not run this classifier.
+learner_agency:
+  # Use logos-jev-27b-vl (defined in llm_config.example.yml) for native decisions.
+  classifier_model: null
+  # A self-hosted Logos JEV instance can also be used for the local-AI selection.
+  classifier_model_local: null
+  classifier_threshold: 0.5
+  classifier_max_tokens: 1024

@@ -1,8 +1,9 @@
 from typing import List, Optional
 
-from pydantic import Field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
 from iris.common.pyris_message import PyrisMessage
+from iris.domain.chat.learner_agency_dto import LearnerAgencyTurn
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.lecture_context_dto import (
     CombinedViewContextDTO,
@@ -23,6 +24,9 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
     """
 
     chat_mode: IrisChatMode = Field(alias="chatMode")
+    _learner_agency_turn: LearnerAgencyTurn = PrivateAttr(
+        default_factory=LearnerAgencyTurn
+    )
     user: UserDTO
     course: CourseDTO
 

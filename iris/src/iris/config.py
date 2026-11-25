@@ -6,6 +6,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from iris.common.base_url import normalize_base_url
+from iris.learner_agency_settings import LearnerAgencySettings
 
 
 class APIKeyConfig(BaseModel):
@@ -309,6 +310,7 @@ class Settings(BaseModel):
         "schema (/openapi.json). Off by default; enable it for local development.",
     )
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
+    learner_agency: LearnerAgencySettings = Field(default_factory=LearnerAgencySettings)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
     ingestion_worker: IngestionWorkerSettings = Field(
         default_factory=IngestionWorkerSettings

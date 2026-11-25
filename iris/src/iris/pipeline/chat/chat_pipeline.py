@@ -12,9 +12,18 @@ from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.reply_language import reply_language
 from iris.common.timing import timed_span
+from iris.config import settings
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
+from iris.pipeline.chat.learner_agency import (
+    context_offer,
+    finalize_solution,
+    get_turn,
+    localized,
+    plan_turn,
+    reference_solution_for_turn,
+)
 from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
@@ -269,8 +278,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     def should_stream_agent_response(
         self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
     ) -> bool:
-        del state
-        return self.chat_mode is not IrisChatMode.EXERCISE
+        return (
+            self.chat_mode is not IrisChatMode.EXERCISE
+            and get_turn(state.dto).mode != "solution"
+        )
 
     def should_stream_agent_delta(
         self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
@@ -328,9 +339,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             result = state.result
 
             # If Programming Exercise, refine response using guide prompt
-            if _effective_chat_mode(state, self.chat_mode) == IrisChatMode.EXERCISE:
+            if (
+                _effective_chat_mode(state, self.chat_mode) == IrisChatMode.EXERCISE
+                and get_turn(state.dto).mode != "solution"
+            ):
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
+
+            result = finalize_solution(result, state.dto, settings.learner_agency)
 
             # Resolve the answer language once, before citations and quiz JSON are
             # added, so that citations, title and suggestions use the same language.
@@ -425,6 +441,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # Before the turn context is built: the current view hands out source ids too.
         state.citation_sources = CitationSourceRegistry(require_delivery=True)
         dto = state.dto
+        for usage in get_turn(dto).tokens:
+            usage.pipeline = self.get_token_pipeline(state)
+            self._track_tokens(state, usage)
         course_id = dto.course.id
         base_url = dto.settings.artemis_base_url if dto.settings else None
         # The two availability checks are independent Weaviate round trips;
@@ -500,6 +519,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # of the cached prefix. Per-message values go to build_turn_context_message.
         template_context: dict[str, Any] = {
             "chat_mode": self.chat_mode,
+            "solution_requested": get_turn(dto).mode == "solution",
             "support_level": _support_level(dto),
             "user_language": dto.user.lang_key,
             "custom_instructions": format_custom_instructions(
@@ -548,6 +568,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         return self.turn_context_template.render(
             {
                 "chat_mode": self.chat_mode,
+                "learner_agency_hint": get_turn(dto).mode == "hint",
+                "solution_requested": get_turn(dto).mode == "solution",
+                "reference_solution": reference_solution_for_turn(dto),
                 "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
                 "current_view_blocks": self._build_current_view(state),
                 "current_view_is_combined": any(
@@ -1058,10 +1081,26 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             callback: Status callback for progress updates.
             event: Optional event identifier (e.g. "jol").
         """
+        self.tokens = []
         try:
             logger.info("Running chat pipeline...")
 
             self.event = event
+            turn = plan_turn(dto, settings.learner_agency, event=event)
+            dto._learner_agency_turn = turn
+            if turn.mode == "offer":
+                self.tokens = turn.tokens
+                for usage in turn.tokens:
+                    usage.pipeline = _TOKEN_PIPELINE_BY_CHAT_MODE.get(
+                        self.chat_mode, PipelineEnum.NOT_SET
+                    )
+                callback.send_result(
+                    localized(settings.learner_agency, "offer", dto),
+                    tokens=turn.tokens,
+                    solution_offer=context_offer(dto),
+                )
+                callback.finish(tokens=turn.tokens)
+                return
 
             # Delegate to parent class for standardized execution
             local = dto.settings is not None and dto.settings.is_local()

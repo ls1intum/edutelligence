@@ -3,7 +3,9 @@ from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
 
 from langchain_core.tools import BaseTool
 from openai.types.chat import ChatCompletionMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from iris.common.token_usage_dto import TokenUsageDTO
 
 from ...common.pyris_message import PyrisMessage
 from ...llm import CompletionArguments
@@ -14,6 +16,22 @@ class LanguageModel(BaseModel, metaclass=ABCMeta):
 
     id: str
     model: str
+
+
+class BooleanDecisionResult(BaseModel):
+    """A typed yes-probability and the usage reported by its provider."""
+
+    probability: float = Field(ge=0, le=1, allow_inf_nan=False, strict=True)
+    token_usage: TokenUsageDTO
+
+
+class DecisionModel(LanguageModel, metaclass=ABCMeta):
+    """A model that returns decisions directly rather than generating chat text."""
+
+    @abstractmethod
+    def decide(self, state: str, instructions: str) -> BooleanDecisionResult:
+        """Answer one yes/no question about the supplied state."""
+        raise NotImplementedError
 
 
 class CompletionModel(LanguageModel, metaclass=ABCMeta):
