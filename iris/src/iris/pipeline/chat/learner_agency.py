@@ -12,18 +12,17 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from iris.common.logging_config import get_logger
-from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.common.pyris_message import IrisMessageRole
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.config import LearnerAgencySettings
-from iris.domain.chat.learner_agency_dto import SolutionOffer
-from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.chat.learner_agency_dto import SolutionChoice, SolutionOffer
+from iris.llm.iris_chat_model import message_text
 from iris.llm.request_handler.llm_request_handler import LlmRequestHandler
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 
 logger = get_logger(__name__)
 
 Mode = Literal["normal", "offer", "hint", "solution", "summarize", "explain"]
-Choice = Literal["TRY_MYSELF", "SHOW_SOLUTION", "SUMMARIZE", "SKIP_SUMMARY"]
 
 CLASSIFIER_PROMPT = """You classify the latest student message, not the conversation as a whole.
 Does ONLY the message marked isTarget request a complete solution to a task?
@@ -55,15 +54,24 @@ _HISTORY_WINDOW = 6
 _MESSAGE_CHARS = 2000
 _THRESHOLD = 0.5
 
-_STEP_MODES: dict[str, Mode] = {
+# How Iris answers a choice, clicked or typed.
+_CHOICE_MODES: dict[SolutionChoice, Mode] = {
     "TRY_MYSELF": "hint",
     "SHOW_SOLUTION": "solution",
     "SUMMARIZE": "summarize",
-    "EXPLAIN_SOLUTION": "explain",
+    "SKIP_SUMMARY": "normal",
+}
+
+# A typed reply to an offer: the question, and the choice for yes and for no.
+# A declined or failed summary leaves ordinary tutoring; the reply may be a new question.
+# A failed solution choice counts as trying it themselves, the choice the offer encourages.
+_TYPED_REPLIES: dict[str, tuple[str, SolutionChoice, SolutionChoice]] = {
+    "SUMMARY_REPLY": (SUMMARY_PROMPT, "SUMMARIZE", "SKIP_SUMMARY"),
+    "OFFER_REPLY": (CHOICE_PROMPT, "SHOW_SOLUTION", "TRY_MYSELF"),
 }
 
 # The buttons of the offer an answer in this mode ends with.
-OFFER_CHOICES: dict[Mode, list[Choice]] = {
+OFFER_CHOICES: dict[Mode, list[SolutionChoice]] = {
     "offer": ["TRY_MYSELF", "SHOW_SOLUTION"],
     "solution": ["SUMMARIZE", "SKIP_SUMMARY"],
 }
@@ -78,12 +86,15 @@ class LearnerAgencyTurn:
     mode: Mode = "normal"
     tokens: list[TokenUsageDTO] = field(default_factory=list)
     # Set when the choice was read from a typed reply, so that Artemis can store it.
-    typed_choice: Choice | None = None
+    typed_choice: SolutionChoice | None = None
 
     @property
     def solution_unlocked(self) -> bool:
-        """The usual no-solution rule is lifted once the student explicitly asked for the solution."""
-        return self.mode in ("offer", "solution", "summarize", "explain")
+        """The usual no-solution rule is lifted once the student explicitly asked for the solution.
+
+        It is back for the student's own explanation: that turn gives feedback and otherwise tutors as usual.
+        """
+        return self.mode in ("offer", "solution", "summarize")
 
     @property
     def suggests_follow_ups(self) -> bool:
@@ -94,16 +105,13 @@ class LearnerAgencyTurn:
         return self.mode not in ("offer", "summarize")
 
 
-def _text(message: PyrisMessage) -> str:
-    return "\n".join(
-        content.text_content
-        for content in message.contents
-        if isinstance(content, TextMessageContentDTO)
-    )
-
-
 def plan_turn(
-    dto, config: LearnerAgencySettings, *, chat_mode: IrisChatMode, event: str | None
+    dto,
+    config: LearnerAgencySettings,
+    *,
+    chat_mode: IrisChatMode,
+    event: str | None,
+    local: bool,
 ) -> LearnerAgencyTurn:
     """Decide how Iris answers the latest student message in a chat of the given mode."""
     turn = LearnerAgencyTurn()
@@ -111,30 +119,30 @@ def plan_turn(
         return turn
     step = dto.solution_step
     if step in ("TRY_MYSELF", "SHOW_SOLUTION", "SUMMARIZE"):
-        turn.mode = _STEP_MODES[step]
+        turn.mode = _CHOICE_MODES[step]
         return turn
-    if step == "SUMMARY_REPLY":
-        # A declined or failed summary leaves ordinary tutoring; the reply may be a new question.
-        accepted = _decide(dto, config, SUMMARY_PROMPT, turn.tokens)
-        turn.typed_choice = "SUMMARIZE" if accepted else "SKIP_SUMMARY"
-        turn.mode = "summarize" if accepted else "normal"
+    if step in _TYPED_REPLIES:
+        question, yes, no = _TYPED_REPLIES[step]
+        turn.typed_choice = (
+            yes if _decide(dto, config, question, local, turn.tokens) else no
+        )
+        turn.mode = _CHOICE_MODES[turn.typed_choice]
         return turn
-    if step == "OFFER_REPLY":
-        # A failed classification counts as trying it themselves, the choice the offer encourages.
-        wants_solution = _decide(dto, config, CHOICE_PROMPT, turn.tokens)
-        turn.typed_choice = "SHOW_SOLUTION" if wants_solution else "TRY_MYSELF"
-        turn.mode = _STEP_MODES[turn.typed_choice]
-        return turn
-    if _decide(dto, config, CLASSIFIER_PROMPT, turn.tokens):
+    if _decide(dto, config, CLASSIFIER_PROMPT, local, turn.tokens):
         turn.mode = "offer"
     elif step == "EXPLAIN_SOLUTION":
         turn.mode = "explain"
     return turn
 
 
-def _decide(dto, config: LearnerAgencySettings, question: str, tokens: list) -> bool:
+def _decide(
+    dto,
+    config: LearnerAgencySettings,
+    question: str,
+    local: bool,
+    tokens: list[TokenUsageDTO],
+) -> bool:
     """Whether the classifier answers yes about the latest student message."""
-    local = dto.settings is not None and dto.settings.is_local()
     model_id = config.classifier_model_local if local else config.classifier_model
     history = [
         m
@@ -143,12 +151,12 @@ def _decide(dto, config: LearnerAgencySettings, question: str, tokens: list) -> 
     ][-_HISTORY_WINDOW:]
     if not model_id or not history or history[-1].sender != IrisMessageRole.USER:
         return False
-    if not _text(history[-1]).strip():
+    if not message_text(history[-1]).strip():
         return False
     conversation = [
         {
             "role": m.sender.value,
-            "text": _text(m)[:_MESSAGE_CHARS],
+            "text": message_text(m)[:_MESSAGE_CHARS],
             "isTarget": m is history[-1],
         }
         for m in history

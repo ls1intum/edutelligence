@@ -3,7 +3,7 @@
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm.external.model import LanguageModel
@@ -30,12 +30,20 @@ class LogosDecisionModel(LanguageModel):
     base_url: str
     api_key: str = Field(repr=False, exclude=True)
     request_timeout_seconds: float = Field(default=15, gt=0)
+    # Persistent connection pool: the call runs before every classified message.
+    _client: httpx.Client
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def decide(self, state: str, question: str) -> tuple[float, TokenUsageDTO]:
-        response = httpx.post(
-            self.base_url.rstrip("/") + "/systemone",
+    def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
+        self._client = httpx.Client(
+            base_url=self.base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {self.api_key}"},
             timeout=self.request_timeout_seconds,
+        )
+
+    def decide(self, state: str, question: str) -> tuple[float, TokenUsageDTO]:
+        response = self._client.post(
+            "/systemone",
             json={
                 "model": self.model,
                 "state": state,

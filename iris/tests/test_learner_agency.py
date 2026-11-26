@@ -49,8 +49,10 @@ def classifier(monkeypatch):
     return handler
 
 
-def plan(data, config=CONFIG, event=None):
-    return learner_agency.plan_turn(data, config, chat_mode=data.chat_mode, event=event)
+def plan(data, config=CONFIG, event=None, local=False):
+    return learner_agency.plan_turn(
+        data, config, chat_mode=data.chat_mode, event=event, local=local
+    )
 
 
 def test_classifier_sees_recent_messages_and_marks_only_the_latest(classifier):
@@ -104,9 +106,7 @@ def test_classifier_is_not_called(classifier, data, event, config):
 
 
 def test_local_ai_users_are_not_sent_to_the_cloud_classifier(classifier):
-    data = dto([message("Solution please")])
-    data.settings = SimpleNamespace(is_local=lambda: True)
-    plan(data)
+    plan(dto([message("Solution please")]), local=True)
     classifier.decide.assert_not_called()
 
 
@@ -211,7 +211,7 @@ def test_post_agent_hook_attaches_the_offer_of_the_step_and_skips_the_guide(
     state = _post_agent_state()
     pipeline.post_agent_hook(state)
     state.callback.fail.assert_not_called()
-    assert pipeline._refine_response.called == (mode in ("normal", "hint"))
+    assert pipeline._refine_response.called == (mode in ("normal", "hint", "explain"))
     assert pipeline._generate_suggestions.called == (
         mode in ("normal", "hint", "solution", "explain")
     )
@@ -246,27 +246,20 @@ def render_turn_context(mode, reference=None):
     )
 
 
-@pytest.mark.parametrize(
-    ("mode", "heading"),
-    [
-        ("offer", "# The student asks for the complete solution"),
-        ("hint", "# The student chose to try it themselves"),
-        ("solution", "# Deliver the complete solution"),
-        ("summarize", "# The student wants to summarize the solution"),
-        ("explain", "# The student's explanation of the solution"),
-    ],
-)
-def test_turn_context_has_exactly_the_instructions_of_its_step(mode, heading):
+STEP_HEADINGS = {
+    "offer": "# The student asks for the complete solution",
+    "hint": "# The student chose to try it themselves",
+    "solution": "# Deliver the complete solution",
+    "summarize": "# The student wants to summarize the solution",
+    "explain": "# The student's explanation of the solution",
+}
+
+
+@pytest.mark.parametrize("mode", [*STEP_HEADINGS, "normal"])
+def test_turn_context_has_exactly_the_instructions_of_its_step(mode):
     rendered = render_turn_context(mode)
-    headings = [
-        "# The student asks for the complete solution",
-        "# The student chose to try it themselves",
-        "# Deliver the complete solution",
-        "# The student wants to summarize the solution",
-        "# The student's explanation of the solution",
-    ]
-    assert [h for h in headings if h in rendered] == [heading]
-    assert not any(h in render_turn_context("normal") for h in headings)
+    shown = [heading for heading in STEP_HEADINGS.values() if heading in rendered]
+    assert shown == ([STEP_HEADINGS[mode]] if mode in STEP_HEADINGS else [])
 
 
 @pytest.mark.parametrize("mode", ["normal", "hint", "summarize", "explain", "solution"])
@@ -303,16 +296,16 @@ def test_unlocked_solution_removes_the_refusal_rules(unlocked):
 def test_logos_decision_model_returns_the_yes_probability_and_usage(monkeypatch):
     calls = []
 
-    def post(url, **kwargs):
-        calls.append((url, kwargs))
+    def send(client, request, **_kwargs):  # pylint: disable=unused-argument
+        calls.append(request)
         body = {
             "model": "jev",
             "answers": {"answer": {"type": "noul", "noul": 0.92}},
             "usage": {"input_tokens": 93, "output_tokens": 1},
         }
-        return httpx.Response(200, json=body, request=httpx.Request("POST", url))
+        return httpx.Response(200, json=body, request=request)
 
-    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(httpx.Client, "send", send)
     model = LogosDecisionModel(
         id="jev",
         type="logos_decision",
@@ -321,8 +314,12 @@ def test_logos_decision_model_returns_the_yes_probability_and_usage(monkeypatch)
         api_key="k",
     )
     probability, usage = model.decide("state", "question?")
-    url, kwargs = calls[0]
-    assert url == "https://logos/v1/systemone"
-    assert kwargs["json"]["questions"]["answer"]["instructions"] == "question?"
+    request = calls[0]
+    assert str(request.url) == "https://logos/v1/systemone"
+    assert request.headers["Authorization"] == "Bearer k"
+    assert (
+        json.loads(request.content)["questions"]["answer"]["instructions"]
+        == "question?"
+    )
     assert probability == 0.92
     assert (usage.num_input_tokens, usage.num_output_tokens) == (93, 1)

@@ -382,7 +382,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     activities=activities,
                     activity_seq=activity_seq,
                     suggested_context=state.pending_context_switch,
-                    solution_offer=context_offer(state.dto, self.learner_agency.mode),
+                    # The offer is bound to the original exercise; after a switch the answer is about another context.
+                    solution_offer=(
+                        context_offer(state.dto, self.learner_agency.mode)
+                        if state.pending_context_switch is None
+                        else None
+                    ),
                     solution_choice=self.learner_agency.typed_choice,
                 )
             logger.info(
@@ -440,14 +445,19 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # Before the turn context is built: the current view hands out source ids too.
         state.citation_sources = CitationSourceRegistry(require_delivery=True)
         dto = state.dto
-        for usage in self.learner_agency.tokens:
-            usage.pipeline = self.get_token_pipeline(state)
-            self._track_tokens(state, usage)
         course_id = dto.course.id
         base_url = dto.settings.artemis_base_url if dto.settings else None
-        # The two availability checks are independent Weaviate round trips;
-        # run them concurrently so the agent can start sooner.
-        with TracedThreadPoolExecutor(max_workers=2) as executor:
+        # The solution classifier and the two availability checks are independent
+        # round trips; run them concurrently so the agent can start sooner.
+        with TracedThreadPoolExecutor(max_workers=3) as executor:
+            learner_agency_future = executor.submit(
+                plan_turn,
+                dto,
+                settings.learner_agency,
+                chat_mode=self.chat_mode,
+                event=self.event,
+                local=state.local,
+            )
             lecture_tool_future = executor.submit(
                 should_allow_lecture_tool, state.db, course_id
             )
@@ -456,6 +466,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             state.allow_lecture_tool = lecture_tool_future.result()
             state.allow_faq_tool = faq_tool_future.result()
+            self.learner_agency = learner_agency_future.result()
+        for usage in self.learner_agency.tokens:
+            usage.pipeline = self.get_token_pipeline(state)
+            self._track_tokens(state, usage)
 
         # Extract lecture contexts from DTO and store in state
         lecture_contexts = self._parse_lecture_context(dto)
@@ -1087,9 +1101,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             logger.info("Running chat pipeline...")
 
             self.event = event
-            self.learner_agency = plan_turn(
-                dto, settings.learner_agency, chat_mode=self.chat_mode, event=event
-            )
 
             # Delegate to parent class for standardized execution
             local = dto.settings is not None and dto.settings.is_local()

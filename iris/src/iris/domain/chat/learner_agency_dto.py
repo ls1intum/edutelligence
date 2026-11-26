@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+SolutionChoice = Literal["TRY_MYSELF", "SHOW_SOLUTION", "SUMMARIZE", "SKIP_SUMMARY"]
+
 
 class SolutionOffer(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -12,4 +14,4 @@ class SolutionOffer(BaseModel):
     chat_mode: str = Field(alias="chatMode")
     entity_id: int = Field(alias="entityId")
     # The buttons, in order; Artemis accepts only these choices for the offer.
-    choices: list[Literal["TRY_MYSELF", "SHOW_SOLUTION", "SUMMARIZE", "SKIP_SUMMARY"]]
+    choices: list[SolutionChoice]
