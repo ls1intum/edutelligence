@@ -405,10 +405,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 logger.error("Error generating deferred session title", exc_info=e)
 
             # Generate and send suggestions separately (async from user's perspective)
-            if self.chat_mode in [
-                IrisChatMode.COURSE,
-                IrisChatMode.EXERCISE,
-            ]:
+            if (
+                self.chat_mode in [IrisChatMode.COURSE, IrisChatMode.EXERCISE]
+                and self.learner_agency.suggests_follow_ups
+            ):
                 with timed_span("ChatPipeline", "suggestions", state.start_time):
                     self._generate_suggestions(state, result)
 

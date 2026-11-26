@@ -73,6 +73,8 @@ _EXERCISE_MODES = (IrisChatMode.EXERCISE, IrisChatMode.TEXT_EXERCISE)
 
 @dataclass
 class LearnerAgencyTurn:
+    """How Iris answers the latest message, and the classifier calls that decided it."""
+
     mode: Mode = "normal"
     tokens: list[TokenUsageDTO] = field(default_factory=list)
     # Set when the choice was read from a typed reply, so that Artemis can store it.
@@ -82,6 +84,14 @@ class LearnerAgencyTurn:
     def solution_unlocked(self) -> bool:
         """The usual no-solution rule is lifted once the student explicitly asked for the solution."""
         return self.mode in ("offer", "solution", "summarize", "explain")
+
+    @property
+    def suggests_follow_ups(self) -> bool:
+        """No follow-up suggestions while the student's next step is a choice or their summary.
+
+        A solution keeps them: the client shows them only once the student declines the summary.
+        """
+        return self.mode not in ("offer", "summarize")
 
 
 def _text(message: PyrisMessage) -> str:

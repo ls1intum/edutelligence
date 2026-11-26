@@ -212,6 +212,9 @@ def test_post_agent_hook_attaches_the_offer_of_the_step_and_skips_the_guide(
     pipeline.post_agent_hook(state)
     state.callback.fail.assert_not_called()
     assert pipeline._refine_response.called == (mode in ("normal", "hint"))
+    assert pipeline._generate_suggestions.called == (
+        mode in ("normal", "hint", "solution", "explain")
+    )
     assert (
         state.callback.send_result.call_args.kwargs["solution_choice"] == "TRY_MYSELF"
     )
