@@ -177,6 +177,45 @@ def test_empty_object_in_prose_is_skipped():
     assert parsed["question"] == "What is 2+2?"
 
 
+def test_metadata_with_a_questions_key_does_not_hide_the_question():
+    pipeline = _make_pipeline('Metadata: {"questions": 1}\n' + VALID_SINGLE_MCQ)
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
+
+
+def test_array_with_a_missing_comma_keeps_the_first_question(caplog):
+    first = json.loads(VALID_SINGLE_MCQ)
+    second = {**first, "question": "What is 3+3?"}
+    broken = "[" + json.dumps(first) + "\n" + json.dumps(second) + "]"
+    pipeline = _make_pipeline(broken)
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["question"] == "What is 2+2?"
+    assert "Skipped malformed JSON" in caplog.text
+
+
+def test_explicit_unknown_type_raises():
+    essay = json.dumps({**json.loads(VALID_SINGLE_MCQ), "type": "essay"})
+    pipeline = _make_pipeline(essay)
+    with pytest.raises(ValueError, match="Unknown MCQ type: essay"):
+        pipeline(command="Generate a question")
+
+
+def test_array_items_without_type_are_accepted():
+    question = json.loads(VALID_SINGLE_MCQ)
+    del question["type"]
+    pipeline = _make_pipeline(json.dumps([question]))
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+
+
+@pytest.mark.parametrize("questions", ["false", "{}", '""'])
+def test_falsy_non_list_questions_in_mcq_set_raise_value_error(questions):
+    pipeline = _make_pipeline('{"type": "mcq-set", "questions": ' + questions + "}")
+    with pytest.raises(ValueError, match="'questions' must be an array"):
+        pipeline(command="Generate questions")
+
+
 def test_null_questions_in_mcq_set_raises_value_error():
     pipeline = _make_pipeline('{"type": "mcq-set", "questions": null}')
     with pytest.raises(ValueError, match="no MCQ question"):

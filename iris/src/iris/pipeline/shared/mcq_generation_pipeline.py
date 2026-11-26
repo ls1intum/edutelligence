@@ -58,14 +58,14 @@ class McqGenerationPipeline(SubPipeline):
         lecture_content: Optional[str] = None,
     ) -> str:
         """
-        Generate MCQ questions as a JSON string.
+        Generate one MCQ question as a JSON string.
 
         :param command: Free-text instruction describing what to generate
         :param chat_history: Recent chat history for context
         :param language: Name of the language to write in, such as "German"
         :param callback: Status callback for dynamic chat messages
         :param lecture_content: Pre-retrieved lecture content to base questions on
-        :return: JSON string with MCQ data
+        :return: JSON string of a single ``mcq`` question
         """
         if callback:
             callback.update()
@@ -363,8 +363,11 @@ class McqGenerationPipeline(SubPipeline):
         objects or arrays that directly follow, separated by whitespace or
         commas. The first text that is not one ends the scan, so trailing
         prose is ignored even when it starts like a JSON scalar ("2 more
-        questions"). Raises a JSON error (or ValueError) when no acceptable
-        value is found, so the caller can log the raw response.
+        questions"). A value that fails to decode is searched from its next
+        character, so the first complete value inside it (such as question 1
+        of an array with a missing comma) is used, with a warning. Raises a
+        JSON error (or ValueError) when no acceptable value is found, so the
+        caller can log the raw response.
         """
         decoder = json.JSONDecoder()
         first_error: Optional[json.JSONDecodeError] = None
@@ -375,9 +378,16 @@ class McqGenerationPipeline(SubPipeline):
             except json.JSONDecodeError as error:
                 # The first parse error is the most useful one to report.
                 first_error = first_error or error
-                resume = max(error.pos, start + 1)
+                # Search inside the broken value too, so an array with a missing
+                # comma yields its first complete question, not a later one.
+                resume = start + 1
             else:
                 if accept(value):
+                    if first_error is not None:
+                        logger.warning(
+                            "Skipped malformed JSON before the usable value: %s",
+                            first_error,
+                        )
                     return [value, *_following_values(decoder, response, end, accept)]
                 resume = end
             start = _first_json_index(response, resume)
@@ -399,9 +409,11 @@ class McqGenerationPipeline(SubPipeline):
         for value in values:
             if isinstance(value, list):
                 items = value
-            elif isinstance(value, dict) and value.get("type") == "mcq-set":
-                items = value.get("questions") or []
-                if not isinstance(items, list):
+            elif _is_mcq_set(value):
+                items = value.get("questions")
+                if items is None:
+                    items = []
+                elif not isinstance(items, list):
                     raise ValueError(f"MCQ 'questions' must be an array, got {items!r}")
             elif isinstance(value, dict):
                 items = [value]
@@ -446,6 +458,12 @@ class McqGenerationPipeline(SubPipeline):
             )
         question = questions[0]
 
+        # Array items may omit "type", but an explicit other type is not an MCQ.
+        mcq_type = question.get("type", "mcq")
+        if mcq_type != "mcq":
+            logger.warning("Response contained an unknown MCQ type: %r", response)
+            raise ValueError(f"Unknown MCQ type: {mcq_type}")
+
         try:
             _repair_single_mcq(question)
             _validate_single_mcq(question)
@@ -489,17 +507,23 @@ def _following_values(
 def _is_mcq_value(value: Any) -> bool:
     """Whether a decoded value holds MCQ questions.
 
-    Accepts an object with a ``question`` or ``questions`` key, or a non-empty
-    list of such objects.
+    Matches what ``_flatten_questions`` expands: a question object, an
+    ``mcq-set`` object, or a non-empty list of question objects. Other objects,
+    such as metadata with a ``questions`` key, are skipped.
     """
     if isinstance(value, list):
-        return bool(value) and all(_is_mcq_object(item) for item in value)
-    return _is_mcq_object(value)
+        return bool(value) and all(_is_question(item) for item in value)
+    return _is_question(value) or _is_mcq_set(value)
 
 
-def _is_mcq_object(value: Any) -> bool:
-    """Whether a value is an object with a ``question`` or ``questions`` key."""
-    return isinstance(value, dict) and ("question" in value or "questions" in value)
+def _is_question(value: Any) -> bool:
+    """Whether a value is an object with a ``question`` key."""
+    return isinstance(value, dict) and "question" in value
+
+
+def _is_mcq_set(value: Any) -> bool:
+    """Whether a value is an object of type ``mcq-set``."""
+    return isinstance(value, dict) and value.get("type") == "mcq-set"
 
 
 def _is_subtopic_list(value: Any) -> bool:
