@@ -14,8 +14,8 @@ from typing import Literal
 from iris.common.logging_config import get_logger
 from iris.common.pyris_message import IrisMessageRole
 from iris.common.token_usage_dto import TokenUsageDTO
-from iris.config import LearnerAgencySettings
-from iris.domain.chat.learner_agency_dto import SolutionChoice, SolutionOffer
+from iris.config import SolutionChoiceSettings
+from iris.domain.chat.solution_choice_dto import SolutionChoice, SolutionOffer
 from iris.llm.iris_chat_model import message_text
 from iris.llm.request_handler.llm_request_handler import LlmRequestHandler
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
@@ -80,7 +80,7 @@ _EXERCISE_MODES = (IrisChatMode.EXERCISE, IrisChatMode.TEXT_EXERCISE)
 
 
 @dataclass
-class LearnerAgencyTurn:
+class SolutionChoiceTurn:
     """How Iris answers the latest message, and the classifier calls that decided it."""
 
     mode: Mode = "normal"
@@ -107,14 +107,14 @@ class LearnerAgencyTurn:
 
 def plan_turn(
     dto,
-    config: LearnerAgencySettings,
+    config: SolutionChoiceSettings,
     *,
     chat_mode: IrisChatMode,
     event: str | None,
     local: bool,
-) -> LearnerAgencyTurn:
+) -> SolutionChoiceTurn:
     """Decide how Iris answers the latest student message in a chat of the given mode."""
-    turn = LearnerAgencyTurn()
+    turn = SolutionChoiceTurn()
     if event or chat_mode not in _EXERCISE_MODES:
         return turn
     step = dto.solution_step
@@ -137,7 +137,7 @@ def plan_turn(
 
 def _decide(
     dto,
-    config: LearnerAgencySettings,
+    config: SolutionChoiceSettings,
     question: str,
     local: bool,
     tokens: list[TokenUsageDTO],

@@ -409,7 +409,7 @@ If the `Pipelines` module shows `DOWN`, there is likely a model configuration is
 
 In programming and text exercise chats, Iris can detect that a student asks for the
 complete solution and let them choose: try it themselves with help, or see the solution.
-Set `learner_agency.classifier_model` in `application.yml` to the **id** of a
+Set `solution_choice.classifier_model` in `application.yml` to the **id** of a
 `logos_decision` model from `llm_config.yml` to turn this on; it is off while the id is unset.
 A decision model answers through the Logos `/v1/systemone` endpoint with a probability
 instead of generated text, so the check takes well under a second.
@@ -423,7 +423,7 @@ instead of generated text, so the check takes well under a second.
 ```
 
 ```yaml
-learner_agency:
+solution_choice:
   classifier_model: <model id>
   # For students who chose local AI; when unset, their messages are not classified.
   classifier_model_local: <local model id>

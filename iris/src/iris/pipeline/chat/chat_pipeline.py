@@ -16,8 +16,8 @@ from iris.config import settings
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
-from iris.pipeline.chat.learner_agency import (
-    LearnerAgencyTurn,
+from iris.pipeline.chat.solution_choice import (
+    SolutionChoiceTurn,
     context_offer,
     plan_turn,
     reference_solution,
@@ -221,7 +221,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     chat_mode: IrisChatMode
     event: Optional[str]
     # Replaced per run in __call__; the default is the ordinary tutoring turn and is never mutated.
-    learner_agency: LearnerAgencyTurn = LearnerAgencyTurn()
+    solution_choice: SolutionChoiceTurn = SolutionChoiceTurn()
     session_title_pipeline: SessionTitleGenerationPipeline
     citation_pipeline: CitationPipeline
     suggestion_pipeline: Optional[InteractionSuggestionPipeline]
@@ -340,7 +340,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             # Once the student asked for the solution, the guide would turn the answer back into a refusal.
             if (
                 _effective_chat_mode(state, self.chat_mode) == IrisChatMode.EXERCISE
-                and not self.learner_agency.solution_unlocked
+                and not self.solution_choice.solution_unlocked
             ):
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
@@ -384,11 +384,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     suggested_context=state.pending_context_switch,
                     # The offer is bound to the original exercise; after a switch the answer is about another context.
                     solution_offer=(
-                        context_offer(state.dto, self.learner_agency.mode)
+                        context_offer(state.dto, self.solution_choice.mode)
                         if state.pending_context_switch is None
                         else None
                     ),
-                    solution_choice=self.learner_agency.typed_choice,
+                    solution_choice=self.solution_choice.typed_choice,
                 )
             logger.info(
                 "Chat first result delivered | mode=%s elapsed_ms=%.0f",
@@ -412,7 +412,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             # Generate and send suggestions separately (async from user's perspective)
             if (
                 self.chat_mode in [IrisChatMode.COURSE, IrisChatMode.EXERCISE]
-                and self.learner_agency.suggests_follow_ups
+                and self.solution_choice.suggests_follow_ups
             ):
                 with timed_span("ChatPipeline", "suggestions", state.start_time):
                     self._generate_suggestions(state, result)
@@ -450,10 +450,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # The solution classifier and the two availability checks are independent
         # round trips; run them concurrently so the agent can start sooner.
         with TracedThreadPoolExecutor(max_workers=3) as executor:
-            learner_agency_future = executor.submit(
+            solution_choice_future = executor.submit(
                 plan_turn,
                 dto,
-                settings.learner_agency,
+                settings.solution_choice,
                 chat_mode=self.chat_mode,
                 event=self.event,
                 local=state.local,
@@ -466,8 +466,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             state.allow_lecture_tool = lecture_tool_future.result()
             state.allow_faq_tool = faq_tool_future.result()
-            self.learner_agency = learner_agency_future.result()
-        for usage in self.learner_agency.tokens:
+            self.solution_choice = solution_choice_future.result()
+        for usage in self.solution_choice.tokens:
             usage.pipeline = self.get_token_pipeline(state)
             self._track_tokens(state, usage)
 
@@ -532,7 +532,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # of the cached prefix. Per-message values go to build_turn_context_message.
         template_context: dict[str, Any] = {
             "chat_mode": self.chat_mode,
-            "solution_unlocked": self.learner_agency.solution_unlocked,
+            "solution_unlocked": self.solution_choice.solution_unlocked,
             "support_level": _support_level(dto),
             "user_language": dto.user.lang_key,
             "custom_instructions": format_custom_instructions(
@@ -581,10 +581,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         return self.turn_context_template.render(
             {
                 "chat_mode": self.chat_mode,
-                "learner_agency_mode": self.learner_agency.mode,
+                "solution_choice_mode": self.solution_choice.mode,
                 "reference_solution": (
                     reference_solution(dto)
-                    if self.learner_agency.mode == "solution"
+                    if self.solution_choice.mode == "solution"
                     else None
                 ),
                 "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),

@@ -4,24 +4,26 @@
 
 import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import yaml
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.config import LearnerAgencySettings
+from iris.config import Settings, SolutionChoiceSettings
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm.external.logos_decision import LogosDecisionModel
-from iris.pipeline.chat import learner_agency
+from iris.pipeline.chat import solution_choice
 from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
-from iris.pipeline.chat.learner_agency import LearnerAgencyTurn
+from iris.pipeline.chat.solution_choice import SolutionChoiceTurn
 from iris.pipeline.prompts.environment import prompt_environment
 
-CONFIG = LearnerAgencySettings(classifier_model="cloud", classifier_model_local=None)
+CONFIG = SolutionChoiceSettings(classifier_model="cloud", classifier_model_local=None)
 
 
 def message(text, role=IrisMessageRole.USER):
@@ -45,12 +47,12 @@ def dto(history, *, mode=IrisChatMode.EXERCISE, step=None):
 def classifier(monkeypatch):
     handler = MagicMock()
     handler.decide.return_value = (0.0, "usage")
-    monkeypatch.setattr(learner_agency, "LlmRequestHandler", lambda **_kwargs: handler)
+    monkeypatch.setattr(solution_choice, "LlmRequestHandler", lambda **_kwargs: handler)
     return handler
 
 
 def plan(data, config=CONFIG, event=None, local=False):
-    return learner_agency.plan_turn(
+    return solution_choice.plan_turn(
         data, config, chat_mode=data.chat_mode, event=event, local=local
     )
 
@@ -62,12 +64,12 @@ def test_classifier_sees_recent_messages_and_marks_only_the_latest(classifier):
     turn = plan(dto(history))
     state, question = classifier.decide.call_args.args
     conversation = json.loads(state)
-    assert len(conversation) == learner_agency._HISTORY_WINDOW
+    assert len(conversation) == solution_choice._HISTORY_WINDOW
     assert all(
-        len(entry["text"]) <= learner_agency._MESSAGE_CHARS for entry in conversation
+        len(entry["text"]) <= solution_choice._MESSAGE_CHARS for entry in conversation
     )
     assert [entry["isTarget"] for entry in conversation] == [False] * 5 + [True]
-    assert question == learner_agency.CLASSIFIER_PROMPT
+    assert question == solution_choice.CLASSIFIER_PROMPT
     assert turn.mode == "normal"
     assert turn.tokens == ["usage"]
 
@@ -91,7 +93,7 @@ def test_classifier_probability_decides_the_offer(
     [
         (dto([message("Solution please")], mode=IrisChatMode.COURSE), None, CONFIG),
         (dto([message("Solution please")]), "build_failed", CONFIG),
-        (dto([message("Solution please")]), None, LearnerAgencySettings()),
+        (dto([message("Solution please")]), None, SolutionChoiceSettings()),
         (
             dto([message("Hi"), message("Done", IrisMessageRole.ASSISTANT)]),
             None,
@@ -145,7 +147,7 @@ def test_typed_reply_to_the_offer_counts_as_the_matching_button(
     classifier.decide.return_value = (probability, "usage")
     turn = plan(dto([message("yes show me")], step="OFFER_REPLY"))
     assert (turn.mode, turn.typed_choice) == (mode, choice)
-    assert classifier.decide.call_args.args[1] == learner_agency.CHOICE_PROMPT
+    assert classifier.decide.call_args.args[1] == solution_choice.CHOICE_PROMPT
     assert turn.tokens == ["usage"]
 
 
@@ -165,7 +167,7 @@ def test_typed_reply_to_the_summary_offer_counts_as_the_matching_button(
     classifier.decide.return_value = (probability, "usage")
     turn = plan(dto([message("sure")], step="SUMMARY_REPLY"))
     assert (turn.mode, turn.typed_choice) == (mode, choice)
-    assert classifier.decide.call_args.args[1] == learner_agency.SUMMARY_PROMPT
+    assert classifier.decide.call_args.args[1] == solution_choice.SUMMARY_PROMPT
 
 
 def test_button_steps_send_no_typed_choice(classifier):
@@ -202,7 +204,7 @@ def test_post_agent_hook_attaches_the_offer_of_the_step_and_skips_the_guide(
     )
     pipeline = ChatPipeline.__new__(ChatPipeline)
     pipeline.chat_mode = IrisChatMode.EXERCISE
-    pipeline.learner_agency = LearnerAgencyTurn(mode=mode, typed_choice="TRY_MYSELF")
+    pipeline.solution_choice = SolutionChoiceTurn(mode=mode, typed_choice="TRY_MYSELF")
     pipeline.mcq_pipeline = MagicMock()
     pipeline._refine_response = MagicMock(return_value="Refined")
     pipeline._add_citations = lambda _state, result: result
@@ -232,7 +234,7 @@ def render_turn_context(mode, reference=None):
     pipeline = ChatPipeline.__new__(ChatPipeline)
     pipeline.chat_mode = IrisChatMode.EXERCISE
     pipeline.event = None
-    pipeline.learner_agency = LearnerAgencyTurn(mode=mode)
+    pipeline.solution_choice = SolutionChoiceTurn(mode=mode)
     pipeline.turn_context_template = prompt_environment().get_template(
         "chat_turn_context.j2"
     )
@@ -323,3 +325,22 @@ def test_logos_decision_model_returns_the_yes_probability_and_usage(monkeypatch)
     )
     assert probability == 0.92
     assert (usage.num_input_tokens, usage.num_output_tokens) == (93, 1)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_solution_choice_configuration_loads_both_model_assignments(enabled):
+    values = yaml.safe_load(
+        (Path(__file__).parents[1] / "application.example.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    if enabled:
+        values["solution_choice"] = {
+            "classifier_model": "cloud-classifier",
+            "classifier_model_local": "local-classifier",
+        }
+    configured = Settings.model_validate(values).solution_choice
+    assert configured.classifier_model == ("cloud-classifier" if enabled else None)
+    assert configured.classifier_model_local == (
+        "local-classifier" if enabled else None
+    )

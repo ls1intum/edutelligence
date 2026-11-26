@@ -244,7 +244,7 @@ llm_configuration:
 
 # Set classifier_model to the id of a logos_decision model from llm_config.yml to offer students the choice
 # between help and the complete solution in exercise chats.
-learner_agency:
+solution_choice:
   classifier_model: null
   # For students who chose local AI; unset skips the classifier for them.
   classifier_model_local: null

@@ -295,7 +295,7 @@ class LectureIngestionSettings(BaseModel):
         return self
 
 
-class LearnerAgencySettings(BaseModel):
+class SolutionChoiceSettings(BaseModel):
     """Ids of logos_decision models from llm_config.yml that detect requests for a complete solution.
 
     Unset disables the workflow.
@@ -320,7 +320,9 @@ class Settings(BaseModel):
         "schema (/openapi.json). Off by default; enable it for local development.",
     )
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
-    learner_agency: LearnerAgencySettings = Field(default_factory=LearnerAgencySettings)
+    solution_choice: SolutionChoiceSettings = Field(
+        default_factory=SolutionChoiceSettings
+    )
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
     ingestion_worker: IngestionWorkerSettings = Field(
         default_factory=IngestionWorkerSettings

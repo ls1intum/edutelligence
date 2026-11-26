@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from pydantic import Field
 
-from iris.domain.chat.learner_agency_dto import SolutionChoice, SolutionOffer
+from iris.domain.chat.solution_choice_dto import SolutionChoice, SolutionOffer
 from iris.domain.data.compaction_dto import CompactionDTO
 from iris.domain.status.activity_dto import ActivityDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO

@@ -254,7 +254,7 @@
 # reasoning_effort: medium, reasoning_effort_values: [low, medium, high].
 
 # ── Logos decision model (yes/no probability, no generated text) ──────────────
-# For learner_agency.classifier_model in application.yml.
+# For solution_choice.classifier_model in application.yml.
 - id: logos-jev-27b-vl
   type: logos_decision
   model: autotrust/JEV-27B-VL
