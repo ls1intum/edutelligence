@@ -382,11 +382,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     activities=activities,
                     activity_seq=activity_seq,
                     suggested_context=state.pending_context_switch,
-                    # The offer is bound to the original exercise; after a switch the answer is about another context.
-                    solution_offer=(
-                        context_offer(state.dto, self.solution_choice.mode)
-                        if state.pending_context_switch is None
-                        else None
+                    # After a switch the answer is about the target, so the offer is bound to it.
+                    solution_offer=context_offer(
+                        state.dto,
+                        self.solution_choice.mode,
+                        state.pending_context_switch,
                     ),
                     solution_choice=self.solution_choice.typed_choice,
                 )

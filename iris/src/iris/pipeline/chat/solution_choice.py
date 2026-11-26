@@ -174,14 +174,22 @@ def _decide(
     return probability > _THRESHOLD
 
 
-def context_offer(dto, mode: Mode) -> SolutionOffer | None:
+def context_offer(dto, mode: Mode, switch=None) -> SolutionOffer | None:
     """The offer an answer in this mode ends with, if any.
 
-    It is bound to the active exercise, so Artemis can reject a choice from another context.
+    It is bound to the exercise the answer is about, so Artemis can reject a choice from another
+    context: the active exercise, or the exercise the agent switched to. The summary offer follows
+    the reference solution of the active exercise, so it is dropped after a switch.
     """
     choices = OFFER_CHOICES.get(mode)
     if choices is None:
         return None
+    if switch is not None:
+        if mode != "offer" or switch.mode not in _EXERCISE_MODES:
+            return None
+        return SolutionOffer(
+            chatMode=switch.mode.value, entityId=switch.entity_id, choices=choices
+        )
     entity = dto.programming_exercise or dto.text_exercise
     if entity is None:
         return None

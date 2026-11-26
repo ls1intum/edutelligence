@@ -16,6 +16,7 @@ import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.config import Settings, SolutionChoiceSettings
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 from iris.llm.external.logos_decision import LogosDecisionModel
 from iris.pipeline.chat import solution_choice
 from iris.pipeline.chat.chat_pipeline import ChatPipeline
@@ -182,6 +183,54 @@ def test_no_offer_without_an_exercise():
     data = dto([])
     data.programming_exercise = None
     assert solution_choice.context_offer(data, "offer") is None
+
+
+@pytest.mark.parametrize(
+    ("mode", "target", "expected"),
+    [
+        ("offer", IrisChatMode.EXERCISE, (IrisChatMode.EXERCISE.value, 7)),
+        ("offer", IrisChatMode.TEXT_EXERCISE, (IrisChatMode.TEXT_EXERCISE.value, 7)),
+        ("offer", IrisChatMode.LECTURE, None),
+        ("offer", IrisChatMode.COURSE, None),
+        ("solution", IrisChatMode.EXERCISE, None),
+        ("normal", IrisChatMode.EXERCISE, None),
+    ],
+)
+def test_offer_after_a_switch_is_bound_to_the_target_exercise(mode, target, expected):
+    switch = SuggestedContextDTO(mode=target, entityId=7)
+    offer = solution_choice.context_offer(dto([]), mode, switch)
+    assert ((offer.chat_mode, offer.entity_id) if offer else None) == expected
+
+
+def test_post_agent_hook_sends_the_offer_for_the_exercise_switched_to(monkeypatch):
+    monkeypatch.setattr(
+        "iris.pipeline.chat.chat_pipeline.mcq_post_agent_hook", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "iris.pipeline.chat.chat_pipeline.reply_language", lambda *_args: "en"
+    )
+    pipeline = ChatPipeline.__new__(ChatPipeline)
+    pipeline.chat_mode = IrisChatMode.EXERCISE
+    pipeline.solution_choice = SolutionChoiceTurn(mode="offer")
+    pipeline.mcq_pipeline = MagicMock()
+    pipeline._refine_response = MagicMock(return_value="Refined")
+    pipeline._add_citations = lambda _state, result: result
+    pipeline._generate_session_title = MagicMock(return_value=None)
+    pipeline._generate_suggestions = MagicMock()
+    state = _post_agent_state()
+    state.pending_context_switch = SuggestedContextDTO(
+        mode=IrisChatMode.EXERCISE, entityId=7
+    )
+    pipeline.post_agent_hook(state)
+    state.callback.fail.assert_not_called()
+    kwargs = state.callback.send_result.call_args.kwargs
+    assert kwargs["suggested_context"] == state.pending_context_switch
+    offer = kwargs["solution_offer"]
+    assert (offer.chat_mode, offer.entity_id, offer.choices) == (
+        IrisChatMode.EXERCISE.value,
+        7,
+        ["TRY_MYSELF", "SHOW_SOLUTION"],
+    )
 
 
 def test_button_steps_send_no_typed_choice(classifier):
