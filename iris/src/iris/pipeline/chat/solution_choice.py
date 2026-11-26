@@ -63,8 +63,8 @@ _CHOICE_MODES: dict[SolutionChoice, Mode] = {
 }
 
 # A typed reply to an offer: the question, and the choice for yes and for no.
-# A declined or failed summary leaves ordinary tutoring; the reply may be a new question.
-# A failed solution choice counts as trying it themselves, the choice the offer encourages.
+# A typed reply always closes the offer: anything but the solution or the summary declines it.
+# A declined or failed reply leaves ordinary tutoring, whether it asks for help or a new question.
 _TYPED_REPLIES: dict[str, tuple[str, SolutionChoice, SolutionChoice]] = {
     "SUMMARY_REPLY": (SUMMARY_PROMPT, "SUMMARIZE", "SKIP_SUMMARY"),
     "OFFER_REPLY": (CHOICE_PROMPT, "SHOW_SOLUTION", "TRY_MYSELF"),
@@ -123,10 +123,9 @@ def plan_turn(
         return turn
     if step in _TYPED_REPLIES:
         question, yes, no = _TYPED_REPLIES[step]
-        turn.typed_choice = (
-            yes if _decide(dto, config, question, local, turn.tokens) else no
-        )
-        turn.mode = _CHOICE_MODES[turn.typed_choice]
+        chosen = _decide(dto, config, question, local, turn.tokens)
+        turn.typed_choice = yes if chosen else no
+        turn.mode = _CHOICE_MODES[yes] if chosen else "normal"
         return turn
     if _decide(dto, config, CLASSIFIER_PROMPT, local, turn.tokens):
         turn.mode = "offer"
@@ -184,6 +183,8 @@ def context_offer(dto, mode: Mode) -> SolutionOffer | None:
     if choices is None:
         return None
     entity = dto.programming_exercise or dto.text_exercise
+    if entity is None:
+        return None
     return SolutionOffer(
         chatMode=dto.chat_mode.value, entityId=entity.id, choices=choices
     )

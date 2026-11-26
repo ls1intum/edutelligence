@@ -446,6 +446,8 @@ validates a click against the open offer and tells Iris which step follows:
 - **No thanks:** Artemis only records the choice; Iris does not answer it.
 - **A typed reply** instead of a click: the same model rates whether the reply chooses the
   solution or accepts the summary, and Iris continues as if the matching button had been clicked. Artemis stores
-  that choice like a click.
+  that choice like a click. Any other reply declines: Artemis stores **Try it myself** or **No thanks**, and Iris tutors
+  as usual, whether the reply asks for help or starts a new question. If the classifier call fails, the reply
+  also counts as declining.
 
 Update Artemis and Iris together before enabling the classifier.

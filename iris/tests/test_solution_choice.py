@@ -139,7 +139,7 @@ def test_message_after_a_solution_is_an_explanation_unless_it_asks_again(
 
 @pytest.mark.parametrize(
     ("probability", "mode", "choice"),
-    [(0.9, "solution", "SHOW_SOLUTION"), (0.2, "hint", "TRY_MYSELF")],
+    [(0.9, "solution", "SHOW_SOLUTION"), (0.2, "normal", "TRY_MYSELF")],
 )
 def test_typed_reply_to_the_offer_counts_as_the_matching_button(
     classifier, probability, mode, choice
@@ -151,10 +151,18 @@ def test_typed_reply_to_the_offer_counts_as_the_matching_button(
     assert turn.tokens == ["usage"]
 
 
-def test_failed_reply_classification_lets_the_student_try_it_themselves(classifier):
+def test_failed_reply_classification_declines_the_offer_and_tutors_as_usual(
+    classifier,
+):
     classifier.decide.side_effect = RuntimeError("down")
     turn = plan(dto([message("yes")], step="OFFER_REPLY"))
-    assert (turn.mode, turn.typed_choice) == ("hint", "TRY_MYSELF")
+    assert (turn.mode, turn.typed_choice) == ("normal", "TRY_MYSELF")
+
+
+def test_failed_summary_reply_classification_declines_the_summary(classifier):
+    classifier.decide.side_effect = RuntimeError("down")
+    turn = plan(dto([message("sure")], step="SUMMARY_REPLY"))
+    assert (turn.mode, turn.typed_choice) == ("normal", "SKIP_SUMMARY")
 
 
 @pytest.mark.parametrize(
@@ -168,6 +176,12 @@ def test_typed_reply_to_the_summary_offer_counts_as_the_matching_button(
     turn = plan(dto([message("sure")], step="SUMMARY_REPLY"))
     assert (turn.mode, turn.typed_choice) == (mode, choice)
     assert classifier.decide.call_args.args[1] == solution_choice.SUMMARY_PROMPT
+
+
+def test_no_offer_without_an_exercise():
+    data = dto([])
+    data.programming_exercise = None
+    assert solution_choice.context_offer(data, "offer") is None
 
 
 def test_button_steps_send_no_typed_choice(classifier):
