@@ -101,12 +101,12 @@ def test_valid_single_mcq_json_returned():
     assert len(parsed["options"]) == 4
 
 
-def test_valid_mcq_set_json_returned():
+def test_mcq_set_keeps_only_the_first_question(caplog):
     pipeline = _make_pipeline(VALID_MCQ_SET)
-    result = pipeline(command="Generate 2 questions")
-    parsed = json.loads(result)
-    assert parsed["type"] == "mcq-set"
-    assert len(parsed["questions"]) == 2
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "Q1?"
+    assert "Model returned 2 MCQ questions where 1 was requested" in caplog.text
 
 
 def test_markdown_fences_stripped():
@@ -121,6 +121,139 @@ def test_invalid_json_raises():
     pipeline = _make_pipeline("This is not JSON at all")
     with pytest.raises(json.JSONDecodeError):
         pipeline(command="Generate a question")
+
+
+def test_trailing_prose_after_json_is_ignored():
+    pipeline = _make_pipeline(VALID_SINGLE_MCQ + "\n\nHope that helps!")
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
+
+
+def test_two_consecutive_mcq_objects_keep_only_the_first(caplog):
+    single = json.loads(VALID_SINGLE_MCQ)
+    other = {**single, "question": "What is 3+3?"}
+    pipeline = _make_pipeline(json.dumps(single) + "\n" + json.dumps(other))
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
+    assert "keeping the first" in caplog.text
+
+
+def test_top_level_array_is_accepted():
+    questions = json.loads(VALID_MCQ_SET)["questions"]
+    pipeline = _make_pipeline(json.dumps(questions))
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "Q1?"
+
+
+def test_a_single_question_logs_no_drop_warning(caplog):
+    pipeline = _make_pipeline(VALID_SINGLE_MCQ)
+    pipeline(command="Generate a question")
+    assert "keeping the first" not in caplog.text
+
+
+def test_trailing_prose_that_looks_like_json_is_ignored():
+    pipeline = _make_pipeline(VALID_SINGLE_MCQ + "\n\n2 more questions can follow.")
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
+
+
+def test_comma_separated_mcq_objects_keep_only_the_first(caplog):
+    other = json.dumps({**json.loads(VALID_SINGLE_MCQ), "question": "What is 3+3?"})
+    pipeline = _make_pipeline(VALID_SINGLE_MCQ + ",\n" + other)
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
+    assert "keeping the first" in caplog.text
+
+
+def test_empty_object_in_prose_is_skipped():
+    pipeline = _make_pipeline("Use {} as a template:\n" + VALID_SINGLE_MCQ)
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
+
+
+def test_metadata_with_a_questions_key_does_not_hide_the_question():
+    pipeline = _make_pipeline('Metadata: {"questions": 1}\n' + VALID_SINGLE_MCQ)
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
+
+
+def test_array_with_a_missing_comma_keeps_the_first_question(caplog):
+    first = json.loads(VALID_SINGLE_MCQ)
+    second = {**first, "question": "What is 3+3?"}
+    broken = "[" + json.dumps(first) + "\n" + json.dumps(second) + "]"
+    pipeline = _make_pipeline(broken)
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["question"] == "What is 2+2?"
+    assert "Skipped malformed JSON" in caplog.text
+
+
+def test_explicit_unknown_type_raises():
+    essay = json.dumps({**json.loads(VALID_SINGLE_MCQ), "type": "essay"})
+    pipeline = _make_pipeline(essay)
+    with pytest.raises(ValueError, match="Unknown MCQ type: essay"):
+        pipeline(command="Generate a question")
+
+
+def test_array_items_without_type_are_accepted():
+    question = json.loads(VALID_SINGLE_MCQ)
+    del question["type"]
+    pipeline = _make_pipeline(json.dumps([question]))
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+
+
+@pytest.mark.parametrize("questions", ["false", "{}", '""'])
+def test_falsy_non_list_questions_in_mcq_set_raise_value_error(questions):
+    pipeline = _make_pipeline('{"type": "mcq-set", "questions": ' + questions + "}")
+    with pytest.raises(ValueError, match="'questions' must be an array"):
+        pipeline(command="Generate questions")
+
+
+def test_null_questions_in_mcq_set_raises_value_error():
+    pipeline = _make_pipeline('{"type": "mcq-set", "questions": null}')
+    with pytest.raises(ValueError, match="no MCQ question"):
+        pipeline(command="Generate questions")
+
+
+def test_non_list_questions_in_mcq_set_raises_value_error():
+    pipeline = _make_pipeline('{"type": "mcq-set", "questions": "Q1"}')
+    with pytest.raises(ValueError, match="'questions' must be an array"):
+        pipeline(command="Generate questions")
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (None, "'options' must be an array"),
+        (["a", "b", "c", "d"], "Option 0 must be an object"),
+    ],
+)
+def test_malformed_options_raise_value_error(options, message):
+    bad_mcq = json.dumps({**json.loads(VALID_SINGLE_MCQ), "options": options})
+    pipeline = _make_pipeline(bad_mcq)
+    with pytest.raises(ValueError, match=message):
+        pipeline(command="Generate a question")
+
+
+def test_subtopic_extraction_skips_non_string_list_in_prose():
+    pipeline = _make_pipeline('Here are [1]:\n["Sorting", "Hashing"]')
+    # pylint: disable=protected-access
+    subtopics = pipeline._extract_subtopics("Algorithms", None, 2)
+    assert subtopics == ["Sorting", "Hashing"]
+
+
+def test_leading_prose_with_brackets_is_skipped():
+    pipeline = _make_pipeline("Here is question [1]:\n" + VALID_SINGLE_MCQ)
+    parsed = json.loads(pipeline(command="Generate a question"))
+    assert parsed["type"] == "mcq"
+    assert parsed["question"] == "What is 2+2?"
 
 
 def test_wrong_option_count_raises():

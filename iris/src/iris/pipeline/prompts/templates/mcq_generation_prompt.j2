@@ -16,16 +16,13 @@ Lecture material to base questions on:
 IMPORTANT: You MUST base your questions on the lecture material above. Do NOT invent questions about topics not covered in this material.
 {% endif %}
 
-Respond with ONLY valid JSON.
+Respond with exactly ONE top-level JSON object and nothing else: no markdown, no text before or after it.
 
-For a single question (default):
+Generate exactly 1 question in this format:
 {"type":"mcq","question":"...","options":[{"text":"...","correct":false},{"text":"...","correct":true},{"text":"...","correct":false},{"text":"...","correct":false}],"explanation":"One sentence why the correct answer is correct.","source":"<exact lecture unit name>"}
 
-For multiple questions (ONLY if the task explicitly requests more than 1):
-{"type":"mcq-set","questions":[...same structure per question...]}
-
 Rules:
-- Generate EXACTLY the number of questions requested. No more, no less. If no number is specified, generate exactly 1.
+- Generate EXACTLY 1 question.
 - Exactly 4 options per question, each with a "text" string and a "correct" boolean. Exactly 1 must be true.
 - Vary the correct answer position.
 - Do NOT prefix options with A/B/C/D.
