@@ -5,7 +5,7 @@
 services:
   nginx:
     container_name: pyris-nginx
-    image: nginx:1.30.8
+    image: nginx:1.31.10
     pull_policy: always
     volumes:
       - ./nginx/timeouts.conf:/etc/nginx/conf.d/timeouts.conf:ro
