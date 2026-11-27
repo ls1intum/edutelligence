@@ -115,7 +115,7 @@ def plan_turn(
 ) -> SolutionChoiceTurn:
     """Decide how Iris answers the latest student message in a chat of the given mode."""
     turn = SolutionChoiceTurn()
-    if event or chat_mode not in _EXERCISE_MODES:
+    if not dto.solution_choice_enabled or event or chat_mode not in _EXERCISE_MODES:
         return turn
     step = dto.solution_step
     if step in ("TRY_MYSELF", "SHOW_SOLUTION", "SUMMARIZE"):

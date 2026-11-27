@@ -15,6 +15,7 @@ import yaml
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.config import Settings, SolutionChoiceSettings
+from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 from iris.llm.external.logos_decision import LogosDecisionModel
@@ -36,6 +37,7 @@ def dto(history, *, mode=IrisChatMode.EXERCISE, step=None):
     return SimpleNamespace(
         chat_history=history,
         chat_mode=mode,
+        solution_choice_enabled=True,
         solution_step=step,
         settings=None,
         programming_exercise=exercise if mode == IrisChatMode.EXERCISE else None,
@@ -106,6 +108,43 @@ def test_classifier_probability_decides_the_offer(
 def test_classifier_is_not_called(classifier, data, event, config):
     assert plan(data, config, event).mode == "normal"
     classifier.decide.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "chat_mode", [IrisChatMode.EXERCISE, IrisChatMode.TEXT_EXERCISE]
+)
+@pytest.mark.parametrize(
+    "step",
+    [
+        None,
+        "TRY_MYSELF",
+        "SHOW_SOLUTION",
+        "SUMMARIZE",
+        "OFFER_REPLY",
+        "SUMMARY_REPLY",
+        "EXPLAIN_SOLUTION",
+    ],
+)
+def test_disabled_workflow_keeps_regular_tutoring_without_classification(
+    classifier, chat_mode, step
+):
+    data = dto([message("Show the complete solution")], mode=chat_mode, step=step)
+    data.solution_choice_enabled = False
+    classifier.decide.return_value = (0.99, "usage")
+    turn = plan(data)
+    assert turn == SolutionChoiceTurn()
+    assert not turn.solution_unlocked
+    assert turn.suggests_follow_ups
+    assert solution_choice.context_offer(data, turn.mode) is None
+    classifier.decide.assert_not_called()
+
+
+def test_solution_choice_toggle_accepts_explicit_false_and_defaults_to_existing_behavior():
+    # Exercise the wire field independently of the other required run fields.
+    data = ChatPipelineExecutionDTO.model_construct(solutionChoiceEnabled=False)
+    assert data.solution_choice_enabled is False
+    assert data.model_dump(by_alias=True)["solutionChoiceEnabled"] is False
+    assert ChatPipelineExecutionDTO.model_construct().solution_choice_enabled is True
 
 
 def test_local_ai_users_are_not_sent_to_the_cloud_classifier(classifier):

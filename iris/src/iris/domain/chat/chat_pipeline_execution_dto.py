@@ -44,6 +44,9 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
         alias="programmingExerciseSubmission", default=None
     )
     text_exercise_submission: str = Field(alias="textExerciseSubmission", default="")
+    # Artemis sends its platform-wide runtime toggle for every run.
+    solution_choice_enabled: bool = Field(alias="solutionChoiceEnabled", default=True)
+
     # Set by Artemis from the stored choices; without it Pyris classifies the message.
     solution_step: Optional[
         Literal[
