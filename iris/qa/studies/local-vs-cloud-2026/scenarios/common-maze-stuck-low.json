@@ -1,0 +1,162 @@
+{
+  "id": "common-maze-stuck-low",
+  "title": "Stuck, asks for a hint",
+  "description": "The student is stuck on the maze exercise and asks for a hint.",
+  "use_case": "chat",
+  "mode": "PROGRAMMING_EXERCISE_CHAT",
+  "support_level": "low",
+  "difficulty": "foundation",
+  "profiles": ["full"],
+  "tags": ["programming", "common"],
+  "fixtures": ["programming/maze.yml"],
+  "event": null,
+  "payload": {
+    "settings": {
+      "authenticationToken": "qa-local-only",
+      "selection": "CLOUD_AI",
+      "artemisBaseUrl": "https://artemis.example.invalid",
+      "variant": "default",
+      "supportLevel": "low",
+      "streamResponse": false
+    },
+    "user": {
+      "id": 117,
+      "firstName": "Alex",
+      "lastName": "Morgan",
+      "memirisEnabled": false,
+      "langKey": "en"
+    },
+    "course": {
+      "id": 42,
+      "name": "Algorithms and Data Structures",
+      "description": "An undergraduate course on algorithms, data structures, and complexity.",
+      "startTime": "2026-04-13T08:00:00Z",
+      "endTime": "2026-07-25T18:00:00Z",
+      "defaultProgrammingLanguage": "JAVA",
+      "exercises": [
+        {
+          "id": 9001,
+          "title": "Insertion Sort",
+          "type": "PROGRAMMING",
+          "mode": "INDIVIDUAL",
+          "maxPoints": 10,
+          "dueDate": "2026-05-18T22:00:00Z",
+          "difficultyLevel": "MEDIUM",
+          "problemStatement": "Implement insertion sort in place without library sorting helpers.",
+          "submissions": [{ "id": 502, "score": 6.0, "submitted": true }]
+        },
+        {
+          "id": 9002,
+          "title": "Graph Traversal Reflection",
+          "type": "TEXT",
+          "mode": "INDIVIDUAL",
+          "maxPoints": 10,
+          "dueDate": "2026-06-10T22:00:00Z",
+          "difficultyLevel": "MEDIUM",
+          "problemStatement": "Compare breadth-first and depth-first search for route planning.",
+          "submissions": []
+        }
+      ]
+    },
+    "sessionTitle": null,
+    "customInstructions": "",
+    "chatHistory": [
+      {
+        "id": 3007,
+        "sentAt": "2026-06-02T14:05:00Z",
+        "sender": "USER",
+        "contents": [
+          {
+            "type": "text",
+            "textContent": "I'm stuck. Can you give me a hint?"
+          }
+        ]
+      }
+    ],
+    "qa": {
+      "syntheticNow": "2026-06-03T12:00:00Z",
+      "submissionHistory": "artifacts/programming/maze/submission-history.yml"
+    },
+    "programmingExercise": {
+      "id": 9010,
+      "title": "Maze Shortest Path",
+      "problemStatement": "Implement breadth-first search and return the length of a shortest path through zero-valued cells. Return None when the goal is unreachable.",
+      "startDate": "2026-06-01T08:00:00Z",
+      "endDate": "2026-06-08T22:00:00Z",
+      "programmingLanguage": "PYTHON",
+      "templateRepository": {
+        "src/maze.py": "def shortest_path(\n    grid: list[list[int]], start: tuple[int, int], goal: tuple[int, int]\n) -> int | None:\n    \"\"\"Return the number of steps in a shortest path through zero-valued cells.\"\"\"\n    # TODO: implement breadth-first search\n    raise NotImplementedError\n"
+      },
+      "solutionRepository": {
+        "src/maze.py": "from collections import deque\n\n\ndef shortest_path(\n    grid: list[list[int]], start: tuple[int, int], goal: tuple[int, int]\n) -> int | None:\n    queue = deque([(start, 0)])\n    visited = {start}\n    while queue:\n        (row, column), distance = queue.popleft()\n        if (row, column) == goal:\n            return distance\n        for delta_row, delta_column in ((1, 0), (-1, 0), (0, 1), (0, -1)):\n            neighbor = row + delta_row, column + delta_column\n            next_row, next_column = neighbor\n            if (\n                0 <= next_row < len(grid)\n                and 0 <= next_column < len(grid[0])\n                and grid[next_row][next_column] == 0\n                and neighbor not in visited\n            ):\n                visited.add(neighbor)\n                queue.append((neighbor, distance + 1))\n    return None\n"
+      },
+      "testRepository": {
+        "test_maze.py": "from src.maze import shortest_path\n\n\ndef test_shortest_path_avoids_walls():\n    grid = [[0, 1, 0], [0, 0, 0], [1, 0, 0]]\n    assert shortest_path(grid, (0, 0), (0, 2)) == 4\n\n\ndef test_unreachable_goal_returns_none():\n    grid = [[0, 1], [1, 0]]\n    assert shortest_path(grid, (0, 0), (1, 1)) is None\n"
+      }
+    },
+    "programmingExerciseSubmission": {
+      "id": 601,
+      "date": "2026-06-02T13:05:00Z",
+      "repository": {
+        "src/maze.py": "def shortest_path(grid, start, goal):\n    if not grid:\n        return None\n    queue = [(start, 0)]\n    visited = set()\n    while queue:\n        (row, column), distance = queue.pop(0)\n        if (row, column) == goal:\n            return distance\n        visited.add((row, column))\n    return None\n"
+      },
+      "isPractice": false,
+      "buildFailed": false,
+      "buildLogEntries": [
+        { "timestamp": "2026-06-02T13:06:00Z", "message": "BUILD SUCCESS" }
+      ],
+      "latestResult": {
+        "completionDate": "2026-06-02T13:07:00Z",
+        "successful": false,
+        "feedbacks": [
+          {
+            "testCaseName": "test_shortest_path_avoids_walls",
+            "text": "Expected 4 but got None.",
+            "credits": 0.0
+          }
+        ]
+      }
+    },
+    "chatMode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "criteria": [
+    {
+      "id": "trustworthy",
+      "description": "What the answer states as fact is correct, grounded in the evidence Iris had, and honest about what it does not know.",
+      "guidance": "achieved: every checkable claim (course facts, dates, lecture content, code behaviour, the student's own data) is correct and supported by the evidence or standard knowledge, and gaps are admitted rather than filled in. partly_achieved: mostly correct, but a minor inaccuracy, an unsupported detail or an overconfident phrase that would not change what the student does. not_achieved: a claim the student would act on is wrong, invented or contradicts the evidence, or Iris pretends to know something it was not given. Judge against the reference facts; a claim is not wrong merely because it is missing."
+    },
+    {
+      "id": "moves-forward",
+      "description": "After reading it the student knows what to do next, and it deals with what they actually asked or need, including the real problem behind the question.",
+      "guidance": "achieved: addresses the actual question or underlying need and leaves a concrete, doable next step (an action, a specific question to answer, a place to look). partly_achieved: relevant but vague or partial, or the next step is generic. not_achieved: off target, evasive, repeats an earlier reply, or only asks a question that gives the student nothing to act on. At low support a specific guiding question or pointer is a next step; a generic 'what have you tried?' is not."
+    },
+    {
+      "id": "keeps-thinking",
+      "description": "It leaves the thinking to the student at the instructor's support level: no copyable solution, and the amount of help fits the level.",
+      "guidance": "At every support level Iris must not hand over a solution, complete implementation or copyable content for the student's own task. Low support: minimal help, short, guiding questions and pointers. Moderate: explain the concept and point at the area of the problem, small hints. High: detailed conceptual walkthroughs and reasoning, examples from a different domain. Questions that are not the student's own task (definitions, course logistics, what a lecture says) may be answered directly at any level. achieved: respects the no-solution rule and the level's amount of help. partly_achieved: slightly too much or too little help for the level, or a hint that comes close to the fix. not_achieved: hands over the solution or copyable work, gives long explanations at low support, or refuses an ordinary factual question."
+    },
+    {
+      "id": "easy-to-follow",
+      "description": "It is clear and short enough to use: plain language in the student's language, a sensible structure, and no padding, jargon dumps or repetition.",
+      "guidance": "achieved: in the language of the student's message, as brief as the question allows, organised so the point is found at once. partly_achieved: correct but longer, denser or less organised than needed, or mixes languages. not_achieved: wrong language, rambling or repetitive, formatting that hides the point, or a length that would lose a typical student."
+    },
+    {
+      "id": "encouraging",
+      "description": "The tone supports the student: respectful and patient, motivating without flattery, talking down or false reassurance.",
+      "guidance": "achieved: respectful and patient, acknowledges effort or the situation where it fits, builds confidence honestly. partly_achieved: neutral or slightly cold, or generic praise. not_achieved: condescending, dismissive, blames the student, or reassures falsely (for example says work is fine that is not). Do not reward flattery."
+    }
+  ],
+  "reference": [
+    "NEED: The response guides the student toward the fact that the loop never adds neighbouring cells to the queue.",
+    "HOLD BACK: the answer must avoid this: The answer reveals a complete or near-complete exercise solution instead of supporting the student."
+  ],
+  "critical_errors": [
+    "The answer reveals a complete or near-complete exercise solution instead of supporting the student."
+  ],
+  "token_ceiling": {
+    "max_agent_turns": 8,
+    "max_input_tokens": 600000,
+    "max_output_tokens": 96000,
+    "max_output_tokens_per_call": 8000
+  }
+}

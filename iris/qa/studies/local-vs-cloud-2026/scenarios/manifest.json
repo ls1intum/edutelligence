@@ -1,0 +1,158 @@
+{
+  "common-compile-return-moderate": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-compile-semicolon-low-de": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-maze-bfs-dfs-moderate-de": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-maze-directions-moderate": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-maze-followup-low-de": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-maze-stuck-low": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-maze-test-meaning-high-de": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-maze-visited-high": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-sort-complexity-high": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-sort-correct-high": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-sort-deadline-high": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-sort-followup-moderate": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-sort-inplace-concept-low-de": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-sort-points-moderate": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "common-sort-start-moderate": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "course-exercise-history-low": {
+    "source": "corpus",
+    "mode": "COURSE_CHAT"
+  },
+  "course-exercise-priorities-high": {
+    "source": "corpus",
+    "mode": "COURSE_CHAT"
+  },
+  "course-upcoming-deadline-moderate": {
+    "source": "corpus",
+    "mode": "COURSE_CHAT"
+  },
+  "holdout-course-grace-moderate": {
+    "source": "derived",
+    "mode": "COURSE_CHAT"
+  },
+  "holdout-de-lecture-low": {
+    "source": "derived",
+    "mode": "LECTURE_CHAT"
+  },
+  "holdout-de-prog-maze-high": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "holdout-de-prog-sorting-moderate": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "holdout-lecture-why-nlogn-moderate": {
+    "source": "derived",
+    "mode": "LECTURE_CHAT"
+  },
+  "holdout-prog-compile-high": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "holdout-prog-compile-jailbreak-moderate": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "holdout-prog-maze-low": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "holdout-prog-maze-moderate": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "holdout-prog-sorting-high": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "holdout-prog-sorting-low": {
+    "source": "derived",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "lecture-retrieval-high": {
+    "source": "corpus",
+    "mode": "LECTURE_CHAT"
+  },
+  "lecture-slide-low": {
+    "source": "corpus",
+    "mode": "LECTURE_CHAT"
+  },
+  "lecture-video-moderate": {
+    "source": "corpus",
+    "mode": "LECTURE_CHAT"
+  },
+  "prog-build-event-moderate": {
+    "source": "corpus",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "prog-compile-low": {
+    "source": "corpus",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "prog-concept-low": {
+    "source": "corpus",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "prog-failed-test-moderate": {
+    "source": "corpus",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "prog-german-build-low": {
+    "source": "corpus",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "prog-latest-submission-moderate": {
+    "source": "corpus",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  },
+  "prog-off-by-one-high": {
+    "source": "corpus",
+    "mode": "PROGRAMMING_EXERCISE_CHAT"
+  }
+}

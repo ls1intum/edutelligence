@@ -1,0 +1,26 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+course:
+  exercises:
+    - id: 9201
+      title: Data Import Milestone
+      type: PROGRAMMING
+      mode: TEAM
+      maxPoints: 20
+      dueDate: 2026-06-26T16:00:00Z
+      difficultyLevel: HARD
+      problemStatement: Integrate the importer after an assigned reviewer approves its interface contract.
+      submissions: []
+qa:
+  syntheticNow: "2026-06-25T16:20:00Z"
+  retrieval:
+    faqAvailable: true
+    faqs:
+      - id: 8311
+        question: Can project-team roles be reassigned in team chat?
+        answer: No. The role shown on the milestone page remains binding until a tutor approves the change in Artemis. Team chat can document a proposal but does not itself change ownership.
+        link: /courses/42/faq/8311
+      - id: 8312
+        question: What may a reviewer do while an implementation is blocked?
+        answer: A reviewer may clarify acceptance criteria, prepare non-destructive tests, and request tutor review of a role-change proposal. They must not submit another member's implementation as their own.
+        link: /courses/42/faq/8312

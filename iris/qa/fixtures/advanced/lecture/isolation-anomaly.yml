@@ -1,0 +1,39 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+lecture:
+  id: 6201
+  title: Database Isolation
+  description: Transaction schedules, snapshot isolation, and serializability.
+  startDate: 2026-06-18T08:00:00Z
+  units: []
+lectureUnitId: 7201
+context:
+  - type: slides
+    lectureUnitId: 7201
+    page: 21
+qa:
+  syntheticNow: "2026-06-22T10:20:00Z"
+  retrieval:
+    lectureAvailable: true
+    currentView:
+      pages:
+        - uuid: isolation-slide-21
+          lectureUnitId: 7201
+          lectureUnitName: Isolation Anomalies
+          pageNumber: 21
+          text: "Example, originally mislabeled non-repeatable read: x=1 and y=1. T1 reads x,y and writes x=0 if both are 1. T2 reads x,y and writes y=0 if both are 1. Under snapshot isolation both commit, violating x+y>=1."
+          link: /courses/42/lectures/6201?lectureUnitId=7201&page=21
+      transcript: []
+    search:
+      - uuid: isolation-correction
+        lectureUnitId: 7201
+        lectureUnitName: Isolation Anomalies Correction
+        pageNumber: 25
+        text: "Correction to slide 21: this is write skew, not a non-repeatable read. Each transaction reads a consistent snapshot and writes a different row, so first-committer-wins does not detect a write-write conflict."
+        link: /courses/42/lectures/6201?lectureUnitId=7201&page=25
+      - uuid: isolation-levels
+        lectureUnitId: 7201
+        lectureUnitName: Isolation Guarantees
+        pageNumber: 18
+        text: "Snapshot isolation can admit write skew. Serializable isolation must produce an outcome equivalent to a serial order and therefore prevents this invariant-violating schedule."
+        link: /courses/42/lectures/6201?lectureUnitId=7201&page=18

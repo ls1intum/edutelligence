@@ -1,0 +1,46 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+programmingExercise:
+  id: 9601
+  title: Incremental Multi-sheet Workbook
+  problemStatement: |
+    Implement a workbook evaluator for integer values and additive formulas.
+    A cell is identified by both sheet and cell name. Formula dependencies may
+    form a directed acyclic graph: sharing one dependency along two branches is
+    valid, while a dependency on the active evaluation path is a cycle. Cached
+    values are allowed, but changing a cell or formula must invalidate every
+    affected result across any number of dependency edges without evicting
+    unrelated cells. Qualified references such as `Inputs!A1` may cross sheets.
+  startDate: 2026-07-08T08:00:00Z
+  endDate: 2026-07-22T18:00:00Z
+  programmingLanguage: PYTHON
+  templateRepository: { $repository: advanced/incremental-workbook/template }
+  solutionRepository: { $repository: advanced/incremental-workbook/solution }
+  testRepository: { $repository: advanced/incremental-workbook/tests }
+programmingExerciseSubmission:
+  id: 932
+  date: 2026-07-19T09:20:00Z
+  repository: { $repository: advanced/incremental-workbook/student/latest }
+  isPractice: false
+  buildFailed: false
+  buildLogEntries:
+    - timestamp: 2026-07-19T09:21:00Z
+      message: "BUILD SUCCESS: 9 source files imported; 14 public tests passed."
+    - timestamp: 2026-07-19T09:21:08Z
+      message: "Hidden sequence tests: 3 failed, 9 passed. Parser regression group: 6 passed."
+  latestResult:
+    completionDate: 2026-07-19T09:21:10Z
+    successful: false
+    feedbacks:
+      - testCaseName: recalculationSequence14
+        text: "After Summary!B1 and Dashboard!C1 were read, changing Inputs!A1 from 2 to 5 left Dashboard!C1 at 6 instead of 9."
+        credits: 0.0
+      - testCaseName: sharedInputGraph7
+        text: "A formula whose two branches both eventually read Inputs!A1 raised FormulaCycleError, although the dependency graph contains no directed cycle."
+        credits: 0.0
+      - testCaseName: parallelSheetImport
+        text: "After reading Inputs!A1=11, reading the unrelated Summary!A1 returned 11 instead of 2."
+        credits: 0.0
+qa:
+  syntheticNow: "2026-07-19T10:00:00Z"
+  submissionHistory: artifacts/advanced/incremental-workbook/submission-history.yml
