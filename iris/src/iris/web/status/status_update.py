@@ -426,6 +426,8 @@ class ChatRunCallback(StatusCallback):
         activities=None,
         activity_seq=None,
         suggested_context=None,
+        solution_offer=None,
+        solution_choice=None,
     ) -> bool:
         fields = {
             "result": final_result,
@@ -442,6 +444,10 @@ class ChatRunCallback(StatusCallback):
             fields["activity_seq"] = activity_seq
         if suggested_context is not None:
             fields["suggested_context"] = suggested_context
+        if solution_offer is not None:
+            fields["solution_offer"] = solution_offer
+        if solution_choice is not None:
+            fields["solution_choice"] = solution_choice
 
         success = self._send_chat_fields(fields, attempts=self._DELIVERY_RETRY_ATTEMPTS)
         if not success:

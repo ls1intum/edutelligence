@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import Field, model_validator
 
@@ -44,6 +44,20 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
         alias="programmingExerciseSubmission", default=None
     )
     text_exercise_submission: str = Field(alias="textExerciseSubmission", default="")
+    # Artemis sends its platform-wide runtime toggle for every run.
+    solution_choice_enabled: bool = Field(alias="solutionChoiceEnabled", default=True)
+
+    # Set by Artemis from the stored choices; without it Pyris classifies the message.
+    solution_step: Optional[
+        Literal[
+            "TRY_MYSELF",
+            "SHOW_SOLUTION",
+            "OFFER_REPLY",
+            "SUMMARIZE",
+            "SUMMARY_REPLY",
+            "EXPLAIN_SOLUTION",
+        ]
+    ] = Field(alias="solutionStep", default=None)
 
     @model_validator(mode="after")
     def extract_lecture_unit_id_from_combined_view_context(self):

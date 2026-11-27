@@ -768,6 +768,8 @@ def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
 
     return SimpleNamespace(
         chat_history=[],
+        solution_choice_enabled=True,
+        solution_step=None,
         user=SimpleNamespace(id=1, lang_key="en"),
         course=SimpleNamespace(
             id=7,

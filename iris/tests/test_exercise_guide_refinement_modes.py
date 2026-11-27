@@ -23,6 +23,8 @@ from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
 def _make_dto():
     return SimpleNamespace(
         chat_history=[],
+        solution_choice_enabled=True,
+        solution_step=None,
         user=SimpleNamespace(id=1, lang_key="en"),
         course=SimpleNamespace(
             id=7,

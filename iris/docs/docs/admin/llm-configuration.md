@@ -404,3 +404,50 @@ curl -H "Authorization: <your-token>" http://localhost:8000/api/v1/health/
 ```
 
 If the `Pipelines` module shows `DOWN`, there is likely a model configuration issue.
+
+## Complete-solution choices
+
+In programming and text exercise chats, Iris can detect that a student asks for the
+complete solution and let them choose: try it themselves with help, or see the solution.
+Set `solution_choice.classifier_model` in `application.yml` to the **id** of a
+`logos_decision` model from `llm_config.yml` to turn this on; it is off while the id is unset.
+A decision model answers through the Logos `/v1/systemone` endpoint with a probability
+instead of generated text, so the check takes well under a second.
+
+```yaml
+- id: logos-jev-27b-vl
+  type: logos_decision
+  model: autotrust/JEV-27B-VL
+  base_url: https://your-logos-instance/v1
+  api_key: <key>
+```
+
+```yaml
+solution_choice:
+  classifier_model: <model id>
+  # For students who chose local AI; when unset, their messages are not classified.
+  classifier_model_local: <local model id>
+```
+
+Before each student message, the classifier sees the last few messages and rates
+only the latest one; earlier messages only resolve references such as
+"show it to me anyway". If the call fails, Iris tutors as usual.
+
+When the probability is above 0.5, Iris writes the offer itself and the client shows two buttons. Artemis
+validates a click against the open offer and tells Iris which step follows:
+
+- **Try it myself:** Iris encourages the choice and gives one concrete hint.
+- **Show the solution:** Artemis attaches the instructor's solution repository or the text
+  exercise's example solution, and Iris bases its solution on it. Without one, Iris writes
+  its own and says so. Below the answer, the client shows a fixed invitation to summarize the
+  solution in their own words as practice, again with two buttons.
+- **Yes, I'll summarize it:** Iris says in a few sentences what the summary should cover. The next message is treated as that
+  explanation, and Iris gives feedback on it.
+- **No thanks:** Artemis only records the choice; Iris does not answer it.
+- **A typed reply** instead of a click: the same model rates whether the reply chooses the
+  solution or accepts the summary, and Iris continues as if the matching button had been clicked. Artemis stores
+  that choice like a click. Any other reply declines: Artemis stores **Try it myself** or **No thanks**, and Iris tutors
+  as usual, whether the reply asks for help or starts a new question. If the classifier call fails, the reply
+  also counts as declining.
+
+Update Artemis and Iris together before enabling the classifier.

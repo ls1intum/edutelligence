@@ -9,6 +9,7 @@ from iris.common.pyris_message import PyrisMessage
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm.completion_arguments import CompletionArguments
 from iris.llm.errors import IncompleteModelResponse
+from iris.llm.external.logos_decision import LogosDecisionModel
 from iris.llm.external.model import (
     ChatModel,
     CompletionModel,
@@ -127,6 +128,10 @@ class LlmRequestHandler(RequestHandler):
     def embed(self, text: str) -> list[float]:
         llm = self._select_model(EmbeddingModel)
         return llm.embed(text)
+
+    def decide(self, state: str, question: str) -> tuple[float, TokenUsageDTO]:
+        """Return the probability that the answer to the question about the state is yes."""
+        return self._select_model(LogosDecisionModel).decide(state, question)
 
     def split_text_semantically(
         self,

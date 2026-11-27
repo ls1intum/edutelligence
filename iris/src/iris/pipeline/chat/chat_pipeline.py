@@ -12,9 +12,16 @@ from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.reply_language import reply_language
 from iris.common.timing import timed_span
+from iris.config import settings
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
+from iris.pipeline.chat.solution_choice import (
+    SolutionChoiceTurn,
+    context_offer,
+    plan_turn,
+    reference_solution,
+)
 from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
@@ -213,6 +220,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
     chat_mode: IrisChatMode
     event: Optional[str]
+    # Replaced per run in __call__; the default is the ordinary tutoring turn and is never mutated.
+    solution_choice: SolutionChoiceTurn = SolutionChoiceTurn()
     session_title_pipeline: SessionTitleGenerationPipeline
     citation_pipeline: CitationPipeline
     suggestion_pipeline: Optional[InteractionSuggestionPipeline]
@@ -328,7 +337,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             result = state.result
 
             # If Programming Exercise, refine response using guide prompt
-            if _effective_chat_mode(state, self.chat_mode) == IrisChatMode.EXERCISE:
+            # Once the student asked for the solution, the guide would turn the answer back into a refusal.
+            if (
+                _effective_chat_mode(state, self.chat_mode) == IrisChatMode.EXERCISE
+                and not self.solution_choice.solution_unlocked
+            ):
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
 
@@ -369,6 +382,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     activities=activities,
                     activity_seq=activity_seq,
                     suggested_context=state.pending_context_switch,
+                    # After a switch the answer is about the target, so the offer is bound to it.
+                    solution_offer=context_offer(
+                        state.dto,
+                        self.solution_choice.mode,
+                        state.pending_context_switch,
+                    ),
+                    solution_choice=self.solution_choice.typed_choice,
                 )
             logger.info(
                 "Chat first result delivered | mode=%s elapsed_ms=%.0f",
@@ -390,10 +410,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 logger.error("Error generating deferred session title", exc_info=e)
 
             # Generate and send suggestions separately (async from user's perspective)
-            if self.chat_mode in [
-                IrisChatMode.COURSE,
-                IrisChatMode.EXERCISE,
-            ]:
+            if (
+                self.chat_mode in [IrisChatMode.COURSE, IrisChatMode.EXERCISE]
+                and self.solution_choice.suggests_follow_ups
+            ):
                 with timed_span("ChatPipeline", "suggestions", state.start_time):
                     self._generate_suggestions(state, result)
 
@@ -427,9 +447,17 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         dto = state.dto
         course_id = dto.course.id
         base_url = dto.settings.artemis_base_url if dto.settings else None
-        # The two availability checks are independent Weaviate round trips;
-        # run them concurrently so the agent can start sooner.
-        with TracedThreadPoolExecutor(max_workers=2) as executor:
+        # The solution classifier and the two availability checks are independent
+        # round trips; run them concurrently so the agent can start sooner.
+        with TracedThreadPoolExecutor(max_workers=3) as executor:
+            solution_choice_future = executor.submit(
+                plan_turn,
+                dto,
+                settings.solution_choice,
+                chat_mode=self.chat_mode,
+                event=self.event,
+                local=state.local,
+            )
             lecture_tool_future = executor.submit(
                 should_allow_lecture_tool, state.db, course_id
             )
@@ -438,6 +466,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             state.allow_lecture_tool = lecture_tool_future.result()
             state.allow_faq_tool = faq_tool_future.result()
+            self.solution_choice = solution_choice_future.result()
+        for usage in self.solution_choice.tokens:
+            usage.pipeline = self.get_token_pipeline(state)
+            self._track_tokens(state, usage)
 
         # Extract lecture contexts from DTO and store in state
         lecture_contexts = self._parse_lecture_context(dto)
@@ -500,6 +532,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         # of the cached prefix. Per-message values go to build_turn_context_message.
         template_context: dict[str, Any] = {
             "chat_mode": self.chat_mode,
+            "solution_unlocked": self.solution_choice.solution_unlocked,
             "support_level": _support_level(dto),
             "user_language": dto.user.lang_key,
             "custom_instructions": format_custom_instructions(
@@ -548,6 +581,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         return self.turn_context_template.render(
             {
                 "chat_mode": self.chat_mode,
+                "solution_choice_mode": self.solution_choice.mode,
+                "reference_solution": (
+                    reference_solution(dto)
+                    if self.solution_choice.mode == "solution"
+                    else None
+                ),
                 "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
                 "current_view_blocks": self._build_current_view(state),
                 "current_view_is_combined": any(

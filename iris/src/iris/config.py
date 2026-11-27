@@ -295,6 +295,17 @@ class LectureIngestionSettings(BaseModel):
         return self
 
 
+class SolutionChoiceSettings(BaseModel):
+    """Ids of logos_decision models from llm_config.yml that detect requests for a complete solution.
+
+    Unset disables the workflow.
+    """
+
+    classifier_model: str | None = None
+    # Used for students who chose local AI; when unset, their messages are not classified.
+    classifier_model_local: str | None = None
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -309,6 +320,9 @@ class Settings(BaseModel):
         "schema (/openapi.json). Off by default; enable it for local development.",
     )
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
+    solution_choice: SolutionChoiceSettings = Field(
+        default_factory=SolutionChoiceSettings
+    )
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
     ingestion_worker: IngestionWorkerSettings = Field(
         default_factory=IngestionWorkerSettings
