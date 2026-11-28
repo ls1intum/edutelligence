@@ -55,7 +55,7 @@ jobs:
         if: needs.detect-changes.outputs.changed == 'true' || steps.cache-iris.outputs.cache-hit != 'true'
         uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: '26'
           cache: 'npm'
           cache-dependency-path: iris/docs/package-lock.json
 
